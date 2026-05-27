@@ -1,0 +1,28 @@
+{
+  "package_name": "piper_msgs",
+  "output_dir": "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs/rosidl_generator_c/piper_msgs",
+  "template_dir": "/opt/ros/humble/share/rosidl_generator_c/cmake/../resource",
+  "idl_tuples": [
+    "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs/rosidl_adapter/piper_msgs:msg/PiperStatusMsg.idl",
+    "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs/rosidl_adapter/piper_msgs:msg/PosCmd.idl",
+    "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs/rosidl_adapter/piper_msgs:srv/Enable.idl"
+  ],
+  "target_dependencies": [
+    "/opt/ros/humble/share/rosidl_generator_c/cmake/../../../lib/rosidl_generator_c/rosidl_generator_c",
+    "/opt/ros/humble/share/rosidl_generator_c/cmake/../../../local/lib/python3.10/dist-packages/rosidl_generator_c/__init__.py",
+    "/opt/ros/humble/share/rosidl_generator_c/cmake/../resource/action__type_support.h.em",
+    "/opt/ros/humble/share/rosidl_generator_c/cmake/../resource/idl.h.em",
+    "/opt/ros/humble/share/rosidl_generator_c/cmake/../resource/idl__functions.c.em",
+    "/opt/ros/humble/share/rosidl_generator_c/cmake/../resource/idl__functions.h.em",
+    "/opt/ros/humble/share/rosidl_generator_c/cmake/../resource/idl__struct.h.em",
+    "/opt/ros/humble/share/rosidl_generator_c/cmake/../resource/idl__type_support.h.em",
+    "/opt/ros/humble/share/rosidl_generator_c/cmake/../resource/msg__functions.c.em",
+    "/opt/ros/humble/share/rosidl_generator_c/cmake/../resource/msg__functions.h.em",
+    "/opt/ros/humble/share/rosidl_generator_c/cmake/../resource/msg__struct.h.em",
+    "/opt/ros/humble/share/rosidl_generator_c/cmake/../resource/msg__type_support.h.em",
+    "/opt/ros/humble/share/rosidl_generator_c/cmake/../resource/srv__type_support.h.em",
+    "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs/rosidl_adapter/piper_msgs/msg/PiperStatusMsg.idl",
+    "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs/rosidl_adapter/piper_msgs/msg/PosCmd.idl",
+    "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs/rosidl_adapter/piper_msgs/srv/Enable.idl"
+  ]
+}

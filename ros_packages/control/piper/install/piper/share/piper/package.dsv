@@ -1,0 +1,9 @@
+source;share/piper/hook/pythonpath.ps1
+source;share/piper/hook/pythonpath.dsv
+source;share/piper/hook/pythonpath.sh
+source;share/piper/hook/ament_prefix_path.ps1
+source;share/piper/hook/ament_prefix_path.dsv
+source;share/piper/hook/ament_prefix_path.sh
+source;../../build/piper/share/piper/hook/pythonpath_develop.ps1
+source;../../build/piper/share/piper/hook/pythonpath_develop.dsv
+source;../../build/piper/share/piper/hook/pythonpath_develop.sh

@@ -1,0 +1,29 @@
+running develop
+running egg_info
+creating piper.egg-info
+writing piper.egg-info/PKG-INFO
+writing dependency_links to piper.egg-info/dependency_links.txt
+writing entry points to piper.egg-info/entry_points.txt
+writing requirements to piper.egg-info/requires.txt
+writing top-level names to piper.egg-info/top_level.txt
+writing manifest file 'piper.egg-info/SOURCES.txt'
+reading manifest file 'piper.egg-info/SOURCES.txt'
+writing manifest file 'piper.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/python3.10/site-packages/piper.egg-link (link to .)
+Installing piper_ms_ctrl script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+Installing piper_read_master script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+Installing piper_single_ctrl script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+
+Installed /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper
+running symlink_data
+creating /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/ament_index
+creating /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/ament_index/resource_index
+creating /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/ament_index/resource_index/packages
+symbolically linking /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/resource/piper -> /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/ament_index/resource_index/packages
+symbolically linking /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/package.xml -> /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/piper
+creating /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/piper/launch
+symbolically linking /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/launch/start_single_piper_rviz.launch.py -> /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/piper/launch
+symbolically linking /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/launch/start_two_piper.launch.py -> /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/piper/launch
+symbolically linking /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/launch/start_single_piper.launch.py -> /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/piper/launch
+symbolically linking /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/launch/start_double_piper.launch.py -> /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/piper/launch

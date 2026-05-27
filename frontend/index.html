@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Robot Station</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <div class="brand">
+          <span class="brand-mark">RS</span>
+          <div>
+            <strong>Robot Station</strong>
+            <span>本机控制台</span>
+          </div>
+        </div>
+
+        <nav class="nav-list">
+          <button class="nav-item is-active" data-view="self-check">自检</button>
+          <button class="nav-item" data-view="device-control">设备控制</button>
+          <button class="nav-item" data-view="sensors">传感器</button>
+          <button class="nav-item" data-view="control">中控</button>
+          <button class="nav-item" data-view="homing">归位</button>
+          <button class="nav-item" data-view="collection">数采</button>
+          <button class="nav-item" data-view="inference">推理</button>
+          <button class="nav-item" data-view="logs">日志</button>
+          <button class="nav-item" data-view="settings">设置</button>
+        </nav>
+      </aside>
+
+      <main class="main-shell">
+        <header class="topbar">
+          <div class="status-cluster" aria-label="全局状态">
+            <button class="status-switch is-on is-readonly" id="rosStatus" type="button" aria-disabled="true" tabindex="-1" title="ROS 状态只读">
+              <span>ROS</span>
+              <i aria-hidden="true"></i>
+            </button>
+            <button class="status-switch is-warn" id="canStatus" type="button" title="点击激活机械臂 CAN">
+              <span>CAN</span>
+              <i aria-hidden="true"></i>
+            </button>
+            <button class="status-switch" id="piperRuntimeStatus" type="button" title="启动或关闭 Piper">
+              <span>Piper</span>
+              <i aria-hidden="true"></i>
+            </button>
+            <span class="status-pill ok" id="estopStatus">急停释放</span>
+            <span class="status-pill idle" id="enableStatus">未使能</span>
+            <span class="status-pill ok" id="networkStatus">本机访问</span>
+            <span class="status-pill task" id="taskStatus">当前任务：空闲</span>
+            <span class="status-pill danger" id="alertStatus">告警 2</span>
+            <span class="status-pill clock" id="clockStatus">--:--:--</span>
+          </div>
+
+          <div class="top-actions">
+            <button class="icon-button danger" id="estopButton" title="急停">急停</button>
+            <button class="icon-button stop" id="stopTaskButton" title="停止当前任务">停止任务</button>
+            <button class="icon-button" id="drawerToggle" title="展开或收起事件抽屉">事件</button>
+          </div>
+        </header>
+
+        <div class="workbench">
+          <section class="content-area">
+            <section class="view" data-view-panel="control">
+              <div class="page-head">
+                <div>
+                  <p class="eyebrow">任务中控</p>
+                  <h1>机器人任务工作台</h1>
+                </div>
+                <div class="head-meta">
+                  <span>控制权：<strong id="ownerLabel">空闲</strong></span>
+                  <span>自检：<strong id="selfCheckAge">未执行</strong></span>
+                </div>
+              </div>
+
+              <div class="safety-strip">
+                <div>
+                  <span class="strip-label">安全状态</span>
+                  <strong id="safetySummary">可操作，设备控制仅本地预览</strong>
+                </div>
+                <div>
+                  <span class="strip-label">速度限制</span>
+                  <strong>机械臂 10% / 底盘 0.20 m/s</strong>
+                </div>
+                <div>
+                  <span class="strip-label">数据目录</span>
+                  <strong>./data</strong>
+                </div>
+              </div>
+
+              <div class="dashboard-grid">
+                <article class="panel flow-panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>当前任务流程</h2>
+                      <p id="taskSubtitle">等待操作员启动任务</p>
+                    </div>
+                    <span class="state-badge idle" id="stateBadge">空闲</span>
+                  </div>
+                  <div class="progress-track" aria-label="任务进度">
+                    <span id="taskProgressBar" style="width: 0%"></span>
+                  </div>
+                  <ol class="step-list" id="homeFlowSteps">
+                    <li class="is-current">等待任务</li>
+                    <li>运行前检查</li>
+                    <li>执行任务</li>
+                    <li>生成结果</li>
+                  </ol>
+                </article>
+
+                <article class="panel advice-panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>告警与建议</h2>
+                      <p>按阻塞程度排序</p>
+                    </div>
+                    <button class="small-button" data-view-jump="logs">查看日志</button>
+                  </div>
+                  <div class="advice-list" id="adviceList"></div>
+                </article>
+              </div>
+
+              <section class="health-section">
+                <div class="section-title">
+                  <h2>硬件健康矩阵</h2>
+                  <span>机械臂、底盘、传感器、存储、算力</span>
+                </div>
+                <div class="health-grid" id="healthGrid"></div>
+              </section>
+
+              <section class="quick-section">
+                <div class="section-title">
+                  <h2>快捷动作</h2>
+                  <span>互斥任务运行时会自动锁定不可用动作</span>
+                </div>
+                <div class="quick-actions">
+                  <button class="action-tile" data-action="self-check">
+                    <span>整机自检</span>
+                    <strong>检查 ROS / CAN / 传感器 / 存储</strong>
+                  </button>
+                  <button class="action-tile" data-action="homing">
+                    <span>机器人归位</span>
+                    <strong>使能、夹爪默认、回 home</strong>
+                  </button>
+                  <button class="action-tile" data-action="collection">
+                    <span>开始数采</span>
+                    <strong>创建 episode 并监控质量</strong>
+                  </button>
+                  <button class="action-tile" data-action="inference">
+                    <span>开始推理</span>
+                    <strong>加载模型并进入运行</strong>
+                  </button>
+                  <button class="action-tile" data-action="device-control">
+                    <span>打开设备控制</span>
+                    <strong>双臂、夹爪、底盘状态与低速预览</strong>
+                  </button>
+                </div>
+              </section>
+            </section>
+
+            <section class="view is-active" data-view-panel="self-check">
+              <div class="page-head compact">
+                <div>
+                  <p class="eyebrow">整机自检</p>
+                  <h1>运行前检查</h1>
+                </div>
+                <div class="button-group">
+                  <button class="secondary-button" id="rerunProblemChecksButton">复查异常</button>
+                  <button class="primary-button" id="runSelfCheckButton">一键检查</button>
+                </div>
+              </div>
+              <div class="self-check-overview" id="selfCheckOverview"></div>
+              <div class="self-check-metrics" id="selfCheckMetrics"></div>
+              <div class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>检查项</h2>
+                    <p id="selfCheckSummary">未执行自检</p>
+                  </div>
+                  <span class="state-badge idle" id="selfCheckBadge">未检测</span>
+                </div>
+                <div class="check-table" id="selfCheckTable"></div>
+              </div>
+            </section>
+
+            <section class="view" data-view-panel="device-control">
+              <div class="page-head compact">
+                <div>
+                  <p class="eyebrow">设备控制</p>
+                  <h1>状态与低速预览</h1>
+                </div>
+                <div class="button-group">
+                  <button class="secondary-button" id="zeroDevicePreviewButton">清零预览</button>
+                  <button class="primary-button" id="holdDeviceButton">保持当前</button>
+                </div>
+              </div>
+
+              <div class="device-control-grid">
+                <article class="panel device-card">
+                  <div class="panel-head">
+                    <div>
+                      <h2>左臂</h2>
+                      <p>连接、关节、末端、夹爪</p>
+                    </div>
+                    <span class="state-badge danger">未实现</span>
+                  </div>
+                  <div class="device-status-line">
+                    <span>连接</span><strong class="status-text danger">未实现</strong>
+                    <span>反馈</span><strong class="status-text danger">未实现</strong>
+                  </div>
+                  <div class="arm-control-list" id="leftArmControls"></div>
+                  <div class="gripper-strip">
+                    <label>
+                      左夹爪开度
+                      <input type="range" min="0" max="100" step="1" value="0" data-arm-gripper="left" />
+                    </label>
+                    <strong id="leftGripperPreview">0%</strong>
+                  </div>
+                  <div class="device-card-actions">
+                    <button class="secondary-button" data-arm-command="left-open">夹爪开</button>
+                    <button class="secondary-button" data-arm-command="left-close">夹爪合</button>
+                    <button class="icon-button stop" data-device-stop="left-arm">停止左臂</button>
+                  </div>
+                </article>
+
+                <article class="panel device-card">
+                  <div class="panel-head">
+                    <div>
+                      <h2>右臂</h2>
+                      <p>连接、关节、末端、夹爪</p>
+                    </div>
+                    <span class="state-badge danger">未实现</span>
+                  </div>
+                  <div class="device-status-line">
+                    <span>连接</span><strong class="status-text danger">未实现</strong>
+                    <span>反馈</span><strong class="status-text danger">未实现</strong>
+                  </div>
+                  <div class="arm-control-list" id="rightArmControls"></div>
+                  <div class="gripper-strip">
+                    <label>
+                      右夹爪开度
+                      <input type="range" min="0" max="100" step="1" value="0" data-arm-gripper="right" />
+                    </label>
+                    <strong id="rightGripperPreview">0%</strong>
+                  </div>
+                  <div class="device-card-actions">
+                    <button class="secondary-button" data-arm-command="right-open">夹爪开</button>
+                    <button class="secondary-button" data-arm-command="right-close">夹爪合</button>
+                    <button class="icon-button stop" data-device-stop="right-arm">停止右臂</button>
+                  </div>
+                </article>
+
+                <article class="panel device-card base-device-card">
+                  <div class="panel-head">
+                    <div>
+                      <h2>底盘</h2>
+                      <p>连接、里程计、低速点动</p>
+                    </div>
+                    <span class="state-badge danger">未实现</span>
+                  </div>
+                  <div class="device-status-line">
+                    <span>连接</span><strong class="status-text danger">未实现</strong>
+                    <span>里程计</span><strong class="status-text danger">未实现</strong>
+                  </div>
+                  <div class="metric-grid" id="deviceBaseMetrics"></div>
+                  <div class="drive-pad compact-drive-pad">
+                    <span></span>
+                    <button data-device-drive="forward">前进</button>
+                    <span></span>
+                    <button data-device-drive="left">左转</button>
+                    <button data-device-drive="stop">停止</button>
+                    <button data-device-drive="right">右转</button>
+                    <span></span>
+                    <button data-device-drive="backward">后退</button>
+                    <span></span>
+                  </div>
+                  <div class="base-control-panel" id="deviceBaseControlPanel"></div>
+                  <div class="device-card-actions">
+                    <button class="icon-button stop" data-device-stop="base">停止底盘</button>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section class="view" data-view-panel="homing">
+              <div class="page-head compact">
+                <div>
+                  <p class="eyebrow">归位与准备</p>
+                  <h1>一键归位流程</h1>
+                </div>
+                <button class="primary-button" id="startHomingButton">开始归位</button>
+              </div>
+              <div class="panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>步骤进度</h2>
+                    <p id="homingSummary">等待开始</p>
+                  </div>
+                  <span class="state-badge idle" id="homingBadge">空闲</span>
+                </div>
+                <ol class="timeline" id="homingSteps"></ol>
+              </div>
+            </section>
+
+            <section class="view" data-view-panel="collection">
+              <div class="page-head compact">
+                <div>
+                  <p class="eyebrow">自动数采</p>
+                  <h1>采集任务</h1>
+                </div>
+                <div class="button-group">
+                  <button class="primary-button" id="startCollectionButton">开始</button>
+                  <button class="secondary-button" id="pauseCollectionButton">暂停</button>
+                  <button class="secondary-button" id="finishCollectionButton">结束</button>
+                </div>
+              </div>
+              <div class="split-grid">
+                <article class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>任务配置</h2>
+                      <p>本地配置，暂不连接后端</p>
+                    </div>
+                    <span class="state-badge idle" id="collectionBadge">空闲</span>
+                  </div>
+                  <form class="config-form">
+                    <label>任务名称<input value="pick_and_place_trial" /></label>
+                    <label>采集模式<select><option>遥操作示教</option><option>自动巡检</option><option>混合采集</option></select></label>
+                    <label>相机选择<select><option>front_rgb + wrist_rgb</option><option>front_rgb</option><option>wrist_rgb</option></select></label>
+                    <label>保存路径<input value="/data/robot_station/episodes" /></label>
+                    <label class="check-line"><input type="checkbox" checked /> 记录 LiDAR</label>
+                    <label class="check-line"><input type="checkbox" checked /> 记录底盘与机械臂状态</label>
+                  </form>
+                </article>
+
+                <article class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>采集中状态</h2>
+                      <p id="collectionSummary">等待开始</p>
+                    </div>
+                    <div class="button-group">
+                      <button class="secondary-button" id="discardEpisodeButton">废弃本轮</button>
+                      <button class="secondary-button" id="markSuccessButton">标记成功</button>
+                      <button class="secondary-button" id="markFailButton">标记失败</button>
+                    </div>
+                  </div>
+                  <div class="metric-grid" id="collectionMetrics"></div>
+                  <div class="quality-strip" id="qualityStrip"></div>
+                </article>
+              </div>
+            </section>
+
+            <section class="view" data-view-panel="inference">
+              <div class="page-head compact">
+                <div>
+                  <p class="eyebrow">推理执行</p>
+                  <h1>模型任务</h1>
+                </div>
+                <div class="button-group">
+                  <button class="primary-button" id="startInferenceButton">开始推理</button>
+                  <button class="secondary-button" id="pauseInferenceButton">暂停</button>
+                  <button class="secondary-button" id="stopInferenceButton">停止</button>
+                </div>
+              </div>
+              <div class="split-grid">
+                <article class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>运行配置</h2>
+                      <p>开始前会检查控制权和最近自检</p>
+                    </div>
+                    <span class="state-badge idle" id="inferenceBadge">空闲</span>
+                  </div>
+                  <form class="config-form">
+                    <label>模型<select id="modelSelect"><option>policy_piper_pick_v1.onnx</option><option>policy_mobile_manipulation_v0.pt</option></select></label>
+                    <label>任务<select><option>抓取放置</option><option>桌面整理</option><option>巡检记录</option></select></label>
+                    <label>设备<select><option>GPU 优先</option><option>CPU</option></select></label>
+                  </form>
+                  <div class="preflight-list" id="preflightList"></div>
+                </article>
+
+                <article class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>模型状态</h2>
+                      <p id="inferenceSummary">未加载模型</p>
+                    </div>
+                    <button class="secondary-button" data-view-jump="device-control">低速接管</button>
+                  </div>
+                  <div class="metric-grid" id="inferenceMetrics"></div>
+                  <div class="action-output" id="lastActionOutput">最近动作：无</div>
+                </article>
+              </div>
+            </section>
+
+            <section class="view" data-view-panel="sensors">
+              <div class="page-head compact">
+                <div>
+                  <p class="eyebrow">传感器与状态</p>
+                  <h1>设备监控</h1>
+                </div>
+                <div class="segmented" role="tablist">
+                  <button class="is-active" data-sensor-tab="camera">相机</button>
+                  <button data-sensor-tab="lidar">LiDAR</button>
+                  <button data-sensor-tab="system">系统</button>
+                </div>
+              </div>
+
+              <div class="sensor-panel is-active" data-sensor-panel="camera">
+                <div class="video-grid">
+                  <article class="preview-card">
+                    <canvas width="480" height="270" data-camera="front"></canvas>
+                    <div><strong>front_rgb</strong><span>30 fps / 1280x720 / SN-FRONT-01</span></div>
+                  </article>
+                  <article class="preview-card">
+                    <canvas width="480" height="270" data-camera="wrist"></canvas>
+                    <div><strong>wrist_rgb</strong><span>28 fps / 640x480 / SN-WRIST-02</span></div>
+                  </article>
+                </div>
+              </div>
+
+              <div class="sensor-panel" data-sensor-panel="lidar">
+                <article class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>点云预览</h2>
+                      <p>/scan 10 Hz，/points 8 Hz</p>
+                    </div>
+                    <span class="state-badge ok">在线</span>
+                  </div>
+                  <canvas class="lidar-canvas" width="900" height="320" id="lidarCanvas"></canvas>
+                </article>
+              </div>
+
+              <div class="sensor-panel" data-sensor-panel="system">
+                <article class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>系统资源</h2>
+                      <p>CPU、GPU、内存、磁盘、温度、进程</p>
+                    </div>
+                    <span class="state-badge warn">磁盘注意</span>
+                  </div>
+                  <div class="resource-grid" id="resourceGrid"></div>
+                </article>
+              </div>
+            </section>
+
+            <section class="view" data-view-panel="logs">
+              <div class="page-head compact">
+                <div>
+                  <p class="eyebrow">日志与历史</p>
+                  <h1>事件记录</h1>
+                </div>
+                <div class="filter-row" id="logFilters"></div>
+              </div>
+              <div class="split-grid">
+                <article class="panel">
+                  <div class="panel-head"><h2>实时日志</h2><span id="logCount">0 条</span></div>
+                  <div class="log-list large" id="logList"></div>
+                </article>
+                <article class="panel">
+                  <div class="panel-head"><h2>历史任务</h2><span>最近 5 条</span></div>
+                  <div class="history-list" id="historyList"></div>
+                </article>
+              </div>
+            </section>
+
+            <section class="view" data-view-panel="settings">
+              <div class="page-head compact">
+                <div>
+                  <p class="eyebrow">设置</p>
+                  <h1>设备画像</h1>
+                </div>
+                <button class="secondary-button">保存草稿</button>
+              </div>
+              <div class="split-grid">
+                <article class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>机器人配置</h2>
+                      <p>先作为静态画像展示</p>
+                    </div>
+                  </div>
+                  <form class="config-form">
+                    <label>机械臂<input value="AgileX Piper x2" /></label>
+                    <label>底盘<input value="AgileX mobile base" /></label>
+                    <label>机械臂 CAN<input value="can_left / can_right" /></label>
+                    <label>默认数据目录<input value="/data/robot_station" /></label>
+                  </form>
+                </article>
+                <article class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>启用模块</h2>
+                      <p>页面会按画像决定显示能力</p>
+                    </div>
+                  </div>
+                  <div class="module-list">
+                    <label><input type="checkbox" checked /> 机械臂</label>
+                    <label><input type="checkbox" checked /> 底盘</label>
+                    <label><input type="checkbox" checked /> 相机</label>
+                    <label><input type="checkbox" checked /> LiDAR</label>
+                    <label><input type="checkbox" checked /> GPU 推理</label>
+                  </div>
+                </article>
+              </div>
+            </section>
+          </section>
+
+          <aside class="event-drawer is-open" id="eventDrawer">
+            <div class="drawer-head">
+              <div>
+                <strong>实时事件</strong>
+                <span id="drawerTask">当前空闲</span>
+              </div>
+              <button class="small-button" id="clearEventsButton">清空</button>
+            </div>
+            <div class="drawer-tabs">
+              <button class="is-active" data-drawer-tab="events">日志</button>
+              <button data-drawer-tab="alerts">告警</button>
+              <button data-drawer-tab="steps">步骤</button>
+            </div>
+            <div class="drawer-panel is-active" data-drawer-panel="events">
+              <div class="log-list" id="drawerEvents"></div>
+            </div>
+            <div class="drawer-panel" data-drawer-panel="alerts">
+              <div class="advice-list" id="drawerAlerts"></div>
+            </div>
+            <div class="drawer-panel" data-drawer-panel="steps">
+              <ol class="step-list drawer-steps" id="drawerSteps"></ol>
+            </div>
+          </aside>
+        </div>
+      </main>
+    </div>
+
+    <dialog class="confirm-dialog" id="confirmDialog">
+      <form method="dialog">
+        <h2 id="confirmTitle">确认操作</h2>
+        <p id="confirmBody">该动作需要操作员确认。</p>
+        <div class="dialog-actions">
+          <button value="cancel" class="secondary-button">取消</button>
+          <button value="confirm" class="primary-button danger">确认</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div class="rich-tooltip" id="richTooltip" role="tooltip" aria-hidden="true"></div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

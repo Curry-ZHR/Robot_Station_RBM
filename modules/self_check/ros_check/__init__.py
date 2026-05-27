@@ -1,0 +1,2 @@
+"""ROS self-check module."""
+

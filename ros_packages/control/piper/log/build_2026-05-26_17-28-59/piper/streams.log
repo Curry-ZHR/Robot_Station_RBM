@@ -1,0 +1,31 @@
+[0.378s] Invoking command in '/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper': PYTHONPATH=/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/build --no-deps symlink_data
+[0.518s] running develop
+[0.596s] running egg_info
+[0.596s] creating piper.egg-info
+[0.596s] writing piper.egg-info/PKG-INFO
+[0.596s] writing dependency_links to piper.egg-info/dependency_links.txt
+[0.596s] writing entry points to piper.egg-info/entry_points.txt
+[0.596s] writing requirements to piper.egg-info/requires.txt
+[0.596s] writing top-level names to piper.egg-info/top_level.txt
+[0.596s] writing manifest file 'piper.egg-info/SOURCES.txt'
+[0.597s] reading manifest file 'piper.egg-info/SOURCES.txt'
+[0.597s] writing manifest file 'piper.egg-info/SOURCES.txt'
+[0.617s] running build_ext
+[0.617s] Creating /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/python3.10/site-packages/piper.egg-link (link to .)
+[0.617s] Installing piper_ms_ctrl script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+[0.617s] Installing piper_read_master script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+[0.617s] Installing piper_single_ctrl script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+[0.618s] 
+[0.618s] Installed /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper
+[0.618s] running symlink_data
+[0.618s] creating /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/ament_index
+[0.618s] creating /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/ament_index/resource_index
+[0.618s] creating /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/ament_index/resource_index/packages
+[0.618s] symbolically linking /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/resource/piper -> /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/ament_index/resource_index/packages
+[0.618s] symbolically linking /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/package.xml -> /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/piper
+[0.618s] creating /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/piper/launch
+[0.618s] symbolically linking /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/launch/start_single_piper_rviz.launch.py -> /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/piper/launch
+[0.618s] symbolically linking /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/launch/start_two_piper.launch.py -> /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/piper/launch
+[0.618s] symbolically linking /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/launch/start_single_piper.launch.py -> /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/piper/launch
+[0.618s] symbolically linking /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/launch/start_double_piper.launch.py -> /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/share/piper/launch
+[0.635s] Invoked command in '/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper' returned '0': PYTHONPATH=/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/build --no-deps symlink_data

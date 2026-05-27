@@ -1,0 +1,9 @@
+2026-05-26 14:11:13,095 [INFO] robot_station: Logger initialized: /home/zhuzl/workspace/robot_station/logs/2026_05_26_14_11_13.log
+2026-05-26 14:11:13,097 [INFO] robot_station: Robot Station starting
+2026-05-26 14:11:13,097 [INFO] robot_station: Serving frontend: /home/zhuzl/workspace/robot_station/frontend
+2026-05-26 14:11:13,097 [INFO] robot_station: URL: http://127.0.0.1:10086
+2026-05-26 14:11:13,097 [INFO] robot_station: Press Ctrl+C to stop
+2026-05-26 14:11:22,558 [SUCCESS] robot_station: 磁盘空间 self-check: 正常 DSK-S-OK - data 剩余 1558.3 GB，占用 8.8%，logs 剩余 1558.3 GB，占用 8.8%。logs 和 data 目录均可写，磁盘空间满足建议。
+2026-05-26 14:11:22,565 [SUCCESS] robot_station: CAN 接口 self-check: 正常 CAN-I-OK - can0 已 UP，bitrate 1000000，CAN 状态 ERROR-ACTIVE。 USB bus-info: 1-13:1.0。
+2026-05-26 14:11:22,588 [SUCCESS] robot_station: GPU 可用性 self-check: 正常 GPU-A-OK - 检测到 1 张 GPU，NVIDIA GeForce RTX 4090；最高负载 0%，最高温度 45 C，最高显存占用 0%。
+2026-05-26 14:13:04,273 [INFO] robot_station: Stopping Robot Station

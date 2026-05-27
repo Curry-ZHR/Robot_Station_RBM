@@ -1,0 +1,63 @@
+#!/bin/python3
+import rclpy
+from rclpy.node import Node
+from urdf_parser_py.urdf import URDF
+
+
+class URDFReader(Node):
+    def __init__(self):
+        super().__init__('urdf_reader_node')
+
+    def load_urdf(self, file_path):
+        try:
+            with open(file_path, 'r') as f:
+                robot_description = f.read()
+            self.robot_model = URDF.from_xml_string(robot_description)
+            self.get_logger().info(f"Successfully parsed URDF file: {self.robot_model.name}")
+            return True
+        except Exception as e:
+            self.get_logger().error(f"Failed to parse URDF file: {e}")
+            return False
+
+    def print_links(self):
+        if not hasattr(self, 'robot_model'):
+            self.get_logger().warn("No URDF model loaded.")
+            return
+
+        self.get_logger().info("Links:")
+        for link_name, link in self.robot_model.links.items():
+            self.get_logger().info(f" - {link_name}")
+            if link.collision:
+                col = link.collision.geometry
+                self.get_logger().info(f"   Collision geometry: {col}")
+
+    def print_joints(self):
+        if not hasattr(self, 'robot_model'):
+            self.get_logger().warn("No URDF model loaded.")
+            return
+
+        self.get_logger().info("Joints:")
+        for joint_name, joint in self.robot_model.joints.items():
+            self.get_logger().info(f" - {joint_name}")
+            self.get_logger().info(f"   Type: {joint.type}")
+            self.get_logger().info(f"   Parent Link: {joint.parent}")
+            self.get_logger().info(f"   Child Link: {joint.child}")
+
+
+def main(args=None):
+    rclpy.init()
+
+    reader = URDFReader()
+
+    # 替换为你的 URDF 文件路径
+    urdf_file_path = "/path/to/your/robot.urdf"
+
+    if reader.load_urdf(urdf_file_path):
+        reader.print_links()
+        reader.print_joints()
+
+    rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

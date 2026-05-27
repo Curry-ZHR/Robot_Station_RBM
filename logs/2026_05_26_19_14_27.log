@@ -1,0 +1,41 @@
+2026-05-26 19:14:27,282 [INFO] robot_station: Logger initialized: /home/zhuzl/workspace/robot_station/logs/2026_05_26_19_14_27.log
+2026-05-26 19:14:27,284 [INFO] robot_station: Robot Station starting
+2026-05-26 19:14:27,284 [INFO] robot_station: Serving frontend: /home/zhuzl/workspace/robot_station/frontend
+2026-05-26 19:14:27,284 [INFO] robot_station: URL: http://127.0.0.1:9999
+2026-05-26 19:14:27,284 [INFO] robot_station: Press Ctrl+C to stop
+2026-05-26 19:14:36,701 [SUCCESS] robot_station: 磁盘空间 self-check: 正常 DSK-S-OK - data 剩余 1556.8 GB，占用 8.9%，logs 剩余 1556.8 GB，占用 8.9%。logs 和 data 目录均可写，磁盘空间满足建议。
+2026-05-26 19:14:36,717 [ERROR] robot_station: CAN 接口 self-check: 错误 CAN-I-INCOMPLETE - 机械臂 CAN 未完整就绪，缺少：can_left, can_right。can_left=缺失；can_right=缺失。
+2026-05-26 19:14:36,730 [SUCCESS] robot_station: GPU 可用性 self-check: 正常 GPU-A-OK - 检测到 1 张 GPU，NVIDIA GeForce RTX 4090；最高负载 0%，最高温度 44 C，最高显存占用 0%。
+2026-05-26 19:14:37,862 [SUCCESS] robot_station: ROS2 daemon self-check: 正常 ROS2-D-STARTED - 自检已确认 ROS2 daemon 正在运行。
+2026-05-26 19:14:48,515 [SUCCESS] robot_station: 磁盘空间 self-check: 正常 DSK-S-OK - data 剩余 1556.8 GB，占用 8.9%，logs 剩余 1556.8 GB，占用 8.9%。logs 和 data 目录均可写，磁盘空间满足建议。
+2026-05-26 19:14:48,542 [ERROR] robot_station: CAN 接口 self-check: 错误 CAN-I-INCOMPLETE - 机械臂 CAN 未完整就绪，缺少：can_left, can_right。can_left=缺失；can_right=缺失。
+2026-05-26 19:14:48,545 [SUCCESS] robot_station: GPU 可用性 self-check: 正常 GPU-A-OK - 检测到 1 张 GPU，NVIDIA GeForce RTX 4090；最高负载 0%，最高温度 44 C，最高显存占用 0%。
+2026-05-26 19:14:48,707 [SUCCESS] robot_station: ROS2 daemon self-check: 正常 ROS2-D-OK - ROS2 daemon 已运行，后端可以继续执行 ROS2 graph 查询。
+2026-05-26 19:29:04,773 [SUCCESS] robot_station: 磁盘空间 self-check: 正常 DSK-S-OK - data 剩余 1556.8 GB，占用 8.9%，logs 剩余 1556.8 GB，占用 8.9%。logs 和 data 目录均可写，磁盘空间满足建议。
+2026-05-26 19:29:04,793 [ERROR] robot_station: CAN 接口 self-check: 错误 CAN-I-INCOMPLETE - 机械臂 CAN 未完整就绪，缺少：can_left, can_right。can_left=缺失；can_right=缺失。
+2026-05-26 19:29:04,800 [SUCCESS] robot_station: GPU 可用性 self-check: 正常 GPU-A-OK - 检测到 1 张 GPU，NVIDIA GeForce RTX 4090；最高负载 0%，最高温度 45 C，最高显存占用 0%。
+2026-05-26 19:29:04,967 [SUCCESS] robot_station: ROS2 daemon self-check: 正常 ROS2-D-OK - ROS2 daemon 已运行，后端可以继续执行 ROS2 graph 查询。
+2026-05-26 19:29:07,576 [ERROR] robot_station: CAN activate: CAN-A-SUDO - sudo: a password is required
+2026-05-26 19:29:07,676 [SUCCESS] robot_station: 磁盘空间 self-check: 正常 DSK-S-OK - data 剩余 1556.8 GB，占用 8.9%，logs 剩余 1556.8 GB，占用 8.9%。logs 和 data 目录均可写，磁盘空间满足建议。
+2026-05-26 19:29:07,705 [ERROR] robot_station: CAN 接口 self-check: 错误 CAN-I-INCOMPLETE - 机械臂 CAN 未完整就绪，缺少：can_left, can_right。can_left=缺失；can_right=缺失。
+2026-05-26 19:29:07,714 [SUCCESS] robot_station: GPU 可用性 self-check: 正常 GPU-A-OK - 检测到 1 张 GPU，NVIDIA GeForce RTX 4090；最高负载 0%，最高温度 45 C，最高显存占用 0%。
+2026-05-26 19:29:07,876 [SUCCESS] robot_station: ROS2 daemon self-check: 正常 ROS2-D-OK - ROS2 daemon 已运行，后端可以继续执行 ROS2 graph 查询。
+2026-05-26 19:29:20,829 [ERROR] robot_station: CAN activate: CAN-A-SUDO - sudo: a password is required
+2026-05-26 19:29:20,950 [SUCCESS] robot_station: 磁盘空间 self-check: 正常 DSK-S-OK - data 剩余 1556.8 GB，占用 8.9%，logs 剩余 1556.8 GB，占用 8.9%。logs 和 data 目录均可写，磁盘空间满足建议。
+2026-05-26 19:29:20,968 [ERROR] robot_station: CAN 接口 self-check: 错误 CAN-I-INCOMPLETE - 机械臂 CAN 未完整就绪，缺少：can_left, can_right。can_left=缺失；can_right=缺失。
+2026-05-26 19:29:20,973 [SUCCESS] robot_station: GPU 可用性 self-check: 正常 GPU-A-OK - 检测到 1 张 GPU，NVIDIA GeForce RTX 4090；最高负载 0%，最高温度 45 C，最高显存占用 0%。
+2026-05-26 19:29:21,136 [SUCCESS] robot_station: ROS2 daemon self-check: 正常 ROS2-D-OK - ROS2 daemon 已运行，后端可以继续执行 ROS2 graph 查询。
+2026-05-26 19:29:31,377 [ERROR] robot_station: CAN activate: CAN-A-SUDO - sudo: a password is required
+2026-05-26 19:29:31,494 [SUCCESS] robot_station: 磁盘空间 self-check: 正常 DSK-S-OK - data 剩余 1556.8 GB，占用 8.9%，logs 剩余 1556.8 GB，占用 8.9%。logs 和 data 目录均可写，磁盘空间满足建议。
+2026-05-26 19:29:31,510 [ERROR] robot_station: CAN 接口 self-check: 错误 CAN-I-INCOMPLETE - 机械臂 CAN 未完整就绪，缺少：can_left, can_right。can_left=缺失；can_right=缺失。
+2026-05-26 19:29:31,518 [SUCCESS] robot_station: GPU 可用性 self-check: 正常 GPU-A-OK - 检测到 1 张 GPU，NVIDIA GeForce RTX 4090；最高负载 0%，最高温度 45 C，最高显存占用 0%。
+2026-05-26 19:29:31,680 [SUCCESS] robot_station: ROS2 daemon self-check: 正常 ROS2-D-OK - ROS2 daemon 已运行，后端可以继续执行 ROS2 graph 查询。
+2026-05-26 19:34:57,116 [SUCCESS] robot_station: 磁盘空间 self-check: 正常 DSK-S-OK - data 剩余 1556.8 GB，占用 8.9%，logs 剩余 1556.8 GB，占用 8.9%。logs 和 data 目录均可写，磁盘空间满足建议。
+2026-05-26 19:34:57,131 [SUCCESS] robot_station: GPU 可用性 self-check: 正常 GPU-A-OK - 检测到 1 张 GPU，NVIDIA GeForce RTX 4090；最高负载 0%，最高温度 45 C，最高显存占用 0%。
+2026-05-26 19:34:57,224 [SUCCESS] robot_station: CAN 接口 self-check: 正常 CAN-I-ACTIVATED - 机械臂 CAN 已自动激活：can_left=UP, bitrate 1000000(匹配), ERROR-ACTIVE, bus-info 1-13:1.0；can_right=UP, bitrate 1000000(匹配), ERROR-ACTIVE, bus-info 1-12:1.0。
+2026-05-26 19:34:57,304 [SUCCESS] robot_station: ROS2 daemon self-check: 正常 ROS2-D-OK - ROS2 daemon 已运行，后端可以继续执行 ROS2 graph 查询。
+2026-05-26 20:07:08,278 [SUCCESS] robot_station: 磁盘空间 self-check: 正常 DSK-S-OK - data 剩余 1556.8 GB，占用 8.9%，logs 剩余 1556.8 GB，占用 8.9%。logs 和 data 目录均可写，磁盘空间满足建议。
+2026-05-26 20:07:08,286 [SUCCESS] robot_station: CAN 接口 self-check: 正常 CAN-I-OK - 机械臂 CAN 已就绪：can_left=UP, bitrate 1000000(匹配), ERROR-ACTIVE, bus-info 1-13:1.0；can_right=UP, bitrate 1000000(匹配), ERROR-ACTIVE, bus-info 1-12:1.0。
+2026-05-26 20:07:08,303 [SUCCESS] robot_station: GPU 可用性 self-check: 正常 GPU-A-OK - 检测到 1 张 GPU，NVIDIA GeForce RTX 4090；最高负载 0%，最高温度 45 C，最高显存占用 0%。
+2026-05-26 20:07:08,470 [SUCCESS] robot_station: ROS2 daemon self-check: 正常 ROS2-D-OK - ROS2 daemon 已运行，后端可以继续执行 ROS2 graph 查询。
+2026-05-26 20:08:16,440 [INFO] robot_station: Stopping Robot Station

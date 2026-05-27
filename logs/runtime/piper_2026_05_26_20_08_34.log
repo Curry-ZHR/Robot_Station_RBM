@@ -1,0 +1,14 @@
+[INFO] [launch]: All log files can be found below /home/zhuzl/.ros/log/2026-05-26-20-08-35-297817-agilex-18359
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [piper_single_ctrl-1]: process started with pid [18382]
+[INFO] [piper_single_ctrl-2]: process started with pid [18384]
+[piper_single_ctrl-2] [INFO] [1779797315.663762369] [piper_right_ctrl_node]: can_port is can_right
+[piper_single_ctrl-1] [INFO] [1779797315.663829281] [piper_left_ctrl_node]: can_port is can_left
+[piper_single_ctrl-2] [INFO] [1779797315.663973152] [piper_right_ctrl_node]: auto_enable is False
+[piper_single_ctrl-1] [INFO] [1779797315.664063093] [piper_left_ctrl_node]: auto_enable is False
+[piper_single_ctrl-2] [INFO] [1779797315.664144844] [piper_right_ctrl_node]: girpper_exist is True
+[piper_single_ctrl-1] [INFO] [1779797315.664269972] [piper_left_ctrl_node]: girpper_exist is True
+[piper_single_ctrl-2] [INFO] [1779797315.664310357] [piper_right_ctrl_node]: rviz_ctrl_flag is False
+[piper_single_ctrl-2] [INFO] [1779797315.664474521] [piper_right_ctrl_node]: piper_name is right
+[piper_single_ctrl-1] [INFO] [1779797315.664496937] [piper_left_ctrl_node]: rviz_ctrl_flag is False
+[piper_single_ctrl-1] [INFO] [1779797315.664724910] [piper_left_ctrl_node]: piper_name is left

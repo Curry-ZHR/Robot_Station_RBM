@@ -1,0 +1,14 @@
+{
+	"backtraceGraph" : 
+	{
+		"commands" : [],
+		"files" : [],
+		"nodes" : []
+	},
+	"installers" : [],
+	"paths" : 
+	{
+		"build" : "piper_msgs__py",
+		"source" : "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs/piper_msgs__py"
+	}
+}

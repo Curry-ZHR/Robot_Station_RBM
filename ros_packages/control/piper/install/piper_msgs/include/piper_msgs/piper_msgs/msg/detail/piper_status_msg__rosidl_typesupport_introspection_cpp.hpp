@@ -1,0 +1,1 @@
+/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs/rosidl_typesupport_introspection_cpp/piper_msgs/msg/detail/piper_status_msg__rosidl_typesupport_introspection_cpp.hpp

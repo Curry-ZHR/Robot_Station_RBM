@@ -1,0 +1,253 @@
+-- The C compiler identification is GNU 11.4.0
+-- The CXX compiler identification is GNU 11.4.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found ament_cmake: 1.3.12 (/opt/ros/humble/share/ament_cmake/cmake)
+-- Found Python3: /usr/bin/python3 (found version "3.10.12") found components: Interpreter 
+-- Override CMake install command with custom implementation using symlinks instead of copying resources
+-- Found rclpy: 3.3.17 (/opt/ros/humble/share/rclpy/cmake)
+-- Found rosidl_default_generators: 1.2.0 (/opt/ros/humble/share/rosidl_default_generators/cmake)
+-- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+-- Found rosidl_adapter: 3.1.7 (/opt/ros/humble/share/rosidl_adapter/cmake)
+-- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+-- Found ament_cmake_ros: 0.10.0 (/opt/ros/humble/share/ament_cmake_ros/cmake)
+-- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+-- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+-- Found PythonInterp: /usr/bin/python3 (found suitable version "3.10.12", minimum required is "3.6") 
+-- Found python_cmake_module: 0.10.0 (/opt/ros/humble/share/python_cmake_module/cmake)
+-- Found PythonLibs: /usr/lib/x86_64-linux-gnu/libpython3.10.so (found suitable version "3.10.12", minimum required is "3.5") 
+-- Using PYTHON_EXECUTABLE: /usr/bin/python3
+-- Using PYTHON_INCLUDE_DIRS: /usr/include/python3.10
+-- Using PYTHON_LIBRARIES: /usr/lib/x86_64-linux-gnu/libpython3.10.so
+-- Found PythonExtra: .so  
+-- Found ament_lint_auto: 0.12.14 (/opt/ros/humble/share/ament_lint_auto/cmake)
+-- Added test 'lint_cmake' to check CMake code style
+-- Added test 'xmllint' to check XML markup files
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs
+[  2%] Generating C code for ROS interfaces
+[  4%] Generating C++ code for ROS interfaces
+[  4%] Built target ament_cmake_python_symlink_piper_msgs
+running egg_info
+creating piper_msgs.egg-info
+writing piper_msgs.egg-info/PKG-INFO
+writing dependency_links to piper_msgs.egg-info/dependency_links.txt
+writing top-level names to piper_msgs.egg-info/top_level.txt
+writing manifest file 'piper_msgs.egg-info/SOURCES.txt'
+reading manifest file 'piper_msgs.egg-info/SOURCES.txt'
+writing manifest file 'piper_msgs.egg-info/SOURCES.txt'
+[  4%] Built target ament_cmake_python_build_piper_msgs_egg
+[  4%] Built target piper_msgs__cpp
+[  8%] Building C object CMakeFiles/piper_msgs__rosidl_generator_c.dir/rosidl_generator_c/piper_msgs/msg/detail/piper_status_msg__functions.c.o
+[  8%] Building C object CMakeFiles/piper_msgs__rosidl_generator_c.dir/rosidl_generator_c/piper_msgs/msg/detail/pos_cmd__functions.c.o
+[ 10%] Building C object CMakeFiles/piper_msgs__rosidl_generator_c.dir/rosidl_generator_c/piper_msgs/srv/detail/enable__functions.c.o
+[ 12%] Generating C++ introspection for ROS interfaces
+[ 14%] Generating C++ type support for eProsima Fast-RTPS
+[ 17%] Generating C++ type support dispatch for ROS interfaces
+[ 19%] Linking C shared library libpiper_msgs__rosidl_generator_c.so
+[ 19%] Built target piper_msgs__rosidl_generator_c
+[ 21%] Generating C type support dispatch for ROS interfaces
+[ 23%] Generating C type support for eProsima Fast-RTPS
+[ 25%] Generating C introspection for ROS interfaces
+[ 31%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/piper_msgs/msg/pos_cmd__type_support.cpp.o
+[ 31%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/piper_msgs/msg/piper_status_msg__type_support.cpp.o
+[ 31%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_cpp.dir/rosidl_typesupport_cpp/piper_msgs/srv/enable__type_support.cpp.o
+[ 38%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/piper_msgs/srv/detail/enable__type_support.cpp.o
+[ 38%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/piper_msgs/msg/detail/piper_status_msg__type_support.cpp.o
+[ 38%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_introspection_cpp.dir/rosidl_typesupport_introspection_cpp/piper_msgs/msg/detail/pos_cmd__type_support.cpp.o
+[ 42%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/piper_msgs/msg/detail/dds_fastrtps/piper_status_msg__type_support.cpp.o
+[ 42%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/piper_msgs/msg/detail/dds_fastrtps/pos_cmd__type_support.cpp.o
+[ 44%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/piper_msgs/srv/detail/dds_fastrtps/enable__type_support.cpp.o
+[ 51%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_c.dir/rosidl_typesupport_c/piper_msgs/msg/piper_status_msg__type_support.cpp.o
+[ 51%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_c.dir/rosidl_typesupport_c/piper_msgs/srv/enable__type_support.cpp.o
+[ 51%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_c.dir/rosidl_typesupport_c/piper_msgs/msg/pos_cmd__type_support.cpp.o
+[ 53%] Linking CXX shared library libpiper_msgs__rosidl_typesupport_c.so
+[ 59%] Building C object CMakeFiles/piper_msgs__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/piper_msgs/msg/detail/pos_cmd__type_support.c.o
+[ 59%] Building C object CMakeFiles/piper_msgs__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/piper_msgs/msg/detail/piper_status_msg__type_support.c.o
+[ 59%] Building C object CMakeFiles/piper_msgs__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/piper_msgs/srv/detail/enable__type_support.c.o
+[ 65%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/piper_msgs/srv/detail/enable__type_support_c.cpp.o
+[ 65%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/piper_msgs/msg/detail/piper_status_msg__type_support_c.cpp.o
+[ 65%] Building CXX object CMakeFiles/piper_msgs__rosidl_typesupport_fastrtps_c.dir/rosidl_typesupport_fastrtps_c/piper_msgs/msg/detail/pos_cmd__type_support_c.cpp.o
+[ 68%] Linking C shared library libpiper_msgs__rosidl_typesupport_introspection_c.so
+[ 68%] Built target piper_msgs__rosidl_typesupport_c
+[ 68%] Built target piper_msgs__rosidl_typesupport_introspection_c
+[ 70%] Linking CXX shared library libpiper_msgs__rosidl_typesupport_cpp.so
+[ 70%] Built target piper_msgs__rosidl_typesupport_cpp
+[ 72%] Linking CXX shared library libpiper_msgs__rosidl_typesupport_fastrtps_cpp.so
+[ 74%] Linking CXX shared library libpiper_msgs__rosidl_typesupport_fastrtps_c.so
+[ 76%] Linking CXX shared library libpiper_msgs__rosidl_typesupport_introspection_cpp.so
+[ 76%] Built target piper_msgs__rosidl_typesupport_fastrtps_cpp
+[ 76%] Built target piper_msgs__rosidl_typesupport_introspection_cpp
+[ 76%] Built target piper_msgs__rosidl_typesupport_fastrtps_c
+[ 76%] Built target piper_msgs
+[ 78%] Generating Python code for ROS interfaces
+[ 78%] Built target piper_msgs__py
+[ 80%] Building C object CMakeFiles/piper_msgs__rosidl_generator_py.dir/rosidl_generator_py/piper_msgs/srv/_enable_s.c.o
+[ 82%] Building C object CMakeFiles/piper_msgs__rosidl_generator_py.dir/rosidl_generator_py/piper_msgs/msg/_piper_status_msg_s.c.o
+[ 85%] Building C object CMakeFiles/piper_msgs__rosidl_generator_py.dir/rosidl_generator_py/piper_msgs/msg/_pos_cmd_s.c.o
+[ 87%] Linking C shared library rosidl_generator_py/piper_msgs/libpiper_msgs__rosidl_generator_py.so
+[ 87%] Built target piper_msgs__rosidl_generator_py
+[ 89%] Building C object CMakeFiles/piper_msgs__rosidl_typesupport_introspection_c__pyext.dir/rosidl_generator_py/piper_msgs/_piper_msgs_s.ep.rosidl_typesupport_introspection_c.c.o
+[ 91%] Building C object CMakeFiles/piper_msgs__rosidl_typesupport_fastrtps_c__pyext.dir/rosidl_generator_py/piper_msgs/_piper_msgs_s.ep.rosidl_typesupport_fastrtps_c.c.o
+[ 93%] Building C object CMakeFiles/piper_msgs__rosidl_typesupport_c__pyext.dir/rosidl_generator_py/piper_msgs/_piper_msgs_s.ep.rosidl_typesupport_c.c.o
+[ 95%] Linking C shared library rosidl_generator_py/piper_msgs/piper_msgs_s__rosidl_typesupport_c.cpython-310-x86_64-linux-gnu.so
+[ 97%] Linking C shared library rosidl_generator_py/piper_msgs/piper_msgs_s__rosidl_typesupport_fastrtps_c.cpython-310-x86_64-linux-gnu.so
+[100%] Linking C shared library rosidl_generator_py/piper_msgs/piper_msgs_s__rosidl_typesupport_introspection_c.cpython-310-x86_64-linux-gnu.so
+[100%] Built target piper_msgs__rosidl_typesupport_fastrtps_c__pyext
+[100%] Built target piper_msgs__rosidl_typesupport_c__pyext
+[100%] Built target piper_msgs__rosidl_typesupport_introspection_c__pyext
+-- Install configuration: ""
+-- Execute custom install script
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/ament_index/resource_index/rosidl_interfaces/piper_msgs
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/piper_status_msg__functions.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/piper_status_msg__struct.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/piper_status_msg__type_support.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/pos_cmd__functions.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/pos_cmd__struct.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/pos_cmd__type_support.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/piper_status_msg.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/pos_cmd.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/rosidl_generator_c__visibility_control.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/srv/detail/enable__functions.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/srv/detail/enable__struct.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/srv/detail/enable__type_support.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/srv/enable.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/environment/library_path.sh
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/environment/library_path.dsv
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/piper_status_msg__rosidl_typesupport_fastrtps_c.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/pos_cmd__rosidl_typesupport_fastrtps_c.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/rosidl_typesupport_fastrtps_c__visibility_control.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/srv/detail/enable__rosidl_typesupport_fastrtps_c.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/piper_status_msg__rosidl_typesupport_introspection_c.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/pos_cmd__rosidl_typesupport_introspection_c.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/rosidl_typesupport_introspection_c__visibility_control.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/srv/detail/enable__rosidl_typesupport_introspection_c.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/piper_status_msg__builder.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/piper_status_msg__struct.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/piper_status_msg__traits.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/piper_status_msg__type_support.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/pos_cmd__builder.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/pos_cmd__struct.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/pos_cmd__traits.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/pos_cmd__type_support.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/piper_status_msg.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/pos_cmd.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/rosidl_generator_cpp__visibility_control.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/srv/detail/enable__builder.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/srv/detail/enable__struct.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/srv/detail/enable__traits.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/srv/detail/enable__type_support.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/srv/enable.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/piper_status_msg__rosidl_typesupport_fastrtps_cpp.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/pos_cmd__rosidl_typesupport_fastrtps_cpp.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/rosidl_typesupport_fastrtps_cpp__visibility_control.h
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/srv/detail/enable__rosidl_typesupport_fastrtps_cpp.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/piper_status_msg__rosidl_typesupport_introspection_cpp.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/msg/detail/pos_cmd__rosidl_typesupport_introspection_cpp.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/include/piper_msgs/piper_msgs/srv/detail/enable__rosidl_typesupport_introspection_cpp.hpp
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/environment/pythonpath.sh
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/environment/pythonpath.dsv
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs-0.0.0-py3.10.egg-info/PKG-INFO
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs-0.0.0-py3.10.egg-info/SOURCES.txt
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs-0.0.0-py3.10.egg-info/dependency_links.txt
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs-0.0.0-py3.10.egg-info/top_level.txt
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/__init__.py
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/_piper_msgs_s.ep.rosidl_typesupport_c.c
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/_piper_msgs_s.ep.rosidl_typesupport_fastrtps_c.c
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/_piper_msgs_s.ep.rosidl_typesupport_introspection_c.c
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/libpiper_msgs__rosidl_generator_py.so
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/msg/__init__.py
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/msg/_piper_status_msg.py
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/msg/_piper_status_msg_s.c
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/msg/_pos_cmd.py
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/msg/_pos_cmd_s.c
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/piper_msgs_s__rosidl_typesupport_c.cpython-310-x86_64-linux-gnu.so
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/piper_msgs_s__rosidl_typesupport_fastrtps_c.cpython-310-x86_64-linux-gnu.so
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/piper_msgs_s__rosidl_typesupport_introspection_c.cpython-310-x86_64-linux-gnu.so
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/srv/__init__.py
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/srv/_enable.py
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/srv/_enable_s.c
+-- Up-to-date symlink: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/piper_msgs_s__rosidl_typesupport_fastrtps_c.cpython-310-x86_64-linux-gnu.so
+-- Up-to-date symlink: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/piper_msgs_s__rosidl_typesupport_introspection_c.cpython-310-x86_64-linux-gnu.so
+-- Up-to-date symlink: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/piper_msgs_s__rosidl_typesupport_c.cpython-310-x86_64-linux-gnu.so
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/msg/PiperStatusMsg.idl
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/msg/PosCmd.idl
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/srv/Enable.idl
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/msg/PiperStatusMsg.msg
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/msg/PosCmd.msg
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/srv/Enable.srv
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/srv/Enable_Request.msg
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/srv/Enable_Response.msg
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/ament_index/resource_index/package_run_dependencies/piper_msgs
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/ament_index/resource_index/parent_prefix_path/piper_msgs
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/environment/ament_prefix_path.sh
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/environment/ament_prefix_path.dsv
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/environment/path.sh
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/environment/path.dsv
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/local_setup.bash
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/local_setup.sh
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/local_setup.zsh
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/local_setup.dsv
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/package.dsv
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/ament_index/resource_index/packages/piper_msgs
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/rosidl_cmake-extras.cmake
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/ament_cmake_export_include_directories-extras.cmake
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/ament_cmake_export_libraries-extras.cmake
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/ament_cmake_export_targets-extras.cmake
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/rosidl_cmake_export_typesupport_targets-extras.cmake
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/ament_cmake_export_dependencies-extras.cmake
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/rosidl_cmake_export_typesupport_libraries-extras.cmake
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/piper_msgsConfig.cmake
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/piper_msgsConfig-version.cmake
+-- Symlinking: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/package.xml
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_generator_c.so
+-- Set runtime path of "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_generator_c.so" to ""
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_typesupport_fastrtps_c.so
+-- Set runtime path of "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_typesupport_fastrtps_c.so" to ""
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_typesupport_introspection_c.so
+-- Set runtime path of "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_typesupport_introspection_c.so" to ""
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_typesupport_c.so
+-- Set runtime path of "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_typesupport_c.so" to ""
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_typesupport_fastrtps_cpp.so
+-- Set runtime path of "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_typesupport_fastrtps_cpp.so" to ""
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_typesupport_introspection_cpp.so
+-- Set runtime path of "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_typesupport_introspection_cpp.so" to ""
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_typesupport_cpp.so
+-- Set runtime path of "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_typesupport_cpp.so" to ""
+Listing '/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs'...
+Compiling '/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/__init__.py'...
+Listing '/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/msg'...
+Compiling '/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/msg/__init__.py'...
+Compiling '/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/msg/_piper_status_msg.py'...
+Compiling '/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/msg/_pos_cmd.py'...
+Listing '/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/srv'...
+Compiling '/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/srv/__init__.py'...
+Compiling '/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/local/lib/python3.10/dist-packages/piper_msgs/srv/_enable.py'...
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_generator_py.so
+-- Set runtime path of "/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/lib/libpiper_msgs__rosidl_generator_py.so" to ""
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/export_piper_msgs__rosidl_generator_cExport.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/export_piper_msgs__rosidl_generator_cExport-noconfig.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/export_piper_msgs__rosidl_typesupport_fastrtps_cExport.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/export_piper_msgs__rosidl_typesupport_fastrtps_cExport-noconfig.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/piper_msgs__rosidl_typesupport_introspection_cExport.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/piper_msgs__rosidl_typesupport_introspection_cExport-noconfig.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/piper_msgs__rosidl_typesupport_cExport.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/piper_msgs__rosidl_typesupport_cExport-noconfig.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/export_piper_msgs__rosidl_generator_cppExport.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/export_piper_msgs__rosidl_typesupport_fastrtps_cppExport.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/export_piper_msgs__rosidl_typesupport_fastrtps_cppExport-noconfig.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/piper_msgs__rosidl_typesupport_introspection_cppExport.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/piper_msgs__rosidl_typesupport_introspection_cppExport-noconfig.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/piper_msgs__rosidl_typesupport_cppExport.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/piper_msgs__rosidl_typesupport_cppExport-noconfig.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/export_piper_msgs__rosidl_generator_pyExport.cmake
+-- Installing: /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper_msgs/share/piper_msgs/cmake/export_piper_msgs__rosidl_generator_pyExport-noconfig.cmake

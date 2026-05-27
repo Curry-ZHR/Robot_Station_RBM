@@ -1,0 +1,3 @@
+/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs/rosidl_adapter/piper_msgs:msg/PiperStatusMsg.idl
+/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs/rosidl_adapter/piper_msgs:msg/PosCmd.idl
+/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs/rosidl_adapter/piper_msgs:srv/Enable.idl

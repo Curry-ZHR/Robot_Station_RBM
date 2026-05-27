@@ -1,0 +1,1 @@
+/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper_msgs/rosidl_generator_cpp/piper_msgs/msg/piper_status_msg.hpp
