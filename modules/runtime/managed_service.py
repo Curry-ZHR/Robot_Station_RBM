@@ -52,6 +52,7 @@ class ManagedService:
                     self._status_payload_locked(),
                 )
 
+            cleaned = self._cleanup_external_processes_locked()
             LOG_DIR.mkdir(parents=True, exist_ok=True)
             self._log_file = str(LOG_DIR / f"{self.spec.key}_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}.log")
             shell_command = self._shell_command()
@@ -98,10 +99,13 @@ class ManagedService:
                 )
 
             self._status = "running"
+            detail = f"{self.spec.name} process is running."
+            if cleaned:
+                detail = f"{detail} Cleaned stale processes: {', '.join(str(item['pid']) for item in cleaned)}."
             return _result(
                 True,
                 "SVC-STARTED",
-                f"{self.spec.name} process is running.",
+                detail,
                 self._status_payload_locked(),
             )
 
@@ -110,11 +114,16 @@ class ManagedService:
             self._refresh_locked()
             process = self._process
             if process is None:
+                cleaned = self._cleanup_external_processes_locked()
                 self._status = "stopped"
+                code = "SVC-STOPPED" if cleaned else "SVC-ALREADY-STOPPED"
+                detail = f"{self.spec.name} is already stopped."
+                if cleaned:
+                    detail = f"{self.spec.name} stale processes cleaned: {', '.join(str(item['pid']) for item in cleaned)}."
                 return _result(
                     True,
-                    "SVC-ALREADY-STOPPED",
-                    f"{self.spec.name} is already stopped.",
+                    code,
+                    detail,
                     self._status_payload_locked(),
                 )
             self._status = "stopping"
@@ -125,13 +134,18 @@ class ManagedService:
 
         with self._lock:
             self._refresh_locked()
+            cleaned = self._cleanup_external_processes_locked()
+            self._refresh_locked()
             if self._process is None:
                 self._status = "stopped"
                 self._stopped_at = time.strftime("%H:%M:%S")
+                detail = f"{self.spec.name} stopped."
+                if cleaned:
+                    detail = f"{detail} Cleaned stale processes: {', '.join(str(item['pid']) for item in cleaned)}."
                 return _result(
                     True,
                     "SVC-STOPPED",
-                    f"{self.spec.name} stopped.",
+                    detail,
                     self._status_payload_locked(),
                 )
             return _result(
@@ -170,11 +184,14 @@ class ManagedService:
 
     def _status_payload_locked(self):
         pid = self._process.pid if self._process is not None else None
+        external_processes = self._matching_processes_locked(exclude_pids={pid} if pid else set())
+        status = "external" if self._process is None and external_processes else self._status
         return {
             "key": self.spec.key,
             "name": self.spec.name,
-            "status": self._status,
+            "status": status,
             "pid": pid,
+            "externalProcesses": external_processes,
             "startedAt": self._started_at,
             "stoppedAt": self._stopped_at,
             "logFile": self._log_file,
@@ -230,3 +247,64 @@ class ManagedService:
             except subprocess.TimeoutExpired:
                 continue
 
+    def _matching_processes_locked(self, exclude_pids=None):
+        patterns = tuple(pattern for pattern in self.spec.cleanup_process_patterns if pattern)
+        if not patterns:
+            return []
+
+        excluded = {os.getpid()}
+        excluded.update(pid for pid in (exclude_pids or set()) if pid)
+        matches = []
+        for proc_dir in Path("/proc").iterdir():
+            if not proc_dir.name.isdigit():
+                continue
+            pid = int(proc_dir.name)
+            if pid in excluded:
+                continue
+            try:
+                raw = (proc_dir / "cmdline").read_bytes()
+            except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+                continue
+            if not raw:
+                continue
+            cmdline = raw.replace(b"\x00", b" ").decode(errors="replace").strip()
+            if any(pattern in cmdline for pattern in patterns):
+                matches.append({"pid": pid, "cmdline": cmdline})
+        return sorted(matches, key=lambda item: item["pid"])
+
+    def _pid_alive(self, pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def _cleanup_external_processes_locked(self):
+        matches = self._matching_processes_locked()
+        if not matches:
+            return []
+
+        remaining = list(matches)
+        for sig, wait_sec in ((signal.SIGINT, 0.8), (signal.SIGTERM, 0.6), (signal.SIGKILL, 0.2)):
+            for item in remaining:
+                try:
+                    os.kill(item["pid"], sig)
+                except ProcessLookupError:
+                    continue
+                except OSError as exc:
+                    LOGGER.warning("Failed to signal stale %s process pid=%s: %s", self.spec.key, item["pid"], exc)
+            time.sleep(wait_sec)
+            remaining = [item for item in remaining if self._pid_alive(item["pid"])]
+            if not remaining:
+                break
+
+        cleaned = [item for item in matches if not self._pid_alive(item["pid"])]
+        if cleaned:
+            LOGGER.info(
+                "Service %s cleaned stale processes: %s",
+                self.spec.key,
+                ", ".join(str(item["pid"]) for item in cleaned),
+            )
+        return cleaned

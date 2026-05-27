@@ -229,8 +229,9 @@ const deviceBaseControlItems = [
 const piperRuntimeLabels = {
   stopped: { title: "Piper 未启动，点击启动", level: "idle", pressed: false },
   starting: { title: "Piper 启动中", level: "warn", pressed: false, busy: true },
-  running: { title: "Piper 运行中，点击关闭", level: "ok", pressed: true },
-  stopping: { title: "Piper 关闭中", level: "warn", pressed: true, busy: true },
+  running: { title: "Piper 运行中，点击清理关闭", level: "ok", pressed: true },
+  stopping: { title: "Piper 清理关闭中", level: "warn", pressed: true, busy: true },
+  external: { title: "检测到旧 Piper ROS，点击清理", level: "warn", pressed: true },
   failed: { title: "Piper 启动失败，点击重试", level: "danger", pressed: false },
   error: { title: "Piper 异常，点击重试", level: "danger", pressed: false },
   unknown: { title: "Piper 状态未知，点击刷新", level: "idle", pressed: false },
@@ -806,7 +807,7 @@ function renderArmComparison(side) {
         ${renderGripperCompareRow(side)}
       </div>
       <div class="action-feedback-note ${action && action.status === "error" ? "is-danger" : ""}">
-        ${action && action.detail ? action.detail : "拖动 Action 滑条后使用下发指令。"}
+        ${action && action.detail ? action.detail : "接管控制后拖动 Action 滑条。"}
       </div>
     </section>
   `;
@@ -828,11 +829,9 @@ function renderArmComparisons() {
 function renderArmControlButtons() {
   const copyButton = $("#copyAllArmStateButton");
   if (copyButton) copyButton.disabled = !allArmStatesCopyable();
-  const syncButton = $("#syncArmActionsButton");
-  if (syncButton) syncButton.disabled = state.armControl.active || !allActionsReady();
   const controlButton = $("#armControlToggleButton");
   if (controlButton) {
-    controlButton.textContent = state.armControl.active ? "停止控制" : "接管控制";
+    controlButton.textContent = state.armControl.active ? "退出接管" : "接管控制";
     controlButton.disabled = state.armControl.busy || (!state.armControl.active && !piperReady());
     controlButton.classList.toggle("is-active", state.armControl.active);
   }
@@ -906,26 +905,8 @@ async function publishSingleArmAction(side) {
   }
 }
 
-async function syncPublishArmActions() {
-  if (state.armControl.active) {
-    addLog("机械臂", "接管控制中，下发指令按钮已锁定");
-    renderArmComparisons();
-    return;
-  }
-  if (!allActionsReady()) {
-    addLog("机械臂", "下发指令未启动：左右臂 Action 参数未就绪");
-    renderArmComparisons();
-    return;
-  }
-
-  const confirmed = window.confirm("下发左右臂 Action 指令？");
-  if (!confirmed) return;
-
-  await publishArmActionsNow({ source: "下发指令" });
-}
-
 async function publishArmActionsNow(options = {}) {
-  const source = options.source || "下发指令";
+  const source = options.source || "接管控制";
   const logSuccess = options.logSuccess !== false;
   if (!allActionsReady()) {
     if (logSuccess) addLog("机械臂", `${source}未启动：左右臂 Action 参数未就绪`);
@@ -953,15 +934,27 @@ function scheduleDirectArmPublish() {
   }, 180);
 }
 
-async function publishPiperEnable(enabled) {
-  const response = await fetch(`/api/ros/actions/${piperEnableActionKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ enabled }),
-  });
-  const result = await response.json();
-  if (!response.ok || !result.ok) {
-    throw new Error(result.detail || `HTTP ${response.status}`);
+function sleepMs(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function publishPiperEnable(enabled, options = {}) {
+  const repeat = Math.max(1, Number(options.repeat) || 1);
+  const intervalMs = Math.max(0, Number(options.intervalMs) || 0);
+  let result = null;
+  for (let index = 0; index < repeat; index += 1) {
+    const response = await fetch(`/api/ros/actions/${piperEnableActionKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.detail || `HTTP ${response.status}`);
+    }
+    if (index < repeat - 1 && intervalMs) {
+      await sleepMs(intervalMs);
+    }
   }
   return result;
 }
@@ -979,17 +972,33 @@ async function toggleArmDirectControl() {
   try {
     if (state.armControl.active) {
       window.clearTimeout(state.armControl.publishTimer);
-      await publishPiperEnable(false);
       state.armControl.active = false;
-      addLog("机械臂", "已停止接管控制");
+      addLog("机械臂", "已退出接管控制，机械臂保持使能");
     } else {
-      ["left", "right"].forEach(seedActionFromState);
-      if (!allActionsReady()) {
-        throw new Error("左右臂 Action 参数未就绪，请先复制 State 或归位");
+      if (!allArmStatesCopyable()) {
+        ["left", "right"].forEach((side) => {
+          const action = state.piperActions[side];
+          if (!action || canCopyStateToAction(side)) return;
+          action.status = "idle";
+          action.detail = `${piperArmLabels[side]} State 暂不可复制。`;
+        });
+        throw new Error("左右臂 State 反馈未全部就绪");
       }
-      await publishPiperEnable(true);
+      ["left", "right"].forEach((side) => {
+        const action = state.piperActions[side];
+        const feedback = state.piperJoints[side];
+        action.positions = feedback.positions.slice(0, 7).map((value) => Number(value));
+        action.status = "ready";
+        action.detail = "接管前已自动复制 State 到 Action。";
+      });
+      if (!allActionsReady()) {
+        throw new Error("左右臂 Action 参数未就绪");
+      }
+      await publishPiperEnable(true, { repeat: 3, intervalMs: 80 });
+      $("#enableStatus").textContent = "已使能";
+      $("#enableStatus").className = "status-pill ok";
       state.armControl.active = true;
-      addLog("机械臂", "已接管控制：拖动 Action 滑条将自动下发");
+      addLog("机械臂", "已接管控制：已复制 State，拖动 Action 滑条将自动下发");
     }
   } catch (error) {
     addLog("机械臂", `接管控制切换失败：${error.message}`);
@@ -1227,8 +1236,14 @@ function fetchRosDaemonCheck() {
   return fetchSelfCheckApi("/api/self-check/ros-daemon", selfCheckItems[0], "ROS2 daemon");
 }
 
-function fetchCanInterfaceCheck() {
-  return fetchSelfCheckApi("/api/self-check/can-interface", selfCheckItems[2], "CAN 接口");
+function fetchCanInterfaceCheck(options = {}) {
+  const params = new URLSearchParams();
+  if (options.autoActivate !== undefined) {
+    params.set("auto_activate", options.autoActivate ? "1" : "0");
+  }
+  const query = params.toString();
+  const path = `/api/self-check/can-interface${query ? `?${query}` : ""}`;
+  return fetchSelfCheckApi(path, selfCheckItems[2], "CAN 接口");
 }
 
 function fetchDiskSpaceCheck() {
@@ -1290,6 +1305,24 @@ function updateCanTopbar(canResult) {
     pressed: ready,
     title: busy ? "CAN 激活中" : ready ? "CAN 已激活" : "点击激活机械臂 CAN",
   });
+}
+
+function updateSingleSelfCheckResult(result) {
+  const items = state.selfCheckResults.length ? cloneCheckItems(state.selfCheckResults) : cloneCheckItems(selfCheckItems);
+  const index = items.findIndex((item) => item.name === result.name);
+  if (index === -1) return;
+  items[index] = normalizeCheckResult(result, items[index]);
+  renderSelfCheck(items);
+}
+
+async function refreshCanInterfaceStatus(options = {}) {
+  const canResult = await fetchCanInterfaceCheck({ autoActivate: false });
+  updateSingleSelfCheckResult(canResult);
+  updateCanTopbar(canResult);
+  if (!options.silent) {
+    addLog("系统", `CAN 状态查看：${canResult.status} / ${canResult.code}`);
+  }
+  return canResult;
 }
 
 async function activateCanInterface(item = currentCanCheckResult(), options = {}) {
@@ -1587,7 +1620,7 @@ async function stopPiperRuntime() {
 
 function togglePiperRuntime() {
   if (state.piperRuntime.status === "starting" || state.piperRuntime.status === "stopping") return;
-  if (state.piperRuntime.status === "running") {
+  if (state.piperRuntime.status === "running" || state.piperRuntime.status === "external") {
     stopPiperRuntime();
     return;
   }
@@ -1685,7 +1718,7 @@ async function fetchPiperJointStates() {
 async function requestPiperRuntimeAction(action) {
   const nextStatus = action === "stop" ? "stopping" : "starting";
   setPiperRuntime(nextStatus);
-  addLog("机械臂", action === "stop" ? "请求关闭 Piper 服务" : "请求启动 Piper 服务");
+  addLog("机械臂", action === "stop" ? "请求清理 Piper ROS" : "请求启动 Piper 服务");
   try {
     const response = await fetch(`/api/runtime/services/piper/${action}`, {
       method: "POST",
@@ -1800,7 +1833,6 @@ function bindEvents() {
     updateArmActionFromInput(input);
   });
   $("#copyAllArmStateButton").addEventListener("click", copyAllStatesToActions);
-  $("#syncArmActionsButton").addEventListener("click", syncPublishArmActions);
   $("#armControlToggleButton").addEventListener("click", toggleArmDirectControl);
   $("#armHomeButton").addEventListener("click", zeroAllArmActions);
   $("#startHomingButton").addEventListener("click", startHoming);
@@ -1924,6 +1956,7 @@ function init() {
   addLog("系统", "Robot Station 前端原型已加载");
   addLog("ROS", "等待接入真实 ROS 状态");
   addLog("相机", "front_rgb / wrist_rgb 预览占位已生成");
+  refreshCanInterfaceStatus({ silent: true });
   fetchPiperRuntimeStatus({ silent: true });
   fetchPiperJointStates();
   syncClock();

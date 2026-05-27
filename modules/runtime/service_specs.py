@@ -12,6 +12,7 @@ class ManagedServiceSpec:
     name: str
     command: tuple[str, ...]
     setup_scripts: tuple[str, ...] = field(default_factory=tuple)
+    cleanup_process_patterns: tuple[str, ...] = field(default_factory=tuple)
     cwd: str = "."
     shutdown_timeout_sec: float = 6.0
     startup_grace_sec: float = 0.8
@@ -21,6 +22,7 @@ class ManagedServiceSpec:
         payload = asdict(self)
         payload["command"] = list(self.command)
         payload["setupScripts"] = payload.pop("setup_scripts")
+        payload["cleanupProcessPatterns"] = payload.pop("cleanup_process_patterns")
         payload["shutdownTimeoutSec"] = payload.pop("shutdown_timeout_sec")
         payload["startupGraceSec"] = payload.pop("startup_grace_sec")
         return payload
@@ -45,6 +47,14 @@ def default_service_specs():
             setup_scripts=(
                 f"/opt/ros/{ros_distro}/setup.bash",
                 str(piper_install),
+            ),
+            cleanup_process_patterns=(
+                "start_double_piper.launch.py",
+                "start_two_piper.launch.py",
+                "start_single_piper.launch.py",
+                "start_single_piper_rviz.launch.py",
+                "piper_single_ctrl",
+                "piper_ms_ctrl",
             ),
             cwd=str(ROOT_DIR),
             description="Launch the dual-arm Piper ROS control nodes.",

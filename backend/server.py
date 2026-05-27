@@ -66,6 +66,18 @@ def query_float(query, key, default=0.0, minimum=0.0, maximum=5.0):
     return max(minimum, min(maximum, value))
 
 
+def query_bool(query, key, default=False):
+    values = parse_qs(query).get(key)
+    if not values:
+        return default
+    value = str(values[0]).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def ros_result_status(result):
     if result.get("ok"):
         return 200
@@ -138,7 +150,8 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             self.write_json(result)
             return
         if parsed.path == "/api/self-check/can-interface":
-            result = check_can_interface()
+            auto_activate = query_bool(parsed.query, "auto_activate", default=True)
+            result = check_can_interface(auto_activate=auto_activate)
             log_check_result(result)
             self.write_json(result)
             return

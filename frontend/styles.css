@@ -1327,16 +1327,13 @@ button:disabled {
   gap: 10px;
 }
 
-.sync-actions-button {
-  min-width: 160px;
-}
-
 .copy-state-button,
 .control-toggle-button,
 .arm-home-button {
   min-height: 38px;
   min-width: 128px;
   background: #ffffff;
+  color: var(--text);
   font-size: 13px;
   font-weight: 800;
 }
@@ -1349,15 +1346,6 @@ button:disabled {
 
 .arm-home-button {
   min-width: 96px;
-}
-
-.global-sync-button {
-  min-height: 38px;
-  min-width: 184px;
-  padding: 0 24px;
-  font-size: 14px;
-  font-weight: 800;
-  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.16);
 }
 
 .dual-arm-grid {
@@ -1934,10 +1922,6 @@ button:disabled {
   .button-group,
   .arm-global-controls {
     flex-wrap: wrap;
-  }
-
-  .sync-actions-button {
-    width: 100%;
   }
 
   .arm-inline-head {
