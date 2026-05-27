@@ -16,5 +16,24 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+ROS_SETUP="/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
+PIPER_SETUP="${ROOT_DIR}/ros_packages/control/piper/install/setup.bash"
+
+source_setup() {
+  local setup_file="$1"
+  set +u
+  # shellcheck source=/dev/null
+  source "${setup_file}"
+  set -u
+}
+
+if [[ -f "${ROS_SETUP}" ]]; then
+  source_setup "${ROS_SETUP}"
+fi
+
+if [[ -f "${PIPER_SETUP}" ]]; then
+  source_setup "${PIPER_SETUP}"
+fi
+
 cd "${ROOT_DIR}"
 exec python3 -m backend.server --host "${HOST}" --port "${PORT}"

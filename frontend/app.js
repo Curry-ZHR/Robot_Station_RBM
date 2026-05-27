@@ -28,6 +28,45 @@ const state = {
   piperRuntime: {
     status: "stopped",
   },
+  armControl: {
+    active: false,
+    busy: false,
+    publishTimer: null,
+  },
+  piperActions: {
+    left: {
+      positions: [null, null, null, null, null, null, null],
+      status: "idle",
+      detail: "未设置 Action。",
+      lastPublishedAt: null,
+    },
+    right: {
+      positions: [null, null, null, null, null, null, null],
+      status: "idle",
+      detail: "未设置 Action。",
+      lastPublishedAt: null,
+    },
+  },
+  piperJoints: {
+    left: {
+      ok: false,
+      code: "ROS-R-WAITING",
+      detail: "等待左臂关节反馈。",
+      positions: [],
+      ageMs: null,
+      stale: true,
+      receivedAt: null,
+    },
+    right: {
+      ok: false,
+      code: "ROS-R-WAITING",
+      detail: "等待右臂关节反馈。",
+      positions: [],
+      ageMs: null,
+      stale: true,
+      receivedAt: null,
+    },
+  },
 };
 
 const healthItems = [
@@ -151,18 +190,35 @@ const armJointLimits = [
   { name: "J6", min: -180, max: 180 },
 ];
 
-const armPreviewState = {
-  left: {
-    label: "左臂",
-    joints: [12, -18, 42, 5, 31, -7],
-    gripper: 0,
-  },
-  right: {
-    label: "右臂",
-    joints: [-10, 16, 38, -4, 28, 9],
-    gripper: 0,
-  },
+const piperJointTopicKeys = {
+  left: "piper_left_joint_state_double",
+  right: "piper_right_joint_state_double",
 };
+
+const piperWriteActionKeys = {
+  left: "piper_left_joint_double",
+  right: "piper_right_joint_double",
+};
+
+const piperEnableActionKey = "piper_enable_all";
+
+const piperJointTopicNames = {
+  left: "/joint_states_single_l",
+  right: "/joint_states_single_r",
+};
+
+const piperWriteActionTopics = {
+  left: "/joint_states_gripper_l",
+  right: "/joint_states_gripper_r",
+};
+
+const piperArmLabels = {
+  left: "左臂",
+  right: "右臂",
+};
+
+const PIPER_ACTION_SPEED = 30;
+const PIPER_GRIPPER_EFFORT = 1.0;
 
 const deviceBaseControlItems = [
   { key: "linear", label: "线速度", value: 0, min: -0.2, max: 0.2, step: 0.01, unit: "m/s" },
@@ -208,8 +264,21 @@ function setTask(task, owner, label) {
 
 function setStateBadge(selector, text, level) {
   const node = $(selector);
+  if (!node) return;
   node.textContent = text;
   node.className = `state-badge ${level}`;
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function formatNumber(value, digits = 3) {
+  return Number.isFinite(value) ? value.toFixed(digits) : "--";
+}
+
+function radToDeg(rad) {
+  return rad * 180 / Math.PI;
 }
 
 function statusSwitchClass(level) {
@@ -250,7 +319,13 @@ function getPiperRuntimeLabel() {
 
 function setPiperRuntime(status) {
   state.piperRuntime.status = piperRuntimeLabels[status] ? status : "unknown";
+  if (state.piperRuntime.status !== "running" && state.armControl.active) {
+    window.clearTimeout(state.armControl.publishTimer);
+    state.armControl.active = false;
+    state.armControl.busy = false;
+  }
   renderPiperRuntime();
+  renderPiperJointFeedback();
   renderActionLocks();
 }
 
@@ -488,32 +563,440 @@ function jointPercent(value, limit) {
   return ((value - limit.min) / (limit.max - limit.min)) * 100;
 }
 
-function renderArmControls(side) {
-  const node = $(`#${side}ArmControls`);
-  const stateForArm = armPreviewState[side];
-  if (!node || !stateForArm) return;
-  node.innerHTML = armJointLimits
-    .map((limit, index) => {
-      const value = stateForArm.joints[index];
-      return `
-        <label class="slider-row arm-slider-row">
-          <span>${limit.name} <b class="inline-status danger">未实现</b></span>
-          <small>${limit.min} deg</small>
-          <input
-            type="range"
-            min="${limit.min}"
-            max="${limit.max}"
-            step="1"
-            value="${value}"
-            data-arm-side="${side}"
-            data-arm-joint-index="${index}"
-          />
-          <small>${limit.max} deg</small>
-          <strong id="${side}JointPreview${index}">${value} deg</strong>
-        </label>
-      `;
-    })
-    .join("");
+function actionReady(side) {
+  const action = state.piperActions[side];
+  return Boolean(action && action.positions.every((value) => Number.isFinite(Number(value))));
+}
+
+function allActionsReady() {
+  return actionReady("left") && actionReady("right");
+}
+
+function feedbackLevel(feedback) {
+  if (feedback.ok && feedback.stale) return "warn";
+  if (feedback.ok) return "ok";
+  if (feedback.code === "ROS-R-WAITING") return "idle";
+  if (feedback.code === "ROS-R-NODATA") return "warn";
+  return "danger";
+}
+
+function armStatusText(side) {
+  const feedback = state.piperJoints[side];
+  if (!feedback) return { level: "idle", text: "等待反馈", detail: "无数据" };
+  if (feedback.ok) {
+    return {
+      level: feedback.stale ? "warn" : "ok",
+      text: feedback.stale ? "反馈延迟" : "在线",
+      detail: feedback.ageMs === null ? "已接收" : `${feedback.ageMs} ms`,
+    };
+  }
+  if (!piperReady()) {
+    return { level: "idle", text: "未启动", detail: "等待 Piper" };
+  }
+  const level = feedbackLevel(feedback);
+  const waiting = feedback.code === "ROS-R-WAITING" || feedback.code === "ROS-R-NODATA";
+  return {
+    level,
+    text: waiting ? "等待反馈" : "异常",
+    detail: waiting ? "无数据" : "不可用",
+  };
+}
+
+function renderArmCompareBadge() {
+  const sides = ["left", "right"];
+  const statuses = sides.map((side) => armStatusText(side));
+  const onlineCount = statuses.filter((status) => status.level === "ok").length;
+  const warnCount = statuses.filter((status) => status.level === "warn").length;
+  if (onlineCount === sides.length) {
+    setStateBadge("#armCompareBadge", "双臂在线", "ok");
+    return;
+  }
+  if (onlineCount > 0 || warnCount > 0) {
+    setStateBadge("#armCompareBadge", "部分在线", "warn");
+    return;
+  }
+  setStateBadge("#armCompareBadge", piperReady() ? "等待反馈" : "未启动", piperReady() ? "warn" : "idle");
+}
+
+function stateValueFor(feedback, index) {
+  if (!feedback || !feedback.ok || !Array.isArray(feedback.positions)) return NaN;
+  return Number(feedback.positions[index]);
+}
+
+function actionValueFor(side, index) {
+  const action = state.piperActions[side];
+  if (action && Number.isFinite(Number(action.positions[index]))) {
+    return Number(action.positions[index]);
+  }
+  return stateValueFor(state.piperJoints[side], index);
+}
+
+function seedActionFromState(side) {
+  const action = state.piperActions[side];
+  const feedback = state.piperJoints[side];
+  if (!action || actionReady(side) || !feedback || !Array.isArray(feedback.positions) || feedback.positions.length < 7) return;
+  action.positions = feedback.positions.slice(0, 7).map((value) => Number(value));
+  action.status = "ready";
+  action.detail = "Action 跟随当前 State 初始化，可拖动滑条调整。";
+}
+
+function canCopyStateToAction(side) {
+  const feedback = state.piperJoints[side];
+  if (!feedback || !feedback.ok || !Array.isArray(feedback.positions) || feedback.positions.length < 7) return false;
+  return feedback.positions.slice(0, 7).every((value) => Number.isFinite(Number(value)));
+}
+
+function allArmStatesCopyable() {
+  return ["left", "right"].every((side) => canCopyStateToAction(side));
+}
+
+function copyAllStatesToActions() {
+  if (!allArmStatesCopyable()) {
+    ["left", "right"].forEach((side) => {
+      const action = state.piperActions[side];
+      if (!action || canCopyStateToAction(side)) return;
+      action.status = "idle";
+      action.detail = `${piperArmLabels[side]} State 暂不可复制。`;
+    });
+    addLog("机械臂", "复制 State 失败：左右臂反馈未全部就绪");
+    renderArmComparisons();
+    return;
+  }
+
+  ["left", "right"].forEach((side) => {
+    const action = state.piperActions[side];
+    const feedback = state.piperJoints[side];
+    action.positions = feedback.positions.slice(0, 7).map((value) => Number(value));
+    action.status = "ready";
+    action.detail = "已复制当前 State 到 Action。";
+  });
+  addLog("机械臂", "已复制左右臂 State 到 Action");
+  renderArmComparisons();
+}
+
+function zeroAllArmActions() {
+  ["left", "right"].forEach((side) => {
+    const action = state.piperActions[side];
+    if (!action) return;
+    action.positions = [0, 0, 0, 0, 0, 0, 0];
+    action.status = "ready";
+    action.detail = "归位目标已设为 0。";
+  });
+  addLog("机械臂", "归位目标已设为左右臂全关节与夹爪 0");
+  renderArmComparisons();
+  if (state.armControl.active) {
+    scheduleDirectArmPublish();
+  }
+}
+
+function renderJointBounds(limit) {
+  const minRad = (limit.min * Math.PI) / 180;
+  const maxRad = (limit.max * Math.PI) / 180;
+  return `${limit.min} deg / ${formatNumber(minRad, 4)} rad ~ ${limit.max} deg / ${formatNumber(maxRad, 4)} rad`;
+}
+
+function renderJointCompareRow(side, limit, index) {
+  seedActionFromState(side);
+  const feedback = state.piperJoints[side];
+  const stateRad = stateValueFor(feedback, index);
+  const hasState = Number.isFinite(stateRad);
+  const stateDeg = hasState ? radToDeg(stateRad) : NaN;
+  const statePercent = hasState ? clamp(jointPercent(stateDeg, limit), 0, 100) : 0;
+  const actionRad = actionValueFor(side, index);
+  const hasAction = Number.isFinite(actionRad);
+  const actionDeg = hasAction ? radToDeg(actionRad) : limit.min;
+
+  return `
+    <div class="joint-compare-card">
+      <div class="joint-compare-head">
+        <strong>${limit.name}</strong>
+        <span>${renderJointBounds(limit)}</span>
+      </div>
+      <div class="compare-value state-value">
+        <span class="compare-label">State</span>
+        <span class="joint-state-indicator" aria-hidden="true"><i style="width: ${statePercent}%"></i></span>
+        <strong>${hasState ? formatNumber(stateDeg, 2) : "--"} deg</strong>
+        <small>${hasState ? formatNumber(stateRad, 4) : "--"} rad</small>
+      </div>
+      <div class="compare-value action-value">
+        <span class="compare-label">Action</span>
+        <input
+          type="range"
+          min="${limit.min}"
+          max="${limit.max}"
+          step="0.1"
+          value="${formatNumber(actionDeg, 2)}"
+          style="--action-position: ${hasAction ? clamp(jointPercent(actionDeg, limit), 0, 100) : 0}%"
+          data-action-side="${side}"
+          data-action-kind="joint"
+          data-action-index="${index}"
+          aria-label="${piperArmLabels[side]} ${limit.name} action deg"
+        />
+        <strong>${hasAction ? formatNumber(actionDeg, 2) : "--"} deg</strong>
+        <small>${hasAction ? formatNumber(actionRad, 4) : "--"} rad</small>
+      </div>
+    </div>
+  `;
+}
+
+function renderGripperCompareRow(side) {
+  seedActionFromState(side);
+  const feedback = state.piperJoints[side];
+  const stateMeters = stateValueFor(feedback, 6);
+  const hasState = Number.isFinite(stateMeters);
+  const statePercent = hasState ? clamp(stateMeters * 1000, 0, 100) : 0;
+  const actionMeters = actionValueFor(side, 6);
+  const hasAction = Number.isFinite(actionMeters);
+  const sliderValue = hasAction ? actionMeters : 0;
+
+  return `
+    <div class="joint-compare-card">
+      <div class="joint-compare-head">
+        <strong>夹爪</strong>
+        <span>0 m ~ 0.1 m</span>
+      </div>
+      <div class="compare-value state-value gripper-feedback-row">
+        <span class="compare-label">State</span>
+        <span class="joint-state-indicator" aria-hidden="true"><i style="width: ${statePercent}%"></i></span>
+        <strong>${hasState ? formatNumber(stateMeters, 4) : "--"} m</strong>
+        <small>position[6]</small>
+      </div>
+      <div class="compare-value action-value gripper-feedback-row">
+        <span class="compare-label">Action</span>
+        <input
+          type="range"
+          min="0"
+          max="0.1"
+          step="0.001"
+          value="${formatNumber(sliderValue, 4)}"
+          style="--action-position: ${hasAction ? clamp(actionMeters * 1000, 0, 100) : 0}%"
+          data-action-side="${side}"
+          data-action-kind="gripper"
+          data-action-index="6"
+          aria-label="${piperArmLabels[side]} gripper action m"
+        />
+        <strong>${hasAction ? formatNumber(actionMeters, 4) : "--"} m</strong>
+        <small>position[6]</small>
+      </div>
+    </div>
+  `;
+}
+
+function renderArmComparison(side) {
+  const label = piperArmLabels[side] || side;
+  const action = state.piperActions[side];
+  const status = armStatusText(side);
+  const jointRows = armJointLimits.map((limit, index) => renderJointCompareRow(side, limit, index)).join("");
+
+  return `
+    <section class="arm-inline-card" data-arm-panel="${side}">
+      <div class="arm-inline-head">
+        <div>
+          <h3>${label}</h3>
+          <p>
+            <span class="status-text ${status.level}">${status.text}</span>
+            <span>${status.detail}</span>
+            <span>State ${piperJointTopicNames[side]}</span>
+            <span>Action ${piperWriteActionTopics[side]}</span>
+          </p>
+        </div>
+      </div>
+      <div class="joint-compare-grid">
+        ${jointRows}
+        ${renderGripperCompareRow(side)}
+      </div>
+      <div class="action-feedback-note ${action && action.status === "error" ? "is-danger" : ""}">
+        ${action && action.detail ? action.detail : "拖动 Action 滑条后使用下发指令。"}
+      </div>
+    </section>
+  `;
+}
+
+function renderArmComparisons() {
+  const node = $("#armCompareList");
+  if (!node) return;
+  renderArmCompareBadge();
+  node.innerHTML = `
+    <div class="dual-arm-grid">
+      ${renderArmComparison("left")}
+      ${renderArmComparison("right")}
+    </div>
+  `;
+  renderArmControlButtons();
+}
+
+function renderArmControlButtons() {
+  const copyButton = $("#copyAllArmStateButton");
+  if (copyButton) copyButton.disabled = !allArmStatesCopyable();
+  const syncButton = $("#syncArmActionsButton");
+  if (syncButton) syncButton.disabled = state.armControl.active || !allActionsReady();
+  const controlButton = $("#armControlToggleButton");
+  if (controlButton) {
+    controlButton.textContent = state.armControl.active ? "停止控制" : "接管控制";
+    controlButton.disabled = state.armControl.busy || (!state.armControl.active && !piperReady());
+    controlButton.classList.toggle("is-active", state.armControl.active);
+  }
+  const homeButton = $("#armHomeButton");
+  if (homeButton) homeButton.disabled = state.armControl.busy;
+}
+
+function updateArmActionFromInput(input) {
+  const side = input.dataset.actionSide === "right" ? "right" : "left";
+  const action = state.piperActions[side];
+  if (!action) return;
+  seedActionFromState(side);
+
+  const index = Number(input.dataset.actionIndex);
+  if (!Number.isInteger(index) || index < 0 || index > 6) return;
+
+  const value = Number(input.value);
+  if (!Number.isFinite(value)) {
+    action.positions[index] = null;
+    action.status = "idle";
+    action.detail = "Action 值未填写完整。";
+    renderArmComparisons();
+    return;
+  }
+
+  action.positions[index] = input.dataset.actionKind === "joint" ? (value * Math.PI) / 180 : value;
+  action.status = actionReady(side) ? "ready" : "idle";
+  action.detail = actionReady(side) ? "Action 已就绪。" : "Action 值未填写完整。";
+  renderArmComparisons();
+  if (state.armControl.active) {
+    scheduleDirectArmPublish();
+  }
+}
+
+async function publishSingleArmAction(side) {
+  const action = state.piperActions[side];
+  const label = piperArmLabels[side] || "机械臂";
+  const key = piperWriteActionKeys[side];
+  if (!action || !key || !actionReady(side)) {
+    throw new Error(`${label} Action 参数未填写完整`);
+  }
+
+  const payload = {
+    positions: action.positions.map((value) => Number(value)),
+    speed: PIPER_ACTION_SPEED,
+    gripper_effort: PIPER_GRIPPER_EFFORT,
+  };
+
+  action.status = "publishing";
+  action.detail = `${label} Action 下发中。`;
+  renderArmComparisons();
+
+  try {
+    const response = await fetch(`/api/ros/actions/${key}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.detail || `HTTP ${response.status}`);
+    }
+    action.status = "published";
+    action.lastPublishedAt = result.publishedAt || formatTime();
+    action.detail = `${label} Action 已下发 ${action.lastPublishedAt}。`;
+    return result;
+  } catch (error) {
+    action.status = "error";
+    action.detail = `${label} Action 下发失败：${error.message}`;
+    throw error;
+  }
+}
+
+async function syncPublishArmActions() {
+  if (state.armControl.active) {
+    addLog("机械臂", "接管控制中，下发指令按钮已锁定");
+    renderArmComparisons();
+    return;
+  }
+  if (!allActionsReady()) {
+    addLog("机械臂", "下发指令未启动：左右臂 Action 参数未就绪");
+    renderArmComparisons();
+    return;
+  }
+
+  const confirmed = window.confirm("下发左右臂 Action 指令？");
+  if (!confirmed) return;
+
+  await publishArmActionsNow({ source: "下发指令" });
+}
+
+async function publishArmActionsNow(options = {}) {
+  const source = options.source || "下发指令";
+  const logSuccess = options.logSuccess !== false;
+  if (!allActionsReady()) {
+    if (logSuccess) addLog("机械臂", `${source}未启动：左右臂 Action 参数未就绪`);
+    renderArmComparisons();
+    return null;
+  }
+
+  try {
+    const results = await Promise.all([publishSingleArmAction("left"), publishSingleArmAction("right")]);
+    if (logSuccess) addLog("机械臂", `${source}完成：${results.map((result) => result.topic).join(" / ")}`);
+    return results;
+  } catch (error) {
+    addLog("机械臂", `${source}失败：${error.message}`);
+    return null;
+  } finally {
+    renderArmComparisons();
+  }
+}
+
+function scheduleDirectArmPublish() {
+  window.clearTimeout(state.armControl.publishTimer);
+  state.armControl.publishTimer = window.setTimeout(() => {
+    if (!state.armControl.active) return;
+    publishArmActionsNow({ source: "接管控制自动下发", logSuccess: false });
+  }, 180);
+}
+
+async function publishPiperEnable(enabled) {
+  const response = await fetch(`/api/ros/actions/${piperEnableActionKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.ok) {
+    throw new Error(result.detail || `HTTP ${response.status}`);
+  }
+  return result;
+}
+
+async function toggleArmDirectControl() {
+  if (state.armControl.busy) return;
+  if (!state.armControl.active && !piperReady()) {
+    addLog("机械臂", "接管控制未启动：Piper 控制节点未运行");
+    renderArmComparisons();
+    return;
+  }
+
+  state.armControl.busy = true;
+  renderArmControlButtons();
+  try {
+    if (state.armControl.active) {
+      window.clearTimeout(state.armControl.publishTimer);
+      await publishPiperEnable(false);
+      state.armControl.active = false;
+      addLog("机械臂", "已停止接管控制");
+    } else {
+      ["left", "right"].forEach(seedActionFromState);
+      if (!allActionsReady()) {
+        throw new Error("左右臂 Action 参数未就绪，请先复制 State 或归位");
+      }
+      await publishPiperEnable(true);
+      state.armControl.active = true;
+      addLog("机械臂", "已接管控制：拖动 Action 滑条将自动下发");
+    }
+  } catch (error) {
+    addLog("机械臂", `接管控制切换失败：${error.message}`);
+  } finally {
+    state.armControl.busy = false;
+    renderArmComparisons();
+  }
 }
 
 function renderDeviceBaseMetrics() {
@@ -532,8 +1015,7 @@ function renderDeviceBaseMetrics() {
 }
 
 function renderDeviceControls() {
-  renderArmControls("left");
-  renderArmControls("right");
+  renderPiperJointFeedback();
 
   const baseNode = $("#deviceBaseControlPanel");
   if (baseNode) {
@@ -1136,6 +1618,70 @@ async function fetchPiperRuntimeStatus(options = {}) {
   }
 }
 
+function applyPiperJointPayload(side, payload) {
+  const feedback = state.piperJoints[side];
+  if (!feedback) return;
+
+  if (!payload || !payload.ok) {
+    feedback.ok = false;
+    feedback.code = payload && payload.code ? payload.code : "ROS-R-ERROR";
+    feedback.detail = payload && payload.detail ? payload.detail : `${piperArmLabels[side]}关节反馈读取失败。`;
+    feedback.positions = [];
+    feedback.ageMs = payload && payload.ageMs !== undefined ? payload.ageMs : null;
+    feedback.stale = true;
+    feedback.receivedAt = payload && payload.receivedAt ? payload.receivedAt : null;
+    return;
+  }
+
+  const data = payload.data || {};
+  const positions = Array.isArray(data.position) ? data.position : [];
+  feedback.ok = positions.length > 0;
+  feedback.code = feedback.ok ? payload.code || "ROS-R-OK" : "ROS-R-NODATA";
+  feedback.detail = feedback.ok ? payload.detail || "" : `${piperArmLabels[side]} JointState 中没有 position 数据。`;
+  feedback.positions = positions;
+  feedback.velocity = Array.isArray(data.velocity) ? data.velocity : [];
+  feedback.effort = Array.isArray(data.effort) ? data.effort : [];
+  feedback.ageMs = Number.isFinite(Number(payload.ageMs)) ? Number(payload.ageMs) : null;
+  feedback.stale = Boolean(payload.stale);
+  feedback.receivedAt = payload.receivedAt || null;
+  feedback.topic = payload.topic || "";
+}
+
+function renderPiperJointFeedback() {
+  renderArmComparisons();
+}
+
+async function fetchPiperJointStates() {
+  const entries = Object.entries(piperJointTopicKeys);
+  const results = await Promise.all(
+    entries.map(async ([side, key]) => {
+      try {
+        const response = await fetch(`/api/ros/topics/${key}?wait=0.1`, { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok && !payload.code) {
+          payload.ok = false;
+          payload.code = `HTTP-${response.status}`;
+          payload.detail = `HTTP ${response.status}`;
+        }
+        return [side, payload];
+      } catch (error) {
+        return [
+          side,
+          {
+            ok: false,
+            code: "ROS-R-FETCH",
+            detail: error.message,
+          },
+        ];
+      }
+    }),
+  );
+
+  results.forEach(([side, payload]) => applyPiperJointPayload(side, payload));
+  renderPiperJointFeedback();
+  return results;
+}
+
 async function requestPiperRuntimeAction(action) {
   const nextStatus = action === "stop" ? "stopping" : "starting";
   setPiperRuntime(nextStatus);
@@ -1248,6 +1794,15 @@ function bindEvents() {
   $("#rerunProblemChecksButton").addEventListener("click", rerunProblemChecks);
   $("#canStatus").addEventListener("click", () => activateCanInterface(currentCanCheckResult(), { confirm: false }));
   $("#piperRuntimeStatus").addEventListener("click", togglePiperRuntime);
+  $("#armCompareList").addEventListener("input", (event) => {
+    const input = event.target.closest("[data-action-kind]");
+    if (!input) return;
+    updateArmActionFromInput(input);
+  });
+  $("#copyAllArmStateButton").addEventListener("click", copyAllStatesToActions);
+  $("#syncArmActionsButton").addEventListener("click", syncPublishArmActions);
+  $("#armControlToggleButton").addEventListener("click", toggleArmDirectControl);
+  $("#armHomeButton").addEventListener("click", zeroAllArmActions);
   $("#startHomingButton").addEventListener("click", startHoming);
   $("#startCollectionButton").addEventListener("click", startCollection);
   $("#pauseCollectionButton").addEventListener("click", pauseCollection);
@@ -1330,30 +1885,6 @@ function bindEvents() {
     button.addEventListener("click", () => addLog("系统", `设备停止：${button.dataset.deviceStop}`));
   });
 
-  $$("[data-arm-command]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const [side, action] = button.dataset.armCommand.split("-");
-      const value = action === "open" ? 100 : 0;
-      armPreviewState[side].gripper = value;
-      const input = $(`[data-arm-gripper='${side}']`);
-      if (input) input.value = value;
-      $(`#${side}GripperPreview`).textContent = `${value}%`;
-      addLog("机械臂", `设备控制预览：${button.textContent}`);
-    });
-  });
-
-  $$(".arm-control-list").forEach((panel) => {
-    panel.addEventListener("input", (event) => {
-      const input = event.target.closest("[data-arm-joint-index]");
-      if (!input) return;
-      const side = input.dataset.armSide;
-      const index = Number(input.dataset.armJointIndex);
-      const value = Number(input.value);
-      armPreviewState[side].joints[index] = value;
-      $(`#${side}JointPreview${index}`).textContent = `${value} deg`;
-    });
-  });
-
   $("#deviceBaseControlPanel").addEventListener("input", (event) => {
     const input = event.target.closest("[data-base-control]");
     if (!input) return;
@@ -1361,35 +1892,6 @@ function bindEvents() {
     if (!item) return;
     item.value = Number(input.value);
     $(`#basePreview${item.key}`).textContent = `${item.value.toFixed(2)} ${item.unit}`;
-  });
-
-  $$("[data-arm-gripper]").forEach((input) => {
-    input.addEventListener("input", (event) => {
-      const side = event.target.dataset.armGripper;
-      armPreviewState[side].gripper = Number(event.target.value);
-      $(`#${side}GripperPreview`).textContent = `${event.target.value}%`;
-    });
-  });
-
-  $("#zeroDevicePreviewButton").addEventListener("click", () => {
-    Object.values(armPreviewState).forEach((arm) => {
-      arm.joints = arm.joints.map(() => 0);
-      arm.gripper = 0;
-    });
-    deviceBaseControlItems.forEach((item) => {
-      item.value = 0;
-    });
-    renderDeviceControls();
-    $$("[data-arm-gripper]").forEach((input) => {
-      input.value = 0;
-    });
-    $("#leftGripperPreview").textContent = "0%";
-    $("#rightGripperPreview").textContent = "0%";
-    addLog("系统", "设备控制页清零本地预览");
-  });
-
-  $("#holdDeviceButton").addEventListener("click", () => {
-    addLog("系统", "设备控制页保持当前预览");
   });
 
   $("#logFilters").addEventListener("click", (event) => {
@@ -1423,9 +1925,11 @@ function init() {
   addLog("ROS", "等待接入真实 ROS 状态");
   addLog("相机", "front_rgb / wrist_rgb 预览占位已生成");
   fetchPiperRuntimeStatus({ silent: true });
+  fetchPiperJointStates();
   syncClock();
   window.setInterval(syncClock, 1000);
   window.setInterval(() => fetchPiperRuntimeStatus({ silent: true }), 3000);
+  window.setInterval(fetchPiperJointStates, 1000);
 }
 
 init();

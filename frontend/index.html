@@ -190,65 +190,26 @@
                   <p class="eyebrow">设备控制</p>
                   <h1>状态与低速预览</h1>
                 </div>
-                <div class="button-group">
-                  <button class="secondary-button" id="zeroDevicePreviewButton">清零预览</button>
-                  <button class="primary-button" id="holdDeviceButton">保持当前</button>
+                <div class="button-group device-page-actions">
+                  <button class="secondary-button copy-state-button" id="copyAllArmStateButton" type="button" disabled>复制 State</button>
+                  <button class="primary-button sync-actions-button global-sync-button" id="syncArmActionsButton" type="button" disabled>下发指令</button>
+                  <button class="secondary-button control-toggle-button" id="armControlToggleButton" type="button" disabled>接管控制</button>
+                  <button class="secondary-button arm-home-button" id="armHomeButton" type="button">归位</button>
                 </div>
               </div>
 
               <div class="device-control-grid">
-                <article class="panel device-card">
+                <article class="panel device-card arm-compare-card">
                   <div class="panel-head">
                     <div>
-                      <h2>左臂</h2>
-                      <p>连接、关节、末端、夹爪</p>
+                      <h2>机械臂</h2>
+                      <p>State / Action 同栏对比</p>
                     </div>
-                    <span class="state-badge danger">未实现</span>
-                  </div>
-                  <div class="device-status-line">
-                    <span>连接</span><strong class="status-text danger">未实现</strong>
-                    <span>反馈</span><strong class="status-text danger">未实现</strong>
-                  </div>
-                  <div class="arm-control-list" id="leftArmControls"></div>
-                  <div class="gripper-strip">
-                    <label>
-                      左夹爪开度
-                      <input type="range" min="0" max="100" step="1" value="0" data-arm-gripper="left" />
-                    </label>
-                    <strong id="leftGripperPreview">0%</strong>
-                  </div>
-                  <div class="device-card-actions">
-                    <button class="secondary-button" data-arm-command="left-open">夹爪开</button>
-                    <button class="secondary-button" data-arm-command="left-close">夹爪合</button>
-                    <button class="icon-button stop" data-device-stop="left-arm">停止左臂</button>
-                  </div>
-                </article>
-
-                <article class="panel device-card">
-                  <div class="panel-head">
-                    <div>
-                      <h2>右臂</h2>
-                      <p>连接、关节、末端、夹爪</p>
+                    <div class="arm-global-controls">
+                      <span class="state-badge idle" id="armCompareBadge">等待反馈</span>
                     </div>
-                    <span class="state-badge danger">未实现</span>
                   </div>
-                  <div class="device-status-line">
-                    <span>连接</span><strong class="status-text danger">未实现</strong>
-                    <span>反馈</span><strong class="status-text danger">未实现</strong>
-                  </div>
-                  <div class="arm-control-list" id="rightArmControls"></div>
-                  <div class="gripper-strip">
-                    <label>
-                      右夹爪开度
-                      <input type="range" min="0" max="100" step="1" value="0" data-arm-gripper="right" />
-                    </label>
-                    <strong id="rightGripperPreview">0%</strong>
-                  </div>
-                  <div class="device-card-actions">
-                    <button class="secondary-button" data-arm-command="right-open">夹爪开</button>
-                    <button class="secondary-button" data-arm-command="right-close">夹爪合</button>
-                    <button class="icon-button stop" data-device-stop="right-arm">停止右臂</button>
-                  </div>
+                  <div class="arm-compare-list" id="armCompareList"></div>
                 </article>
 
                 <article class="panel device-card base-device-card">
