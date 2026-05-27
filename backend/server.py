@@ -7,6 +7,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from modules.control.piper import publish_joint_targets
 from modules.drivers.can.can_activate import activate_can
 from modules.logger import get_logger, setup_logger
 from modules.ros_io import get_ros_reader, get_ros_writer, shutdown_ros_io
@@ -172,6 +173,12 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/control/piper/joint-targets":
+            payload = self.read_json_body()
+            result = publish_joint_targets(payload)
+            log_action_result("Piper joint targets", result)
+            self.write_json(result, status=ros_result_status(result))
+            return
         service_tail = api_tail(parsed.path, "/api/runtime/services")
         if service_tail is not None:
             parts = [part for part in service_tail.split("/") if part]

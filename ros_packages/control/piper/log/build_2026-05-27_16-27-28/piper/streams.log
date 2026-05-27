@@ -1,0 +1,20 @@
+[0.355s] Invoking command in '/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper': PYTHONPATH=/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/build --no-deps symlink_data
+[0.499s] running develop
+[0.578s] running egg_info
+[0.578s] writing piper.egg-info/PKG-INFO
+[0.578s] writing dependency_links to piper.egg-info/dependency_links.txt
+[0.578s] writing entry points to piper.egg-info/entry_points.txt
+[0.578s] writing requirements to piper.egg-info/requires.txt
+[0.578s] writing top-level names to piper.egg-info/top_level.txt
+[0.579s] reading manifest file 'piper.egg-info/SOURCES.txt'
+[0.580s] writing manifest file 'piper.egg-info/SOURCES.txt'
+[0.598s] running build_ext
+[0.598s] Creating /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/python3.10/site-packages/piper.egg-link (link to .)
+[0.599s] Installing piper_joint_smoother script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+[0.599s] Installing piper_ms_ctrl script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+[0.599s] Installing piper_read_master script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+[0.599s] Installing piper_single_ctrl script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+[0.599s] 
+[0.599s] Installed /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper
+[0.599s] running symlink_data
+[0.614s] Invoked command in '/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper' returned '0': PYTHONPATH=/home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py develop --editable --build-directory /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper/build --no-deps symlink_data

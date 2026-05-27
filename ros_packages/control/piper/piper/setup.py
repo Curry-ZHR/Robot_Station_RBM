@@ -32,6 +32,7 @@ setup(
     entry_points={
         'console_scripts': [
             'piper_single_ctrl = piper.piper_ctrl_single_node:main',
+            'piper_joint_smoother = piper.piper_joint_smoother_node:main',
             'piper_ms_ctrl = piper.piper_start_ms_node:main',
             'piper_read_master = piper.piper_read_master_node:main',
         ],

@@ -33,18 +33,21 @@ class C_PiperRosNode(Node):
         self.declare_parameter('girpper_exist', True)
         self.declare_parameter('rviz_ctrl_flag', False)
         self.declare_parameter('piper_name', 'left')
+        self.declare_parameter('joint_speed_percent', 10)
 
         self.can_port = self.get_parameter('can_port').get_parameter_value().string_value
         self.auto_enable = self.get_parameter('auto_enable').get_parameter_value().bool_value
         self.girpper_exist = self.get_parameter('girpper_exist').get_parameter_value().bool_value
         self.rviz_ctrl_flag = self.get_parameter('rviz_ctrl_flag').get_parameter_value().bool_value	
         self.piper_name = self.get_parameter('piper_name').get_parameter_value().string_value
+        self.joint_speed_percent = self.clamp_speed_percent(self.get_parameter('joint_speed_percent').value)
 
         self.get_logger().info(f"can_port is {self.can_port}")
         self.get_logger().info(f"auto_enable is {self.auto_enable}")
         self.get_logger().info(f"girpper_exist is {self.girpper_exist}")
         self.get_logger().info(f"rviz_ctrl_flag is {self.rviz_ctrl_flag}")
         self.get_logger().info(f"piper_name is {self.piper_name}")
+        self.get_logger().info(f"joint_speed_percent is {self.joint_speed_percent}")
         # Publisher
         self.joint_pub = self.create_publisher(JointState, f'/puppet/joint_{self.piper_name}', 1)
         self.joint_ctrl_pub = self.create_publisher(JointState, f'/master/joint_{self.piper_name}', 1)
@@ -83,6 +86,17 @@ class C_PiperRosNode(Node):
 
     def GetEnableFlag(self):
         return self.__enable_flag
+
+    def clamp_speed_percent(self, speed, default=10):
+        try:
+            speed = round(float(speed))
+        except (TypeError, ValueError):
+            speed = default
+        if speed > 100:
+            speed = 100
+        if speed < 1:
+            speed = 1
+        return int(speed)
 
     def publish_thread(self):
         """机械臂消息发布
@@ -306,9 +320,7 @@ class C_PiperRosNode(Node):
             if(not all_zeros):
                 lens = len(joint_data.velocity)
                 if(lens == 7):
-                    vel_all = round(joint_data.velocity[6])
-                    if (vel_all > 100): vel_all = 100
-                    if (vel_all <= 30): vel_all = 30
+                    vel_all = self.clamp_speed_percent(joint_data.velocity[6], self.joint_speed_percent)
                     # self.get_logger().info(f"vel_all: {vel_all}")
                     self.piper.MotionCtrl_2(0x01, 0x01, vel_all, 0xad)
                 # elif(lens == 7):
@@ -318,8 +330,8 @@ class C_PiperRosNode(Node):
                 #             # 设置指定位置的关节速度为这个正数速度
                 #             # self.piper.SearchMotorMaxAngleSpdAccLimit(i+1,0x01)
                 #             # self.piper.MotorAngleLimitMaxSpdSet(i+1)
-                else: self.piper.MotionCtrl_2(0x01, 0x01, 30, 0xad)
-            else: self.piper.MotionCtrl_2(0x01, 0x01, 30, 0xad)
+                else: self.piper.MotionCtrl_2(0x01, 0x01, self.joint_speed_percent, 0xad)
+            else: self.piper.MotionCtrl_2(0x01, 0x01, self.joint_speed_percent, 0xad)
             self.piper.JointCtrl(joint_0, joint_1, joint_2, 
                                     joint_3, joint_4, joint_5)
             if(self.girpper_exist):

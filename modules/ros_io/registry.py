@@ -180,6 +180,30 @@ WRITE_ACTIONS = {
         builder="joint_state",
         description="Publish a joint command for start_double_piper.launch.py right remapping.",
     ),
+    "piper_single_joint_smoother_hold": TopicWriteSpec(
+        key="piper_single_joint_smoother_hold",
+        name="Piper single joint smoother hold",
+        topic="/joint_states_gripper/hold",
+        message_type="std_msgs/msg/Bool",
+        builder="bool",
+        description="Clear the single Piper smoother target and hold its current interpolation position.",
+    ),
+    "piper_left_joint_smoother_hold": TopicWriteSpec(
+        key="piper_left_joint_smoother_hold",
+        name="Piper left joint smoother hold",
+        topic="/joint_states_gripper_l/hold",
+        message_type="std_msgs/msg/Bool",
+        builder="bool",
+        description="Clear the left Piper smoother target and hold its current interpolation position.",
+    ),
+    "piper_right_joint_smoother_hold": TopicWriteSpec(
+        key="piper_right_joint_smoother_hold",
+        name="Piper right joint smoother hold",
+        topic="/joint_states_gripper_r/hold",
+        message_type="std_msgs/msg/Bool",
+        builder="bool",
+        description="Clear the right Piper smoother target and hold its current interpolation position.",
+    ),
     "piper_enable_all": TopicWriteSpec(
         key="piper_enable_all",
         name="Piper enable flag",
@@ -197,4 +221,3 @@ def read_topic_specs():
 
 def write_action_specs():
     return WRITE_ACTIONS
-

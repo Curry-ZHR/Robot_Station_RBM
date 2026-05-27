@@ -1321,6 +1321,36 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.joint-speed-control {
+  min-height: 38px;
+  display: inline-grid;
+  grid-template-columns: auto 76px auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.joint-speed-control input {
+  width: 76px;
+  min-height: 28px;
+  border: 1px solid #d6dde5;
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  text-align: right;
+}
+
+.joint-speed-control small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .arm-global-controls {
   display: flex;
   align-items: center;

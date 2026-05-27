@@ -6,7 +6,9 @@ launch/start_single_piper.launch.py
 launch/start_single_piper_rviz.launch.py
 launch/start_two_piper.launch.py
 piper/__init__.py
+piper/joint_smoother.py
 piper/piper_ctrl_single_node.py
+piper/piper_joint_smoother_node.py
 piper.egg-info/PKG-INFO
 piper.egg-info/SOURCES.txt
 piper.egg-info/dependency_links.txt

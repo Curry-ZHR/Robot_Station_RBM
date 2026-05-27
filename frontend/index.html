@@ -191,6 +191,11 @@
                   <h1>状态与低速预览</h1>
                 </div>
                 <div class="button-group device-page-actions">
+                  <label class="joint-speed-control" for="jointSpeedInput">
+                    <span>关节速度</span>
+                    <input id="jointSpeedInput" type="number" min="0.5" max="30" step="0.5" value="10" inputmode="decimal">
+                    <small>deg/s</small>
+                  </label>
                   <button class="secondary-button copy-state-button" id="copyAllArmStateButton" type="button" disabled>复制 State</button>
                   <button class="primary-button control-toggle-button" id="armControlToggleButton" type="button" disabled>接管控制</button>
                   <button class="secondary-button arm-home-button" id="armHomeButton" type="button">归位</button>

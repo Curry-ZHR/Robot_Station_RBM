@@ -1,0 +1,18 @@
+running develop
+running egg_info
+writing piper.egg-info/PKG-INFO
+writing dependency_links to piper.egg-info/dependency_links.txt
+writing entry points to piper.egg-info/entry_points.txt
+writing requirements to piper.egg-info/requires.txt
+writing top-level names to piper.egg-info/top_level.txt
+reading manifest file 'piper.egg-info/SOURCES.txt'
+writing manifest file 'piper.egg-info/SOURCES.txt'
+running build_ext
+Creating /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/python3.10/site-packages/piper.egg-link (link to .)
+Installing piper_joint_smoother script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+Installing piper_ms_ctrl script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+Installing piper_read_master script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+Installing piper_single_ctrl script to /home/zhuzl/workspace/robot_station/ros_packages/control/piper/install/piper/lib/piper
+
+Installed /home/zhuzl/workspace/robot_station/ros_packages/control/piper/build/piper
+running symlink_data

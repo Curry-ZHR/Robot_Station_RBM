@@ -30,6 +30,7 @@ class ManagedServiceSpec:
 
 def default_service_specs():
     ros_distro = os.environ.get("ROS_DISTRO", "humble")
+    piper_joint_speed_percent = os.environ.get("PIPER_JOINT_SPEED_PERCENT", "10")
     piper_install = ROOT_DIR / "ros_packages" / "control" / "piper" / "install" / "setup.bash"
     return {
         "piper": ManagedServiceSpec(
@@ -43,6 +44,7 @@ def default_service_specs():
                 "can_left_port:=can_left",
                 "can_right_port:=can_right",
                 "auto_enable:=false",
+                f"joint_speed_percent:={piper_joint_speed_percent}",
             ),
             setup_scripts=(
                 f"/opt/ros/{ros_distro}/setup.bash",
@@ -54,6 +56,7 @@ def default_service_specs():
                 "start_single_piper.launch.py",
                 "start_single_piper_rviz.launch.py",
                 "piper_single_ctrl",
+                "piper_joint_smoother",
                 "piper_ms_ctrl",
             ),
             cwd=str(ROOT_DIR),
