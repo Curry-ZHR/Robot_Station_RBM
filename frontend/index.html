@@ -54,6 +54,10 @@
               <span>Camera</span>
               <i aria-hidden="true"></i>
             </button>
+            <button class="status-switch is-idle" id="lidarRuntimeStatus" type="button" aria-pressed="false" title="启动或关闭 LiDAR">
+              <span>LiDAR</span>
+              <i aria-hidden="true"></i>
+            </button>
             <span class="status-pill ok" id="estopStatus">急停释放</span>
             <span class="status-pill idle" id="enableStatus">未使能</span>
             <span class="status-pill ok" id="networkStatus">本机访问</span>
@@ -528,21 +532,15 @@
                 <div class="segmented" role="tablist">
                   <button class="is-active" data-sensor-tab="camera">相机</button>
                   <button data-sensor-tab="lidar">LiDAR</button>
-                  <button data-sensor-tab="system">系统</button>
                 </div>
               </div>
 
               <div class="sensor-panel is-active" data-sensor-panel="camera">
-                <div class="video-grid">
-                  <article class="preview-card">
-                    <canvas width="480" height="270" data-camera="front"></canvas>
-                    <div><strong>front_rgb</strong><span>30 fps / 1280x720 / SN-FRONT-01</span></div>
-                  </article>
-                  <article class="preview-card">
-                    <canvas width="480" height="270" data-camera="wrist"></canvas>
-                    <div><strong>wrist_rgb</strong><span>28 fps / 640x480 / SN-WRIST-02</span></div>
-                  </article>
+                <div class="camera-strip">
+                  <strong>三路相机压缩图</strong>
+                  <span id="cameraFeedSummary">等待图像帧</span>
                 </div>
+                <div class="video-grid camera-grid" id="cameraFrameGrid"></div>
               </div>
 
               <div class="sensor-panel" data-sensor-panel="lidar">
@@ -555,19 +553,6 @@
                     <span class="state-badge ok">在线</span>
                   </div>
                   <canvas class="lidar-canvas" width="900" height="320" id="lidarCanvas"></canvas>
-                </article>
-              </div>
-
-              <div class="sensor-panel" data-sensor-panel="system">
-                <article class="panel">
-                  <div class="panel-head">
-                    <div>
-                      <h2>系统资源</h2>
-                      <p>CPU、GPU、内存、磁盘、温度、进程</p>
-                    </div>
-                    <span class="state-badge warn">磁盘注意</span>
-                  </div>
-                  <div class="resource-grid" id="resourceGrid"></div>
                 </article>
               </div>
             </section>

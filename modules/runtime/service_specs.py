@@ -36,6 +36,9 @@ def default_service_specs():
     camera_ws = ROOT_DIR / "ros_packages" / "sensors" / "camera" / "orbbec"
     camera_install = camera_ws / "install" / "setup.bash"
     camera_start_script = camera_ws / "scripts" / "start_orbbec_camera.sh"
+    lidar_ws = ROOT_DIR / "ros_packages" / "sensors" / "lidar"
+    lidar_install = lidar_ws / "install" / "setup.bash"
+    lidar_config = lidar_ws / "rslidar_sdk" / "config" / "config.yaml"
     lifting_motor_id = os.environ.get("LIFTING_MOTOR_ID", "1")
     lifting_executable = os.environ.get("LIFTING_SERVICE_EXECUTABLE", "service_850pro")
     return {
@@ -116,5 +119,30 @@ def default_service_specs():
             shutdown_timeout_sec=8.0,
             startup_grace_sec=0.8,
             description="Launch the Orbbec multi-camera ROS nodes.",
+        ),
+        "lidar": ManagedServiceSpec(
+            key="lidar",
+            name="RoboSense LiDAR ROS",
+            command=(
+                "ros2",
+                "run",
+                "rslidar_sdk",
+                "rslidar_sdk_node",
+                "--ros-args",
+                "-p",
+                f"config_path:={lidar_config}",
+            ),
+            setup_scripts=(
+                f"/opt/ros/{ros_distro}/setup.bash",
+                str(lidar_install),
+            ),
+            cleanup_process_patterns=(
+                "rslidar_sdk_node",
+                "ros2 run rslidar_sdk",
+            ),
+            cwd=str(lidar_ws),
+            shutdown_timeout_sec=8.0,
+            startup_grace_sec=0.8,
+            description="Launch the RoboSense LiDAR driver without RViz.",
         ),
     }

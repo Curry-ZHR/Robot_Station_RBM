@@ -19,7 +19,7 @@ from modules.control.lifting import (
 from modules.control.piper import publish_joint_targets
 from modules.drivers.can.can_activate import activate_can
 from modules.logger import get_logger, setup_logger
-from modules.ros_io import get_ros_reader, get_ros_writer, shutdown_ros_io
+from modules.ros_io import get_camera_image_reader, get_ros_reader, get_ros_writer, shutdown_ros_io
 from modules.runtime import get_service_manager, shutdown_services
 from modules.self_check.can_check.can_status import check_can_interface
 from modules.self_check.disk_check.disk_space import check_disk_space
@@ -114,6 +114,19 @@ def service_result_status(result):
     return 500
 
 
+def camera_result_status(result):
+    if result.get("ok"):
+        return 200
+    code = result.get("code", "")
+    if code.endswith("UNKNOWN"):
+        return 404
+    if code.endswith("NODATA"):
+        return 404
+    if code.endswith("UNAVAILABLE"):
+        return 503
+    return 500
+
+
 class RobotStationHandler(SimpleHTTPRequestHandler):
     server_version = "RobotStationHTTP/0.1"
 
@@ -134,6 +147,39 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/control/lifting/limits":
             self.write_json(lifting_limits())
+            return
+        camera_tail = api_tail(parsed.path, "/api/sensors/cameras")
+        if camera_tail is not None:
+            reader = get_camera_image_reader()
+            if not camera_tail:
+                result = reader.list_images()
+                self.write_json(result, status=camera_result_status(result))
+                return
+            parts = [part for part in camera_tail.split("/") if part]
+            if len(parts) == 3 and parts[2] == "frame":
+                wait_sec = query_float(parsed.query, "wait", default=0.0, minimum=0.0, maximum=2.0)
+                result = reader.read_frame(parts[0], parts[1], timeout_sec=wait_sec)
+                if not result.get("ok"):
+                    self.write_json(result, status=camera_result_status(result))
+                    return
+                self.write_binary(
+                    result["body"],
+                    result["contentType"],
+                    headers={
+                        "X-Robot-Station-Frame-Age-Ms": str(result.get("ageMs", "")),
+                        "X-Robot-Station-Frame-Stale": "1" if result.get("stale") else "0",
+                        "X-Robot-Station-Render-Mode": str(result.get("renderMode", "")),
+                    },
+                )
+                return
+            self.write_json(
+                {
+                    "ok": False,
+                    "code": "CAM-R-UNKNOWN",
+                    "detail": "Camera image path must be /api/sensors/cameras or /api/sensors/cameras/<camera>/<kind>/frame.",
+                },
+                status=404,
+            )
             return
         service_key = api_tail(parsed.path, "/api/runtime/services")
         if service_key is not None:
@@ -291,6 +337,15 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def write_binary(self, body, content_type, status=200, headers=None):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 

@@ -1220,15 +1220,13 @@ button:disabled {
   color: var(--text);
 }
 
-.metric-grid,
-.resource-grid {
+.metric-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
-.metric-card,
-.resource-card {
+.metric-card {
   min-height: 86px;
   padding: 12px;
   border: 1px solid var(--line);
@@ -1236,15 +1234,13 @@ button:disabled {
   background: var(--surface-2);
 }
 
-.metric-card span,
-.resource-card span {
+.metric-card span {
   display: block;
   color: var(--muted);
   font-size: 12px;
 }
 
-.metric-card strong,
-.resource-card strong {
+.metric-card strong {
   display: block;
   margin-top: 8px;
   font-size: 22px;
@@ -1299,6 +1295,27 @@ button:disabled {
   gap: 14px;
 }
 
+.camera-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.camera-strip span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.camera-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .preview-card {
   overflow: hidden;
   border: 1px solid var(--line);
@@ -1307,11 +1324,34 @@ button:disabled {
   box-shadow: var(--shadow);
 }
 
-.preview-card canvas,
 .lidar-canvas {
   display: block;
   width: 100%;
   background: #0f172a;
+}
+
+.camera-frame-visual {
+  position: relative;
+  display: grid;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  margin: 0;
+  place-items: center;
+  background:
+    linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(31, 41, 55, 0.86)),
+    repeating-linear-gradient(90deg, transparent 0 18px, rgba(255, 255, 255, 0.05) 18px 19px);
+}
+
+.camera-frame-visual img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.camera-frame-placeholder {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
 }
 
 .preview-card div {
@@ -1325,6 +1365,56 @@ button:disabled {
 .preview-card span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.preview-card p {
+  min-height: 34px;
+  margin: 0;
+  padding: 0 12px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.camera-frame-status {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.camera-frame-status::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.camera-frame-status.is-ok {
+  color: var(--ok);
+}
+
+.camera-frame-status.is-warn {
+  color: var(--warn);
+}
+
+.camera-frame-status.is-danger {
+  color: var(--danger);
+}
+
+.camera-frame-status.is-idle {
+  color: var(--idle);
+}
+
+.camera-frame-card.is-error .camera-frame-visual {
+  outline: 2px solid rgba(220, 38, 38, 0.28);
+  outline-offset: -2px;
 }
 
 .joint-state {
@@ -2768,6 +2858,10 @@ button:disabled {
     grid-template-columns: repeat(3, minmax(140px, 1fr));
   }
 
+  .camera-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
 }
 
 @media (max-width: 860px) {
@@ -2786,6 +2880,11 @@ button:disabled {
 
   .nav-item {
     text-align: center;
+  }
+
+  .camera-strip {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .topbar,
@@ -2812,7 +2911,6 @@ button:disabled {
   .self-check-overview,
   .self-check-metrics,
   .metric-grid,
-  .resource-grid,
   .pose-grid,
   .joint-grid,
   .control-row {
@@ -2887,7 +2985,6 @@ button:disabled {
   .self-check-overview,
   .self-check-metrics,
   .metric-grid,
-  .resource-grid,
   .pose-grid,
   .joint-grid,
   .control-row,

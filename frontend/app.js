@@ -34,6 +34,14 @@ const state = {
   cameraRuntime: {
     status: "stopped",
   },
+  cameraFrames: {
+    feeds: [],
+    error: "",
+    updatedAt: null,
+  },
+  lidarRuntime: {
+    status: "stopped",
+  },
   armControl: {
     active: false,
     busy: false,
@@ -310,6 +318,29 @@ const cameraRuntimeLabels = {
   unknown: { title: "Camera 状态未知，点击刷新", level: "idle", pressed: false },
 };
 
+const cameraFeedLayout = [
+  { camera: "camera_f", kind: "color", label: "Front RGB" },
+  { camera: "camera_l", kind: "color", label: "Left RGB" },
+  { camera: "camera_r", kind: "color", label: "Right RGB" },
+  { camera: "camera_f", kind: "depth", label: "Front Depth" },
+  { camera: "camera_l", kind: "depth", label: "Left Depth" },
+  { camera: "camera_r", kind: "depth", label: "Right Depth" },
+  { camera: "camera_f", kind: "ir", label: "Front IR" },
+  { camera: "camera_l", kind: "ir", label: "Left IR" },
+  { camera: "camera_r", kind: "ir", label: "Right IR" },
+];
+
+const lidarRuntimeLabels = {
+  stopped: { title: "LiDAR 未启动，点击启动", level: "idle", pressed: false },
+  starting: { title: "LiDAR 启动中", level: "warn", pressed: false, busy: true },
+  running: { title: "LiDAR 运行中，点击清理关闭", level: "ok", pressed: true },
+  stopping: { title: "LiDAR 清理关闭中", level: "warn", pressed: true, busy: true },
+  external: { title: "检测到旧 LiDAR ROS，点击清理", level: "warn", pressed: true },
+  failed: { title: "LiDAR 启动失败，点击重试", level: "danger", pressed: false },
+  error: { title: "LiDAR 异常，点击重试", level: "danger", pressed: false },
+  unknown: { title: "LiDAR 状态未知，点击刷新", level: "idle", pressed: false },
+};
+
 const liftingTopicKey = "lifting_motor_state";
 
 const $ = (selector) => document.querySelector(selector);
@@ -416,6 +447,10 @@ function getCameraRuntimeLabel() {
   return cameraRuntimeLabels[state.cameraRuntime.status] || cameraRuntimeLabels.error;
 }
 
+function getLidarRuntimeLabel() {
+  return lidarRuntimeLabels[state.lidarRuntime.status] || lidarRuntimeLabels.error;
+}
+
 function setPiperRuntime(status) {
   state.piperRuntime.status = piperRuntimeLabels[status] ? status : "unknown";
   if (state.piperRuntime.status !== "running" && state.armControl.active) {
@@ -437,6 +472,11 @@ function setLiftingRuntime(status) {
 function setCameraRuntime(status) {
   state.cameraRuntime.status = cameraRuntimeLabels[status] ? status : "unknown";
   renderCameraRuntime();
+}
+
+function setLidarRuntime(status) {
+  state.lidarRuntime.status = lidarRuntimeLabels[status] ? status : "unknown";
+  renderLidarRuntime();
 }
 
 function showView(view) {
@@ -654,19 +694,6 @@ function renderPreflight() {
     ["人工停止", "正常", "顶部停止按钮可用。"],
   ]
     .map(([name, status, detail]) => `<div class="preflight-item"><strong>${name}</strong><span class="status-text ${statusClass(status)}">${status}</span><span>${detail}</span></div>`)
-    .join("");
-}
-
-function renderResources() {
-  $("#resourceGrid").innerHTML = [
-    ["CPU", "31%"],
-    ["GPU", "42%"],
-    ["内存", "7.8 GB"],
-    ["磁盘", "68%"],
-    ["温度", "58 C"],
-    ["进程", "12"],
-  ]
-    .map(([name, value]) => `<div class="resource-card"><span>${name}</span><strong>${value}</strong></div>`)
     .join("");
 }
 
@@ -1250,6 +1277,15 @@ function renderLiftingRuntime() {
 function renderCameraRuntime() {
   const label = getCameraRuntimeLabel();
   renderStatusSwitch("#cameraRuntimeStatus", "Camera", label.level, {
+    pressed: label.pressed,
+    busy: label.busy,
+    title: label.title,
+  });
+}
+
+function renderLidarRuntime() {
+  const label = getLidarRuntimeLabel();
+  renderStatusSwitch("#lidarRuntimeStatus", "LiDAR", label.level, {
     pressed: label.pressed,
     busy: label.busy,
     title: label.title,
@@ -2052,6 +2088,30 @@ async function fetchCameraRuntimeStatus(options = {}) {
   }
 }
 
+function applyLidarServicePayload(payload) {
+  const service = payload && payload.service;
+  if (!service || !service.status) return false;
+  setLidarRuntime(service.status);
+  return true;
+}
+
+async function fetchLidarRuntimeStatus(options = {}) {
+  try {
+    const response = await fetch("/api/runtime/services/lidar", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || !applyLidarServicePayload(payload)) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    return payload;
+  } catch (error) {
+    if (!options.silent) {
+      setLidarRuntime("error");
+      addLog("LiDAR", `LiDAR 状态查询失败：${error.message}`);
+    }
+    return null;
+  }
+}
+
 async function fetchLiftingLimits() {
   try {
     const response = await fetch("/api/control/lifting/limits", { cache: "no-store" });
@@ -2135,6 +2195,41 @@ function toggleCameraRuntime() {
     return;
   }
   requestCameraRuntimeAction("start");
+}
+
+async function requestLidarRuntimeAction(action) {
+  const nextStatus = action === "stop" ? "stopping" : "starting";
+  setLidarRuntime(nextStatus);
+  addLog("LiDAR", action === "stop" ? "请求清理 LiDAR ROS" : "请求启动 LiDAR 服务");
+  try {
+    const response = await fetch(`/api/runtime/services/lidar/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const payload = await response.json();
+    applyLidarServicePayload(payload);
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    addLog("LiDAR", `LiDAR 服务动作完成：${payload.code}`);
+    return payload;
+  } catch (error) {
+    setLidarRuntime("error");
+    addLog("LiDAR", `LiDAR 服务动作失败：${error.message}`);
+    return null;
+  } finally {
+    window.setTimeout(() => fetchLidarRuntimeStatus({ silent: true }), 800);
+  }
+}
+
+function toggleLidarRuntime() {
+  if (state.lidarRuntime.status === "starting" || state.lidarRuntime.status === "stopping") return;
+  if (state.lidarRuntime.status === "running" || state.lidarRuntime.status === "external") {
+    requestLidarRuntimeAction("stop");
+    return;
+  }
+  requestLidarRuntimeAction("start");
 }
 
 function applyLiftingStatePayload(payload) {
@@ -2363,34 +2458,122 @@ async function requestPiperRuntimeAction(action) {
   }
 }
 
-function drawCameraPreviews() {
-  $$("canvas[data-camera]").forEach((canvas, cameraIndex) => {
-    const ctx = canvas.getContext("2d");
-    const width = canvas.width;
-    const height = canvas.height;
-    const gradient = ctx.createLinearGradient(0, 0, width, height);
-    gradient.addColorStop(0, cameraIndex ? "#164e63" : "#1e3a8a");
-    gradient.addColorStop(1, cameraIndex ? "#14532d" : "#334155");
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-    ctx.strokeStyle = "rgba(255,255,255,0.28)";
-    ctx.lineWidth = 2;
-    for (let x = 40; x < width; x += 72) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x - 80, height);
-      ctx.stroke();
-    }
-    ctx.fillStyle = "rgba(255,255,255,0.9)";
-    ctx.font = "18px sans-serif";
-    ctx.fillText(cameraIndex ? "WRIST RGB" : "FRONT RGB", 22, 36);
-    ctx.fillStyle = "rgba(255,255,255,0.72)";
-    ctx.font = "13px sans-serif";
-    ctx.fillText("preview placeholder", 22, 58);
-    ctx.fillStyle = cameraIndex ? "#86efac" : "#93c5fd";
-    ctx.fillRect(width - 120, height - 48, 86, 16);
-    ctx.fillRect(width - 88, height - 74, 54, 16);
+function cameraFeedKey(feed) {
+  return `${feed.camera}_${feed.kind}`;
+}
+
+function mergeCameraFeeds(feeds = []) {
+  const feedMap = new Map(feeds.map((feed) => [cameraFeedKey(feed), feed]));
+  return cameraFeedLayout.map((feed) => {
+    const remote = feedMap.get(cameraFeedKey(feed)) || {};
+    return {
+      ...feed,
+      ...remote,
+      label: remote.label || feed.label,
+      hasFrame: Boolean(remote.hasFrame),
+      stale: remote.stale !== undefined ? Boolean(remote.stale) : true,
+    };
   });
+}
+
+function cameraFrameAgeText(feed) {
+  const ageMs = Number(feed.ageMs);
+  if (!Number.isFinite(ageMs)) return "无帧";
+  if (ageMs < 1000) return `${Math.max(0, Math.round(ageMs))} ms`;
+  return `${(ageMs / 1000).toFixed(1)} s`;
+}
+
+function cameraFrameStatus(feed) {
+  if (!feed.hasFrame) return { text: "无帧", level: "idle" };
+  if (feed.stale) return { text: "过期", level: "warn" };
+  return { text: "实时", level: "ok" };
+}
+
+function cameraFrameUrl(feed) {
+  return `/api/sensors/cameras/${encodeURIComponent(feed.camera)}/${encodeURIComponent(feed.kind)}/frame?wait=0.1&t=${Date.now()}`;
+}
+
+function bindCameraFrameImages() {
+  $$("#cameraFrameGrid img[data-camera-frame]").forEach((image) => {
+    image.addEventListener("load", () => {
+      const card = image.closest(".camera-frame-card");
+      if (!card) return;
+      card.classList.remove("is-error");
+    });
+    image.addEventListener("error", () => {
+      const card = image.closest(".camera-frame-card");
+      if (!card) return;
+      card.classList.add("is-error");
+      const status = card.querySelector(".camera-frame-status");
+      if (status) {
+        status.className = "camera-frame-status is-danger";
+        status.textContent = "加载失败";
+      }
+    });
+  });
+}
+
+function renderCameraFrames() {
+  const feeds = state.cameraFrames.feeds.length ? state.cameraFrames.feeds : mergeCameraFeeds();
+  const summary = $("#cameraFeedSummary");
+  if (summary) {
+    const liveCount = feeds.filter((feed) => feed.hasFrame && !feed.stale).length;
+    const frameCount = feeds.filter((feed) => feed.hasFrame).length;
+    summary.textContent = state.cameraFrames.error
+      ? `异常：${state.cameraFrames.error}`
+      : `${liveCount} 路实时 / ${frameCount} 路有帧 / 共 ${feeds.length} 路`;
+  }
+
+  const grid = $("#cameraFrameGrid");
+  if (!grid) return;
+  grid.innerHTML = feeds
+    .map((feed) => {
+      const status = cameraFrameStatus(feed);
+      const imageMarkup = feed.hasFrame
+        ? `<img src="${cameraFrameUrl(feed)}" alt="${escapeHtml(feed.label)}" data-camera-frame="${escapeHtml(cameraFeedKey(feed))}">`
+        : `<span class="camera-frame-placeholder">等待帧</span>`;
+      const format = feed.format ? String(feed.format) : "compressed";
+      const detail = feed.hasFrame ? `${cameraFrameAgeText(feed)} / ${format}` : feed.topic || "";
+      return `
+        <article class="preview-card camera-frame-card is-${status.level}">
+          <figure class="camera-frame-visual">
+            ${imageMarkup}
+          </figure>
+          <div class="camera-frame-meta">
+            <strong>${escapeHtml(feed.label)}</strong>
+            <span class="camera-frame-status is-${status.level}">${status.text}</span>
+          </div>
+          <p title="${escapeHtml(feed.topic || "")}">${escapeHtml(detail)}</p>
+        </article>
+      `;
+    })
+    .join("");
+  bindCameraFrameImages();
+}
+
+async function fetchCameraFrames(options = {}) {
+  try {
+    const response = await fetch("/api/sensors/cameras", { cache: "no-store" });
+    const payload = await response.json();
+    if (!payload || !Array.isArray(payload.feeds)) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    state.cameraFrames.feeds = mergeCameraFeeds(payload.feeds);
+    state.cameraFrames.error = payload.ok ? "" : payload.detail || `HTTP ${response.status}`;
+    state.cameraFrames.updatedAt = formatTime();
+    renderCameraFrames();
+    if (!payload.ok && !options.silent) {
+      addLog("相机", `相机图像状态异常：${state.cameraFrames.error}`);
+    }
+    return payload;
+  } catch (error) {
+    state.cameraFrames.error = error.message;
+    renderCameraFrames();
+    if (!options.silent) {
+      addLog("相机", `相机图像状态查询失败：${error.message}`);
+    }
+    return null;
+  }
 }
 
 function drawLidar() {
@@ -2451,6 +2634,7 @@ function bindEvents() {
   $("#piperRuntimeStatus").addEventListener("click", togglePiperRuntime);
   $("#liftingRuntimeStatus").addEventListener("click", toggleLiftingRuntime);
   $("#cameraRuntimeStatus").addEventListener("click", toggleCameraRuntime);
+  $("#lidarRuntimeStatus").addEventListener("click", toggleLidarRuntime);
   $("#armCompareList").addEventListener("input", (event) => {
     const input = event.target.closest("[data-action-kind]");
     if (!input) return;
@@ -2641,24 +2825,27 @@ function init() {
   renderCollectionMetrics();
   renderInferenceMetrics();
   renderPreflight();
-  renderResources();
   renderDeviceBaseMetrics();
   renderDeviceControls();
   renderPiperRuntime();
   renderLiftingRuntime();
+  renderCameraRuntime();
+  renderLidarRuntime();
   renderHistory();
   renderLogFilters();
   renderActionLocks();
-  drawCameraPreviews();
+  renderCameraFrames();
   drawLidar();
   addLog("系统", "Robot Station 前端原型已加载");
   addLog("ROS", "等待接入真实 ROS 状态");
-  addLog("相机", "front_rgb / wrist_rgb 预览占位已生成");
+  addLog("相机", "相机压缩图预览等待图像帧");
   refreshCanInterfaceStatus({ silent: true });
   fetchPiperRuntimeStatus({ silent: true });
   fetchLiftingLimits();
   fetchLiftingRuntimeStatus({ silent: true });
   fetchCameraRuntimeStatus({ silent: true });
+  fetchCameraFrames({ silent: true });
+  fetchLidarRuntimeStatus({ silent: true });
   fetchLiftingMotorState();
   fetchPiperJointStates();
   syncClock();
@@ -2666,6 +2853,8 @@ function init() {
   window.setInterval(() => fetchPiperRuntimeStatus({ silent: true }), 3000);
   window.setInterval(() => fetchLiftingRuntimeStatus({ silent: true }), 3000);
   window.setInterval(() => fetchCameraRuntimeStatus({ silent: true }), 3000);
+  window.setInterval(() => fetchCameraFrames({ silent: true }), 1000);
+  window.setInterval(() => fetchLidarRuntimeStatus({ silent: true }), 3000);
   window.setInterval(fetchLiftingMotorState, 500);
   window.setInterval(fetchPiperJointStates, 250);
 }

@@ -2,11 +2,13 @@
 
 from modules.ros_io.reader import RosTopicReader
 from modules.ros_io.runtime import RosRuntime
+from modules.ros_io.image_reader import CameraImageReader
 from modules.ros_io.writer import RosTopicWriter
 
 
 _runtime = RosRuntime()
 _reader = RosTopicReader(_runtime)
+_camera_image_reader = CameraImageReader(_runtime)
 _writer = RosTopicWriter(_runtime)
 
 
@@ -16,6 +18,10 @@ def get_ros_reader():
 
 def get_ros_writer():
     return _writer
+
+
+def get_camera_image_reader():
+    return _camera_image_reader
 
 
 def get_ros_runtime():
