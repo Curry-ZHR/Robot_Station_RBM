@@ -31,6 +31,9 @@ const state = {
   liftingRuntime: {
     status: "stopped",
   },
+  cameraRuntime: {
+    status: "stopped",
+  },
   armControl: {
     active: false,
     busy: false,
@@ -296,6 +299,17 @@ const liftingRuntimeLabels = {
   unknown: { title: "升降轴状态未知，点击刷新", level: "idle", pressed: false },
 };
 
+const cameraRuntimeLabels = {
+  stopped: { title: "Camera 未启动，点击启动", level: "idle", pressed: false },
+  starting: { title: "Camera 启动中", level: "warn", pressed: false, busy: true },
+  running: { title: "Camera 运行中，点击清理关闭", level: "ok", pressed: true },
+  stopping: { title: "Camera 清理关闭中", level: "warn", pressed: true, busy: true },
+  external: { title: "检测到旧 Camera ROS，点击清理", level: "warn", pressed: true },
+  failed: { title: "Camera 启动失败，点击重试", level: "danger", pressed: false },
+  error: { title: "Camera 异常，点击重试", level: "danger", pressed: false },
+  unknown: { title: "Camera 状态未知，点击刷新", level: "idle", pressed: false },
+};
+
 const liftingTopicKey = "lifting_motor_state";
 
 const $ = (selector) => document.querySelector(selector);
@@ -398,6 +412,10 @@ function getLiftingRuntimeLabel() {
   return liftingRuntimeLabels[state.liftingRuntime.status] || liftingRuntimeLabels.error;
 }
 
+function getCameraRuntimeLabel() {
+  return cameraRuntimeLabels[state.cameraRuntime.status] || cameraRuntimeLabels.error;
+}
+
 function setPiperRuntime(status) {
   state.piperRuntime.status = piperRuntimeLabels[status] ? status : "unknown";
   if (state.piperRuntime.status !== "running" && state.armControl.active) {
@@ -414,6 +432,11 @@ function setLiftingRuntime(status) {
   state.liftingRuntime.status = liftingRuntimeLabels[status] ? status : "unknown";
   renderLiftingRuntime();
   renderLiftPreview();
+}
+
+function setCameraRuntime(status) {
+  state.cameraRuntime.status = cameraRuntimeLabels[status] ? status : "unknown";
+  renderCameraRuntime();
 }
 
 function showView(view) {
@@ -1217,7 +1240,16 @@ function liftingFeedbackLevel() {
 
 function renderLiftingRuntime() {
   const label = getLiftingRuntimeLabel();
-  renderStatusSwitch("#liftingRuntimeStatus", "升降轴", label.level, {
+  renderStatusSwitch("#liftingRuntimeStatus", "Lifting", label.level, {
+    pressed: label.pressed,
+    busy: label.busy,
+    title: label.title,
+  });
+}
+
+function renderCameraRuntime() {
+  const label = getCameraRuntimeLabel();
+  renderStatusSwitch("#cameraRuntimeStatus", "Camera", label.level, {
     pressed: label.pressed,
     busy: label.busy,
     title: label.title,
@@ -1996,6 +2028,30 @@ async function fetchLiftingRuntimeStatus(options = {}) {
   }
 }
 
+function applyCameraServicePayload(payload) {
+  const service = payload && payload.service;
+  if (!service || !service.status) return false;
+  setCameraRuntime(service.status);
+  return true;
+}
+
+async function fetchCameraRuntimeStatus(options = {}) {
+  try {
+    const response = await fetch("/api/runtime/services/camera", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || !applyCameraServicePayload(payload)) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    return payload;
+  } catch (error) {
+    if (!options.silent) {
+      setCameraRuntime("error");
+      addLog("相机", `Camera 状态查询失败：${error.message}`);
+    }
+    return null;
+  }
+}
+
 async function fetchLiftingLimits() {
   try {
     const response = await fetch("/api/control/lifting/limits", { cache: "no-store" });
@@ -2044,6 +2100,41 @@ function toggleLiftingRuntime() {
     return;
   }
   requestLiftingRuntimeAction("start");
+}
+
+async function requestCameraRuntimeAction(action) {
+  const nextStatus = action === "stop" ? "stopping" : "starting";
+  setCameraRuntime(nextStatus);
+  addLog("相机", action === "stop" ? "请求清理 Camera ROS" : "请求启动 Camera 服务");
+  try {
+    const response = await fetch(`/api/runtime/services/camera/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const payload = await response.json();
+    applyCameraServicePayload(payload);
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    addLog("相机", `Camera 服务动作完成：${payload.code}`);
+    return payload;
+  } catch (error) {
+    setCameraRuntime("error");
+    addLog("相机", `Camera 服务动作失败：${error.message}`);
+    return null;
+  } finally {
+    window.setTimeout(() => fetchCameraRuntimeStatus({ silent: true }), 800);
+  }
+}
+
+function toggleCameraRuntime() {
+  if (state.cameraRuntime.status === "starting" || state.cameraRuntime.status === "stopping") return;
+  if (state.cameraRuntime.status === "running" || state.cameraRuntime.status === "external") {
+    requestCameraRuntimeAction("stop");
+    return;
+  }
+  requestCameraRuntimeAction("start");
 }
 
 function applyLiftingStatePayload(payload) {
@@ -2359,6 +2450,7 @@ function bindEvents() {
   $("#canStatus").addEventListener("click", () => activateCanInterface(currentCanCheckResult(), { confirm: false }));
   $("#piperRuntimeStatus").addEventListener("click", togglePiperRuntime);
   $("#liftingRuntimeStatus").addEventListener("click", toggleLiftingRuntime);
+  $("#cameraRuntimeStatus").addEventListener("click", toggleCameraRuntime);
   $("#armCompareList").addEventListener("input", (event) => {
     const input = event.target.closest("[data-action-kind]");
     if (!input) return;
@@ -2566,12 +2658,14 @@ function init() {
   fetchPiperRuntimeStatus({ silent: true });
   fetchLiftingLimits();
   fetchLiftingRuntimeStatus({ silent: true });
+  fetchCameraRuntimeStatus({ silent: true });
   fetchLiftingMotorState();
   fetchPiperJointStates();
   syncClock();
   window.setInterval(syncClock, 1000);
   window.setInterval(() => fetchPiperRuntimeStatus({ silent: true }), 3000);
   window.setInterval(() => fetchLiftingRuntimeStatus({ silent: true }), 3000);
+  window.setInterval(() => fetchCameraRuntimeStatus({ silent: true }), 3000);
   window.setInterval(fetchLiftingMotorState, 500);
   window.setInterval(fetchPiperJointStates, 250);
 }

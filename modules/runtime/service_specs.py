@@ -33,6 +33,9 @@ def default_service_specs():
     piper_joint_speed_percent = os.environ.get("PIPER_JOINT_SPEED_PERCENT", "10")
     piper_install = ROOT_DIR / "ros_packages" / "control" / "piper" / "install" / "setup.bash"
     lifting_install = ROOT_DIR / "ros_packages" / "control" / "lifting" / "install" / "setup.bash"
+    camera_ws = ROOT_DIR / "ros_packages" / "sensors" / "camera" / "orbbec"
+    camera_install = camera_ws / "install" / "setup.bash"
+    camera_start_script = camera_ws / "scripts" / "start_orbbec_camera.sh"
     lifting_motor_id = os.environ.get("LIFTING_MOTOR_ID", "1")
     lifting_executable = os.environ.get("LIFTING_SERVICE_EXECUTABLE", "service_850pro")
     return {
@@ -92,5 +95,26 @@ def default_service_specs():
             shutdown_timeout_sec=8.0,
             startup_grace_sec=0.8,
             description="Launch the lifting axis motor service node.",
+        ),
+        "camera": ManagedServiceSpec(
+            key="camera",
+            name="Orbbec camera ROS",
+            command=(
+                str(camera_start_script),
+            ),
+            setup_scripts=(
+                f"/opt/ros/{ros_distro}/setup.bash",
+                str(camera_install),
+            ),
+            cleanup_process_patterns=(
+                "start_orbbec_camera.sh",
+                "ros2 launch orbbec_camera",
+                "orbbec_camera_node",
+                "camera_container",
+            ),
+            cwd=str(camera_ws),
+            shutdown_timeout_sec=8.0,
+            startup_grace_sec=0.8,
+            description="Launch the Orbbec multi-camera ROS nodes.",
         ),
     }

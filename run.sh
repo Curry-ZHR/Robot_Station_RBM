@@ -19,6 +19,7 @@ fi
 ROS_SETUP="/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
 PIPER_SETUP="${ROOT_DIR}/ros_packages/control/piper/install/setup.bash"
 LIFTING_SETUP="${ROOT_DIR}/ros_packages/control/lifting/install/setup.bash"
+CAMERA_SETUP="${ROOT_DIR}/ros_packages/sensors/camera/orbbec/install/setup.bash"
 
 source_setup() {
   local setup_file="$1"
@@ -38,6 +39,10 @@ fi
 
 if [[ -f "${LIFTING_SETUP}" ]]; then
   source_setup "${LIFTING_SETUP}"
+fi
+
+if [[ -f "${CAMERA_SETUP}" ]]; then
+  source_setup "${CAMERA_SETUP}"
 fi
 
 cd "${ROOT_DIR}"
