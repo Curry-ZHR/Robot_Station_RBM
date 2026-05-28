@@ -6,8 +6,10 @@ __pycache__/
 # Runtime output
 logs/
 data/
+.xdp_*
 
 # ROS / colcon generated spaces
 ros_packages/**/build/
 ros_packages/**/install/
 ros_packages/**/log/
+ros_packages/**/Log/
