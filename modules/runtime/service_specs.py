@@ -32,6 +32,9 @@ def default_service_specs():
     ros_distro = os.environ.get("ROS_DISTRO", "humble")
     piper_joint_speed_percent = os.environ.get("PIPER_JOINT_SPEED_PERCENT", "10")
     piper_install = ROOT_DIR / "ros_packages" / "control" / "piper" / "install" / "setup.bash"
+    lifting_install = ROOT_DIR / "ros_packages" / "control" / "lifting" / "install" / "setup.bash"
+    lifting_motor_id = os.environ.get("LIFTING_MOTOR_ID", "1")
+    lifting_executable = os.environ.get("LIFTING_SERVICE_EXECUTABLE", "service_850pro")
     return {
         "piper": ManagedServiceSpec(
             key="piper",
@@ -61,5 +64,33 @@ def default_service_specs():
             ),
             cwd=str(ROOT_DIR),
             description="Launch the dual-arm Piper ROS control nodes.",
+        ),
+        "lifting": ManagedServiceSpec(
+            key="lifting",
+            name="Lifting axis ROS control",
+            command=(
+                "ros2",
+                "run",
+                "lifting_ctrl_ros2_pkg",
+                lifting_executable,
+                "--id",
+                str(lifting_motor_id),
+            ),
+            setup_scripts=(
+                f"/opt/ros/{ros_distro}/setup.bash",
+                str(lifting_install),
+            ),
+            cleanup_process_patterns=(
+                "lifting_ctrl_ros2_pkg",
+                "service_830abs",
+                "service_850pro",
+                "lifting_ctrl_server_node",
+                "lifting_ctrl_server_node_830abs",
+                "lifting_ctrl_server_node_850pro",
+            ),
+            cwd=str(ROOT_DIR),
+            shutdown_timeout_sec=8.0,
+            startup_grace_sec=0.8,
+            description="Launch the lifting axis motor service node.",
         ),
     }

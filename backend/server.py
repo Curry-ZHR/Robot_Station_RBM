@@ -7,6 +7,15 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from modules.control.lifting import (
+    clear_lifting_error,
+    initialize_lifting,
+    jog_lifting,
+    lifting_limits,
+    move_lifting_to_height,
+    stop_lifting,
+    zero_lifting_position,
+)
 from modules.control.piper import publish_joint_targets
 from modules.drivers.can.can_activate import activate_can
 from modules.logger import get_logger, setup_logger
@@ -123,6 +132,9 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/health":
             self.write_json({"status": "ok"})
             return
+        if parsed.path == "/api/control/lifting/limits":
+            self.write_json(lifting_limits())
+            return
         service_key = api_tail(parsed.path, "/api/runtime/services")
         if service_key is not None:
             manager = get_service_manager()
@@ -177,6 +189,32 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             payload = self.read_json_body()
             result = publish_joint_targets(payload)
             log_action_result("Piper joint targets", result)
+            self.write_json(result, status=ros_result_status(result))
+            return
+        lifting_action = api_tail(parsed.path, "/api/control/lifting")
+        if lifting_action is not None:
+            payload = self.read_json_body()
+            handlers = {
+                "init": initialize_lifting,
+                "height": move_lifting_to_height,
+                "jog": jog_lifting,
+                "stop": stop_lifting,
+                "clear-error": clear_lifting_error,
+                "zero": zero_lifting_position,
+            }
+            handler = handlers.get(lifting_action)
+            if handler is None:
+                self.write_json(
+                    {
+                        "ok": False,
+                        "code": "LIFT-C-ACTION",
+                        "detail": f"Unsupported lifting action: {lifting_action}",
+                    },
+                    status=400,
+                )
+                return
+            result = handler(payload)
+            log_action_result(f"Lifting {lifting_action}", result)
             self.write_json(result, status=ros_result_status(result))
             return
         service_tail = api_tail(parsed.path, "/api/runtime/services")

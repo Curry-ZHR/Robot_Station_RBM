@@ -28,11 +28,44 @@ const state = {
   piperRuntime: {
     status: "stopped",
   },
+  liftingRuntime: {
+    status: "stopped",
+  },
   armControl: {
     active: false,
     busy: false,
     publishTimer: null,
     maxJointSpeedDegS: 10,
+  },
+  liftPreview: {
+    height: 0.42,
+    speed: 0.08,
+    stepUpMm: 50,
+    stepDownMm: 50,
+    mode: "等待初始化",
+  },
+  liftingState: {
+    ok: false,
+    code: "ROS-R-WAITING",
+    detail: "等待升降轴反馈。",
+    heightM: null,
+    targetHeightM: null,
+    backSpeedMps: null,
+    voltage: null,
+    current: null,
+    runState: false,
+    reachTarget: false,
+    fpsError: null,
+    initState: false,
+    upLimit: false,
+    downLimit: false,
+    ageMs: null,
+    stale: true,
+    receivedAt: null,
+    limits: {
+      minHeightM: 0.05,
+      maxHeightM: 0.88,
+    },
   },
   piperActions: {
     left: {
@@ -172,7 +205,7 @@ const homingSteps = [
   "传感器在线确认",
 ];
 
-const logSources = ["全部", "系统", "ROS", "机械臂", "底盘", "相机", "LiDAR", "数采", "推理"];
+const logSources = ["全部", "系统", "ROS", "机械臂", "底盘", "升降轴", "相机", "LiDAR", "数采", "推理"];
 
 const historyItems = [
   ["数采 episode_042", "成功", "09:42 - 09:49 / /data/robot_station/episodes/042"],
@@ -226,12 +259,20 @@ const PIPER_GRIPPER_EFFORT = 1.0;
 const PIPER_JOINT_SPEED_MIN = 0.5;
 const PIPER_JOINT_SPEED_MAX = 30;
 const PIPER_JOINT_SPEED_STEP = 0.5;
+const ARM_ACTION_PUBLISH_DEBOUNCE_MS = 60;
 
 const deviceBaseControlItems = [
   { key: "linear", label: "线速度", value: 0, min: -0.2, max: 0.2, step: 0.01, unit: "m/s" },
   { key: "lateral", label: "横向速度", value: 0, min: -0.15, max: 0.15, step: 0.01, unit: "m/s" },
   { key: "angular", label: "角速度", value: 0, min: -0.5, max: 0.5, step: 0.01, unit: "rad/s" },
 ];
+
+const liftPreviewLimits = {
+  min: 0.05,
+  max: 0.88,
+  speedMin: 0.02,
+  speedMax: 0.16,
+};
 
 const piperRuntimeLabels = {
   stopped: { title: "Piper 未启动，点击启动", level: "idle", pressed: false },
@@ -243,6 +284,19 @@ const piperRuntimeLabels = {
   error: { title: "Piper 异常，点击重试", level: "danger", pressed: false },
   unknown: { title: "Piper 状态未知，点击刷新", level: "idle", pressed: false },
 };
+
+const liftingRuntimeLabels = {
+  stopped: { title: "升降轴未启动，点击启动", level: "idle", pressed: false },
+  starting: { title: "升降轴启动中", level: "warn", pressed: false, busy: true },
+  running: { title: "升降轴运行中，点击清理关闭", level: "ok", pressed: true },
+  stopping: { title: "升降轴清理关闭中", level: "warn", pressed: true, busy: true },
+  external: { title: "检测到旧升降轴 ROS，点击清理", level: "warn", pressed: true },
+  failed: { title: "升降轴启动失败，点击重试", level: "danger", pressed: false },
+  error: { title: "升降轴异常，点击重试", level: "danger", pressed: false },
+  unknown: { title: "升降轴状态未知，点击刷新", level: "idle", pressed: false },
+};
+
+const liftingTopicKey = "lifting_motor_state";
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -328,8 +382,20 @@ function piperReady() {
   return state.piperRuntime.status === "running";
 }
 
+function liftingReady() {
+  return state.liftingRuntime.status === "running" || state.liftingRuntime.status === "external";
+}
+
+function liftingInitialized() {
+  return liftingReady() && state.liftingState.ok && !state.liftingState.stale && state.liftingState.initState;
+}
+
 function getPiperRuntimeLabel() {
   return piperRuntimeLabels[state.piperRuntime.status] || piperRuntimeLabels.error;
+}
+
+function getLiftingRuntimeLabel() {
+  return liftingRuntimeLabels[state.liftingRuntime.status] || liftingRuntimeLabels.error;
 }
 
 function setPiperRuntime(status) {
@@ -344,7 +410,14 @@ function setPiperRuntime(status) {
   renderActionLocks();
 }
 
+function setLiftingRuntime(status) {
+  state.liftingRuntime.status = liftingRuntimeLabels[status] ? status : "unknown";
+  renderLiftingRuntime();
+  renderLiftPreview();
+}
+
 function showView(view) {
+  document.body.dataset.activeView = view;
   $$(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === view));
   $$(".view").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.viewPanel === view));
 }
@@ -827,10 +900,30 @@ function renderArmComparison(side) {
   `;
 }
 
-function renderArmComparisons() {
+function armActionInputIsActive() {
+  const active = document.activeElement;
+  return Boolean(active && active.matches && active.matches("#armCompareList [data-action-kind]"));
+}
+
+function renderArmActionFeedbackNotes() {
+  ["left", "right"].forEach((side) => {
+    const action = state.piperActions[side];
+    const note = $(`[data-arm-panel="${side}"] .action-feedback-note`);
+    if (!note) return;
+    note.textContent = action && action.detail ? action.detail : "接管控制后拖动 Action 滑条。";
+    note.classList.toggle("is-danger", Boolean(action && action.status === "error"));
+  });
+}
+
+function renderArmComparisons(options = {}) {
   const node = $("#armCompareList");
   if (!node) return;
   renderArmCompareBadge();
+  if (!options.force && armActionInputIsActive()) {
+    renderArmActionFeedbackNotes();
+    renderArmControlButtons();
+    return;
+  }
   node.innerHTML = `
     <div class="dual-arm-grid">
       ${renderArmComparison("left")}
@@ -870,7 +963,31 @@ function updateJointSpeedFromInput(input, options = {}) {
   return speed;
 }
 
-function updateArmActionFromInput(input) {
+function updateArmActionPreview(input) {
+  const row = input.closest(".action-value");
+  if (!row) return;
+
+  const kind = input.dataset.actionKind;
+  const value = Number(input.value);
+  const strong = row.querySelector("strong");
+  const small = row.querySelector("small");
+  if (!Number.isFinite(value)) return;
+
+  if (kind === "joint") {
+    const min = Number(input.min);
+    const max = Number(input.max);
+    const rad = (value * Math.PI) / 180;
+    input.style.setProperty("--action-position", `${clamp(jointPercent(value, { min, max }), 0, 100)}%`);
+    if (strong) strong.textContent = `${formatNumber(value, 2)} deg`;
+    if (small) small.textContent = `${formatNumber(rad, 4)} rad`;
+    return;
+  }
+
+  input.style.setProperty("--action-position", `${clamp(value * 1000, 0, 100)}%`);
+  if (strong) strong.textContent = `${formatNumber(value, 4)} m`;
+}
+
+function updateArmActionFromInput(input, options = {}) {
   const side = input.dataset.actionSide === "right" ? "right" : "left";
   const action = state.piperActions[side];
   if (!action) return;
@@ -884,14 +1001,19 @@ function updateArmActionFromInput(input) {
     action.positions[index] = null;
     action.status = "idle";
     action.detail = "Action 值未填写完整。";
-    renderArmComparisons();
+    if (options.render !== false) renderArmComparisons();
+    else renderArmActionFeedbackNotes();
     return;
   }
 
   action.positions[index] = input.dataset.actionKind === "joint" ? (value * Math.PI) / 180 : value;
   action.status = actionReady(side) ? "ready" : "idle";
   action.detail = actionReady(side) ? "Action 已就绪。" : "Action 值未填写完整。";
-  renderArmComparisons();
+  if (options.render !== false) renderArmComparisons();
+  else {
+    updateArmActionPreview(input);
+    renderArmActionFeedbackNotes();
+  }
   if (state.armControl.active) {
     scheduleDirectArmPublish();
   }
@@ -960,7 +1082,7 @@ function scheduleDirectArmPublish() {
   state.armControl.publishTimer = window.setTimeout(() => {
     if (!state.armControl.active) return;
     publishArmActionsNow({ source: "接管控制自动下发", logSuccess: false });
-  }, 180);
+  }, ARM_ACTION_PUBLISH_DEBOUNCE_MS);
 }
 
 function sleepMs(ms) {
@@ -1056,16 +1178,164 @@ async function toggleArmDirectControl() {
 function renderDeviceBaseMetrics() {
   const node = $("#deviceBaseMetrics");
   if (!node) return;
+  const valueFor = (key) => deviceBaseControlItems.find((entry) => entry.key === key);
+  const linear = valueFor("linear");
+  const lateral = valueFor("lateral");
+  const angular = valueFor("angular");
   node.innerHTML = [
-    ["线速度", "未实现"],
-    ["角速度", "未实现"],
-    ["里程计", "未实现"],
-    ["驱动", "未实现"],
-    ["电池", "未实现"],
-    ["模式", "低速预览"],
+    ["前后", `${linear.value.toFixed(2)} ${linear.unit}`],
+    ["横移", `${lateral.value.toFixed(2)} ${lateral.unit}`],
+    ["旋转", `${angular.value.toFixed(2)} ${angular.unit}`],
+    ["限速", "低速"],
   ]
     .map(([name, value]) => `<div class="metric-card"><span>${name}</span><strong>${value}</strong></div>`)
     .join("");
+}
+
+function liftPercent(height = state.liftPreview.height) {
+  const limits = state.liftingState.limits || {};
+  const minHeight = Number.isFinite(Number(limits.minHeightM)) ? Number(limits.minHeightM) : liftPreviewLimits.min;
+  const maxHeight = Number.isFinite(Number(limits.maxHeightM)) ? Number(limits.maxHeightM) : liftPreviewLimits.max;
+  const range = Math.max(0.001, maxHeight - minHeight);
+  return clamp(((height - minHeight) / range) * 100, 0, 100);
+}
+
+function setStatusText(selector, text, level) {
+  const node = $(selector);
+  if (!node) return;
+  node.textContent = text;
+  node.className = `status-text ${level}`;
+}
+
+function liftingFeedbackLevel() {
+  if (state.liftingState.ok && state.liftingState.stale) return "warn";
+  if (state.liftingState.ok) return "ok";
+  if (state.liftingState.code === "ROS-R-WAITING") return "idle";
+  if (state.liftingState.code === "ROS-R-NODATA") return "warn";
+  return liftingReady() ? "danger" : "idle";
+}
+
+function renderLiftingRuntime() {
+  const label = getLiftingRuntimeLabel();
+  renderStatusSwitch("#liftingRuntimeStatus", "升降轴", label.level, {
+    pressed: label.pressed,
+    busy: label.busy,
+    title: label.title,
+  });
+}
+
+function renderLiftPreview() {
+  const limits = state.liftingState.limits || {};
+  const minHeight = Number.isFinite(Number(limits.minHeightM)) ? Number(limits.minHeightM) : liftPreviewLimits.min;
+  const maxHeight = Number.isFinite(Number(limits.maxHeightM)) ? Number(limits.maxHeightM) : liftPreviewLimits.max;
+  const height = clamp(Number(state.liftPreview.height), minHeight, maxHeight);
+  const speed = clamp(Number(state.liftPreview.speed), liftPreviewLimits.speedMin, liftPreviewLimits.speedMax);
+  const stepUpMm = clamp(Number(state.liftPreview.stepUpMm), 1, Math.max(1, Math.round((maxHeight - minHeight) * 1000)));
+  const stepDownMm = clamp(Number(state.liftPreview.stepDownMm), 1, Math.max(1, Math.round((maxHeight - minHeight) * 1000)));
+  state.liftPreview.height = height;
+  state.liftPreview.speed = speed;
+  state.liftPreview.stepUpMm = stepUpMm;
+  state.liftPreview.stepDownMm = stepDownMm;
+  const percent = liftPercent(height);
+
+  const heightText = `${height.toFixed(2)} m`;
+  const speedText = `${speed.toFixed(2)} m/s`;
+  const actualHeight = Number(state.liftingState.heightM);
+  const actualText = Number.isFinite(actualHeight) ? `${actualHeight.toFixed(3)} m` : "--";
+  const stateTargetHeight = Number(state.liftingState.targetHeightM);
+  const stateTargetText = Number.isFinite(stateTargetHeight) ? `${stateTargetHeight.toFixed(3)} m` : "--";
+  const backSpeed = Number(state.liftingState.backSpeedMps);
+  const backSpeedText = Number.isFinite(backSpeed) ? `${backSpeed.toFixed(3)} m/s` : "--";
+  const voltage = Number(state.liftingState.voltage);
+  const current = Number(state.liftingState.current);
+  const powerText = Number.isFinite(voltage) && Number.isFinite(current)
+    ? `${voltage.toFixed(0)} V / ${current.toFixed(2)} A`
+    : "--";
+  const age = Number(state.liftingState.ageMs);
+  const ageText = Number.isFinite(age) ? `${Math.round(age)} ms` : "--";
+  const actualMetaText = state.liftingState.ok
+    ? state.liftingState.stale
+      ? `延迟 ${ageText}`
+      : `反馈 ${ageText}`
+    : "等待反馈";
+  const reachText = state.liftingState.ok ? (state.liftingState.reachTarget ? "已到位" : "运动中") : "--";
+  const serviceExternal = state.liftingRuntime.status === "external";
+  const serviceText = serviceExternal ? "外部运行" : liftingReady() ? "运行中" : "未启动";
+  const serviceLevel = serviceExternal ? "warn" : liftingReady() ? "ok" : "idle";
+  const feedbackLevel = liftingFeedbackLevel();
+  const feedbackText = state.liftingState.ok
+    ? state.liftingState.stale
+      ? "延迟"
+      : "在线"
+    : liftingReady()
+      ? "等待"
+      : "未启动";
+  const limitActive = Boolean(state.liftingState.upLimit || state.liftingState.downLimit);
+  const limitText = !state.liftingState.ok ? "未知" : state.liftingState.upLimit ? "上限位" : state.liftingState.downLimit ? "下限位" : "正常";
+  const limitLevel = !state.liftingState.ok ? "idle" : limitActive ? "warn" : "ok";
+
+  const updates = [
+    ["#liftHeightValue", heightText],
+    ["#liftHeightPreview", heightText],
+    ["#liftSpeedPreview", speedText],
+    ["#liftModeValue", state.liftPreview.mode],
+    ["#liftActualHeightValue", actualText],
+    ["#liftActualValue", actualMetaText],
+    ["#liftStateTargetValue", stateTargetText],
+    ["#liftBackSpeedValue", backSpeedText],
+    ["#liftPowerValue", powerText],
+    ["#liftReachValue", reachText],
+    ["#liftMaxLabel", `${maxHeight.toFixed(2)} m`],
+    ["#liftMinLabel", `${minHeight.toFixed(2)} m`],
+  ];
+  updates.forEach(([selector, text]) => {
+    const node = $(selector);
+    if (node) node.textContent = text;
+  });
+
+  const heightInput = $("#liftHeightInput");
+  if (heightInput) {
+    heightInput.min = minHeight.toFixed(3);
+    heightInput.max = maxHeight.toFixed(3);
+    if (document.activeElement !== heightInput) heightInput.value = height.toFixed(2);
+  }
+  const speedInput = $("#liftSpeedInput");
+  if (speedInput && document.activeElement !== speedInput) speedInput.value = speed.toFixed(2);
+  const stepUpInput = $("#liftStepUpInput");
+  if (stepUpInput && document.activeElement !== stepUpInput) stepUpInput.value = String(Math.round(stepUpMm));
+  const stepDownInput = $("#liftStepDownInput");
+  if (stepDownInput && document.activeElement !== stepDownInput) stepDownInput.value = String(Math.round(stepDownMm));
+
+  $$("[data-lift-preset]").forEach((button) => {
+    const preset = Number(button.dataset.liftPreset);
+    const active = Number.isFinite(preset) && Math.abs(preset - height) < 0.005;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+
+  const fill = $("#liftGaugeFill");
+  if (fill) fill.style.height = `clamp(0px, ${percent}%, calc(100% - 24px))`;
+  const carriage = $("#liftGaugeCarriage");
+  if (carriage) carriage.style.bottom = `clamp(16px, ${percent}%, calc(100% - 16px))`;
+
+  setStateBadge("#liftStateBadge", feedbackText, feedbackLevel);
+  setStatusText("#liftServiceText", serviceText, serviceLevel);
+  setStatusText("#liftInitText", state.liftingState.initState ? "完成" : "未完成", state.liftingState.initState ? "ok" : "warn");
+  setStatusText("#liftFeedbackText", feedbackText, feedbackLevel);
+  setStatusText("#liftLimitText", limitText, limitLevel);
+
+  const serviceDisabled = !liftingReady();
+  const actionDisabled = !liftingInitialized();
+  ["#liftInitButton", "#liftStopButton"].forEach((selector) => {
+    $$(selector).forEach((button) => {
+      button.disabled = serviceDisabled;
+    });
+  });
+  ["#liftApplyHeightButton", "#liftHeightInput", "[data-lift-preset]", "[data-lift-move]", "[data-lift-step]"].forEach((selector) => {
+    $$(selector).forEach((button) => {
+      button.disabled = actionDisabled;
+    });
+  });
 }
 
 function renderDeviceControls() {
@@ -1094,6 +1364,7 @@ function renderDeviceControls() {
       )
       .join("");
   }
+  renderLiftPreview();
 }
 
 function renderPiperRuntime() {
@@ -1701,6 +1972,216 @@ async function fetchPiperRuntimeStatus(options = {}) {
   }
 }
 
+function applyLiftingServicePayload(payload) {
+  const service = payload && payload.service;
+  if (!service || !service.status) return false;
+  setLiftingRuntime(service.status);
+  return true;
+}
+
+async function fetchLiftingRuntimeStatus(options = {}) {
+  try {
+    const response = await fetch("/api/runtime/services/lifting", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || !applyLiftingServicePayload(payload)) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    return payload;
+  } catch (error) {
+    if (!options.silent) {
+      setLiftingRuntime("error");
+      addLog("升降轴", `升降轴状态查询失败：${error.message}`);
+    }
+    return null;
+  }
+}
+
+async function fetchLiftingLimits() {
+  try {
+    const response = await fetch("/api/control/lifting/limits", { cache: "no-store" });
+    const payload = await response.json();
+    if (response.ok && payload && payload.limits) {
+      state.liftingState.limits = payload.limits;
+      renderLiftPreview();
+    }
+    return payload;
+  } catch (error) {
+    addLog("升降轴", `升降轴限位读取失败：${error.message}`);
+    return null;
+  }
+}
+
+async function requestLiftingRuntimeAction(action) {
+  const nextStatus = action === "stop" ? "stopping" : "starting";
+  setLiftingRuntime(nextStatus);
+  addLog("升降轴", action === "stop" ? "请求清理升降轴 ROS" : "请求启动升降轴服务");
+  try {
+    const response = await fetch(`/api/runtime/services/lifting/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const payload = await response.json();
+    applyLiftingServicePayload(payload);
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    addLog("升降轴", `升降轴服务动作完成：${payload.code}`);
+    return payload;
+  } catch (error) {
+    setLiftingRuntime("error");
+    addLog("升降轴", `升降轴服务动作失败：${error.message}`);
+    return null;
+  } finally {
+    window.setTimeout(() => fetchLiftingRuntimeStatus({ silent: true }), 800);
+  }
+}
+
+function toggleLiftingRuntime() {
+  if (state.liftingRuntime.status === "starting" || state.liftingRuntime.status === "stopping") return;
+  if (state.liftingRuntime.status === "running" || state.liftingRuntime.status === "external") {
+    requestLiftingControl("stop", {}, { source: "关闭升降轴" }).finally(() => requestLiftingRuntimeAction("stop"));
+    return;
+  }
+  requestLiftingRuntimeAction("start");
+}
+
+function applyLiftingStatePayload(payload) {
+  if (!payload || !payload.ok) {
+    state.liftingState.ok = false;
+    state.liftingState.code = payload && payload.code ? payload.code : "ROS-R-ERROR";
+    state.liftingState.detail = payload && payload.detail ? payload.detail : "升降轴反馈读取失败。";
+    state.liftingState.heightM = null;
+    state.liftingState.targetHeightM = null;
+    state.liftingState.backSpeedMps = null;
+    state.liftingState.voltage = null;
+    state.liftingState.current = null;
+    state.liftingState.runState = false;
+    state.liftingState.reachTarget = false;
+    state.liftingState.fpsError = null;
+    state.liftingState.initState = false;
+    state.liftingState.upLimit = false;
+    state.liftingState.downLimit = false;
+    state.liftingState.ageMs = payload && payload.ageMs !== undefined ? payload.ageMs : null;
+    state.liftingState.stale = true;
+    renderLiftPreview();
+    return;
+  }
+
+  const data = payload.data || {};
+  const backHeight = Number(data.back_height);
+  const targetHeight = Number(data.target_height);
+  const backSpeed = Number(data.back_speed);
+  const voltage = Number(data.back_vol);
+  const current = Number(data.back_current);
+  const fpsError = Number(data.fps_error);
+  state.liftingState.ok = Number.isFinite(backHeight);
+  state.liftingState.code = state.liftingState.ok ? payload.code || "ROS-R-OK" : "ROS-R-NODATA";
+  state.liftingState.detail = payload.detail || "";
+  state.liftingState.heightM = Number.isFinite(backHeight) ? backHeight / 1000 : null;
+  state.liftingState.targetHeightM = Number.isFinite(targetHeight) ? targetHeight / 1000 : null;
+  state.liftingState.backSpeedMps = Number.isFinite(backSpeed) ? backSpeed / 1000 : null;
+  state.liftingState.voltage = Number.isFinite(voltage) ? voltage : null;
+  state.liftingState.current = Number.isFinite(current) ? current : null;
+  state.liftingState.runState = Boolean(data.run_state);
+  state.liftingState.reachTarget = Boolean(data.reach_target_pos);
+  state.liftingState.fpsError = Number.isFinite(fpsError) ? fpsError : null;
+  state.liftingState.initState = Boolean(data.init_state);
+  state.liftingState.upLimit = Boolean(data.up_limit);
+  state.liftingState.downLimit = Boolean(data.down_limit);
+  state.liftingState.ageMs = Number.isFinite(Number(payload.ageMs)) ? Number(payload.ageMs) : null;
+  state.liftingState.stale = Boolean(payload.stale);
+  state.liftingState.receivedAt = payload.receivedAt || null;
+  state.liftingState.topic = payload.topic || "";
+  renderLiftPreview();
+}
+
+async function fetchLiftingMotorState() {
+  try {
+    const response = await fetch(`/api/ros/topics/${liftingTopicKey}?wait=0.1`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok && !payload.code) {
+      payload.ok = false;
+      payload.code = `HTTP-${response.status}`;
+      payload.detail = `HTTP ${response.status}`;
+    }
+    applyLiftingStatePayload(payload);
+    return payload;
+  } catch (error) {
+    applyLiftingStatePayload({
+      ok: false,
+      code: "ROS-R-FETCH",
+      detail: error.message,
+    });
+    return null;
+  }
+}
+
+async function requestLiftingControl(action, payload = {}, options = {}) {
+  if (!liftingReady() && action !== "stop") {
+    addLog("升降轴", "升降轴服务未启动，指令未发送");
+    renderLiftPreview();
+    return null;
+  }
+  if (action === "height" && !liftingInitialized()) {
+    addLog("升降轴", "升降轴未完成初始化，目标高度未发送");
+    renderLiftPreview();
+    return null;
+  }
+  try {
+    const response = await fetch(`/api/control/lifting/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.detail || `HTTP ${response.status}`);
+    }
+    state.liftPreview.mode = options.mode || "已下发";
+    addLog("升降轴", `${options.source || action}：${result.code}`);
+    window.setTimeout(fetchLiftingMotorState, 250);
+    renderLiftPreview();
+    return result;
+  } catch (error) {
+    state.liftPreview.mode = "指令失败";
+    addLog("升降轴", `${options.source || action}失败：${error.message}`);
+    renderLiftPreview();
+    return null;
+  }
+}
+
+function commandLiftHeight(source = "执行目标高度") {
+  return requestLiftingControl(
+    "height",
+    { heightM: state.liftPreview.height },
+    { source, mode: "执行目标" },
+  );
+}
+
+function commandLiftRelative(direction) {
+  if (!liftingInitialized()) {
+    addLog("升降轴", "升降轴未完成初始化，相对移动未发送");
+    renderLiftPreview();
+    return null;
+  }
+  const actualHeight = Number(state.liftingState.heightM);
+  if (!Number.isFinite(actualHeight)) {
+    addLog("升降轴", "升降轴实际高度不可用，相对移动未发送");
+    renderLiftPreview();
+    return null;
+  }
+  const limits = state.liftingState.limits || {};
+  const minHeight = Number.isFinite(Number(limits.minHeightM)) ? Number(limits.minHeightM) : liftPreviewLimits.min;
+  const maxHeight = Number.isFinite(Number(limits.maxHeightM)) ? Number(limits.maxHeightM) : liftPreviewLimits.max;
+  const stepMm = direction === "up" ? Number(state.liftPreview.stepUpMm) : Number(state.liftPreview.stepDownMm);
+  const signedDeltaM = (direction === "up" ? 1 : -1) * (stepMm / 1000.0);
+  state.liftPreview.height = clamp(actualHeight + signedDeltaM, minHeight, maxHeight);
+  state.liftPreview.mode = direction === "up" ? `上升 ${Math.round(stepMm)} mm` : `下降 ${Math.round(stepMm)} mm`;
+  renderLiftPreview();
+  return commandLiftHeight(state.liftPreview.mode);
+}
+
 function applyPiperJointPayload(side, payload) {
   const feedback = state.piperJoints[side];
   if (!feedback) return;
@@ -1877,10 +2358,17 @@ function bindEvents() {
   $("#rerunProblemChecksButton").addEventListener("click", rerunProblemChecks);
   $("#canStatus").addEventListener("click", () => activateCanInterface(currentCanCheckResult(), { confirm: false }));
   $("#piperRuntimeStatus").addEventListener("click", togglePiperRuntime);
+  $("#liftingRuntimeStatus").addEventListener("click", toggleLiftingRuntime);
   $("#armCompareList").addEventListener("input", (event) => {
     const input = event.target.closest("[data-action-kind]");
     if (!input) return;
-    updateArmActionFromInput(input);
+    updateArmActionFromInput(input, { render: false });
+  });
+  $("#armCompareList").addEventListener("change", (event) => {
+    const input = event.target.closest("[data-action-kind]");
+    if (!input) return;
+    updateArmActionFromInput(input, { render: false });
+    renderArmComparisons({ force: true });
   });
   $("#copyAllArmStateButton").addEventListener("click", copyAllStatesToActions);
   $("#armControlToggleButton").addEventListener("click", toggleArmDirectControl);
@@ -1922,6 +2410,9 @@ function bindEvents() {
       }
       if (action === "device-control") {
         showView("device-control");
+      }
+      if (action === "platform-control") {
+        showView("platform-control");
       }
     });
   });
@@ -1965,7 +2456,13 @@ function bindEvents() {
   });
 
   $$("[data-device-stop]").forEach((button) => {
-    button.addEventListener("click", () => addLog("系统", `设备停止：${button.dataset.deviceStop}`));
+    button.addEventListener("click", () => {
+      if (button.dataset.deviceStop === "lift") {
+        requestLiftingControl("stop", {}, { source: "停止升降轴", mode: "停止" });
+        return;
+      }
+      addLog("系统", `设备停止：${button.dataset.deviceStop}`);
+    });
   });
 
   $("#deviceBaseControlPanel").addEventListener("input", (event) => {
@@ -1975,8 +2472,63 @@ function bindEvents() {
     if (!item) return;
     item.value = Number(input.value);
     $(`#basePreview${item.key}`).textContent = `${item.value.toFixed(2)} ${item.unit}`;
+    renderDeviceBaseMetrics();
   });
 
+  $("#liftControlPanel").addEventListener("input", (event) => {
+    const input = event.target.closest("[data-lift-control]");
+    const stepInput = event.target.closest("[data-lift-step]");
+    if (!input && !stepInput) return;
+    if (stepInput) {
+      const value = Number(stepInput.value);
+      if (!Number.isFinite(value)) return;
+      if (stepInput.dataset.liftStep === "up") state.liftPreview.stepUpMm = value;
+      if (stepInput.dataset.liftStep === "down") state.liftPreview.stepDownMm = value;
+      renderLiftPreview();
+      return;
+    }
+    const value = Number(input.value);
+    if (!Number.isFinite(value)) return;
+    if (input.dataset.liftControl === "height") {
+      state.liftPreview.height = value;
+      state.liftPreview.mode = "目标高度";
+    }
+    if (input.dataset.liftControl === "speed") {
+      state.liftPreview.speed = value;
+      state.liftPreview.mode = "速度已设置";
+    }
+    renderLiftPreview();
+  });
+
+  $$("[data-lift-move]").forEach((button) => {
+    button.addEventListener("click", () => {
+      commandLiftRelative(button.dataset.liftMove);
+    });
+  });
+
+  $$("[data-lift-preset]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const preset = Number(button.dataset.liftPreset);
+      if (!Number.isFinite(preset)) return;
+      state.liftPreview.height = preset;
+      state.liftPreview.mode = `${button.textContent.trim()}目标`;
+      renderLiftPreview();
+      addLog("升降轴", `目标高度切换到 ${button.textContent.trim()}`);
+    });
+  });
+
+  const liftApplyHeightButton = $("#liftApplyHeightButton");
+  if (liftApplyHeightButton) {
+    liftApplyHeightButton.addEventListener("click", () => {
+      commandLiftHeight("执行升降轴目标高度");
+    });
+  }
+  const liftInitButton = $("#liftInitButton");
+  if (liftInitButton) {
+    liftInitButton.addEventListener("click", () => {
+      requestLiftingControl("init", {}, { source: "初始化升降轴", mode: "初始化/置零" });
+    });
+  }
   $("#logFilters").addEventListener("click", (event) => {
     const button = event.target.closest("[data-log-filter]");
     if (!button) return;
@@ -1987,6 +2539,8 @@ function bindEvents() {
 }
 
 function init() {
+  const activePanel = $(".view.is-active");
+  document.body.dataset.activeView = activePanel ? activePanel.dataset.viewPanel : "self-check";
   bindEvents();
   renderHealth();
   renderSelfCheck();
@@ -1999,6 +2553,7 @@ function init() {
   renderDeviceBaseMetrics();
   renderDeviceControls();
   renderPiperRuntime();
+  renderLiftingRuntime();
   renderHistory();
   renderLogFilters();
   renderActionLocks();
@@ -2009,10 +2564,15 @@ function init() {
   addLog("相机", "front_rgb / wrist_rgb 预览占位已生成");
   refreshCanInterfaceStatus({ silent: true });
   fetchPiperRuntimeStatus({ silent: true });
+  fetchLiftingLimits();
+  fetchLiftingRuntimeStatus({ silent: true });
+  fetchLiftingMotorState();
   fetchPiperJointStates();
   syncClock();
   window.setInterval(syncClock, 1000);
   window.setInterval(() => fetchPiperRuntimeStatus({ silent: true }), 3000);
+  window.setInterval(() => fetchLiftingRuntimeStatus({ silent: true }), 3000);
+  window.setInterval(fetchLiftingMotorState, 500);
   window.setInterval(fetchPiperJointStates, 250);
 }
 

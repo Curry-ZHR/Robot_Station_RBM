@@ -112,6 +112,14 @@ READ_TOPICS = {
         stale_after_sec=0.5,
         description="Right Piper node status feedback.",
     ),
+    "lifting_motor_state": TopicReadSpec(
+        key="lifting_motor_state",
+        name="Lifting motor state",
+        topic="/LiftMotorStatePub",
+        message_type="lifting_msg_pkg/msg/LiftMotorMsg",
+        stale_after_sec=0.8,
+        description="Lifting axis motor state feedback.",
+    ),
 }
 
 

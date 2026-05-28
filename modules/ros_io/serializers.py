@@ -24,6 +24,24 @@ def import_message_class(message_type):
         raise RosMessageImportError(f"Cannot find ROS message class {message_type}") from exc
 
 
+def import_service_class(service_type):
+    parts = str(service_type).split("/")
+    if len(parts) != 3 or parts[1] != "srv":
+        raise RosMessageImportError(f"Unsupported ROS service type: {service_type}")
+
+    package, _, class_name = parts
+    module_name = f"{package}.srv"
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise RosMessageImportError(f"Cannot import ROS service module {module_name}: {exc}") from exc
+
+    try:
+        return getattr(module, class_name)
+    except AttributeError as exc:
+        raise RosMessageImportError(f"Cannot find ROS service class {service_type}") from exc
+
+
 def message_to_plain(value):
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
@@ -39,4 +57,3 @@ def message_to_plain(value):
             for field in value.get_fields_and_field_types()
         }
     return str(value)
-

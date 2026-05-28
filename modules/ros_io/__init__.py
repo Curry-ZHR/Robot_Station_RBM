@@ -18,6 +18,9 @@ def get_ros_writer():
     return _writer
 
 
+def get_ros_runtime():
+    return _runtime
+
+
 def shutdown_ros_io():
     _runtime.shutdown()
-

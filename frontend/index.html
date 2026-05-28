@@ -19,7 +19,8 @@
 
         <nav class="nav-list">
           <button class="nav-item is-active" data-view="self-check">自检</button>
-          <button class="nav-item" data-view="device-control">设备控制</button>
+          <button class="nav-item" data-view="device-control">双臂控制</button>
+          <button class="nav-item" data-view="platform-control">平台控制</button>
           <button class="nav-item" data-view="sensors">传感器</button>
           <button class="nav-item" data-view="control">中控</button>
           <button class="nav-item" data-view="homing">归位</button>
@@ -43,6 +44,10 @@
             </button>
             <button class="status-switch" id="piperRuntimeStatus" type="button" title="启动或关闭 Piper">
               <span>Piper</span>
+              <i aria-hidden="true"></i>
+            </button>
+            <button class="status-switch is-idle" id="liftingRuntimeStatus" type="button" aria-pressed="false" title="启动或关闭升降轴">
+              <span>升降轴</span>
               <i aria-hidden="true"></i>
             </button>
             <span class="status-pill ok" id="estopStatus">急停释放</span>
@@ -77,7 +82,7 @@
               <div class="safety-strip">
                 <div>
                   <span class="strip-label">安全状态</span>
-                  <strong id="safetySummary">可操作，设备控制仅本地预览</strong>
+                  <strong id="safetySummary">可操作，控制界面仅本地预览</strong>
                 </div>
                 <div>
                   <span class="strip-label">速度限制</span>
@@ -152,8 +157,12 @@
                     <strong>加载模型并进入运行</strong>
                   </button>
                   <button class="action-tile" data-action="device-control">
-                    <span>打开设备控制</span>
-                    <strong>双臂、夹爪、底盘状态与低速预览</strong>
+                    <span>打开双臂控制</span>
+                    <strong>双臂、夹爪 State / Action 低速预览</strong>
+                  </button>
+                  <button class="action-tile" data-action="platform-control">
+                    <span>打开平台控制</span>
+                    <strong>移动底座与升降轴本地预览</strong>
                   </button>
                 </div>
               </section>
@@ -184,65 +193,211 @@
               </div>
             </section>
 
-            <section class="view" data-view-panel="device-control">
-              <div class="page-head compact">
+            <section class="view device-control-view" data-view-panel="device-control">
+              <div class="page-head compact device-page-head">
                 <div>
-                  <p class="eyebrow">设备控制</p>
-                  <h1>状态与低速预览</h1>
+                  <p class="eyebrow">双臂控制</p>
+                  <h1>机械臂操作台</h1>
                 </div>
-                <div class="button-group device-page-actions">
-                  <label class="joint-speed-control" for="jointSpeedInput">
-                    <span>关节速度</span>
-                    <input id="jointSpeedInput" type="number" min="0.5" max="30" step="0.5" value="10" inputmode="decimal">
-                    <small>deg/s</small>
-                  </label>
-                  <button class="secondary-button copy-state-button" id="copyAllArmStateButton" type="button" disabled>复制 State</button>
-                  <button class="primary-button control-toggle-button" id="armControlToggleButton" type="button" disabled>接管控制</button>
-                  <button class="secondary-button arm-home-button" id="armHomeButton" type="button">归位</button>
+                <div class="device-view-status">
+                  <strong>左臂 / 右臂 / 夹爪</strong>
                 </div>
               </div>
 
-              <div class="device-control-grid">
-                <article class="panel device-card arm-compare-card">
+              <div class="device-control-grid arm-control-grid">
+                <article class="panel device-card arm-compare-card device-zone-arm arm-wide-card">
                   <div class="panel-head">
                     <div>
-                      <h2>机械臂</h2>
-                      <p>State / Action 同栏对比</p>
+                      <h2>双臂协作</h2>
+                      <p>左臂、右臂 State / Action 对照</p>
                     </div>
                     <div class="arm-global-controls">
                       <span class="state-badge idle" id="armCompareBadge">等待反馈</span>
                     </div>
                   </div>
+                  <div class="arm-toolbar">
+                    <label class="joint-speed-control" for="jointSpeedInput">
+                      <span>关节速度</span>
+                      <input id="jointSpeedInput" type="number" min="0.5" max="30" step="0.5" value="10" inputmode="decimal">
+                      <small>deg/s</small>
+                    </label>
+                    <button class="secondary-button copy-state-button" id="copyAllArmStateButton" type="button" disabled>复制 State</button>
+                    <button class="primary-button control-toggle-button" id="armControlToggleButton" type="button" disabled>接管控制</button>
+                    <button class="secondary-button arm-home-button" id="armHomeButton" type="button">归位</button>
+                  </div>
                   <div class="arm-compare-list" id="armCompareList"></div>
                 </article>
+              </div>
+            </section>
 
-                <article class="panel device-card base-device-card">
+            <section class="view platform-control-view" data-view-panel="platform-control">
+              <div class="page-head compact platform-page-head">
+                <div>
+                  <p class="eyebrow">平台控制</p>
+                  <h1>底座与升降轴</h1>
+                </div>
+                <div class="device-view-status">
+                  <strong>移动底座 / 升降轴状态</strong>
+                </div>
+              </div>
+
+              <div class="platform-control-grid" id="liftControlPanel">
+                <article class="panel platform-sensing-card">
                   <div class="panel-head">
                     <div>
-                      <h2>底盘</h2>
-                      <p>连接、里程计、低速点动</p>
+                      <h2>状态感知</h2>
+                      <p>移动底座数据与升降轴高度</p>
                     </div>
-                    <span class="state-badge danger">未实现</span>
+                    <span class="state-badge idle" id="liftStateBadge">等待反馈</span>
                   </div>
-                  <div class="device-status-line">
-                    <span>连接</span><strong class="status-text danger">未实现</strong>
-                    <span>里程计</span><strong class="status-text danger">未实现</strong>
+
+                  <div class="platform-sensing-stack">
+                    <section class="platform-sensing-section device-zone-base">
+                      <div class="section-title compact-title">
+                        <h2>移动底座</h2>
+                        <span>状态与速度预览</span>
+                      </div>
+                      <div class="device-status-line">
+                        <span>控制</span><strong class="status-text idle">本地预览</strong>
+                        <span>里程计</span><strong class="status-text idle">未接入</strong>
+                      </div>
+                      <div class="metric-grid" id="deviceBaseMetrics"></div>
+                    </section>
+
+                    <section class="platform-sensing-section device-zone-lift">
+                      <div class="section-title compact-title">
+                        <h2>升降轴 State</h2>
+                        <span>ROS 反馈高度与状态</span>
+                      </div>
+                      <div class="lift-state-panel">
+                        <div class="lift-state-primary">
+                          <span>实际高度</span>
+                          <strong id="liftActualHeightValue">--</strong>
+                          <small id="liftActualValue">等待反馈</small>
+                        </div>
+                        <div class="lift-state-grid">
+                          <div class="lift-state-metric">
+                            <span>驱动目标</span>
+                            <strong id="liftStateTargetValue">--</strong>
+                          </div>
+                          <div class="lift-state-metric">
+                            <span>反馈速度</span>
+                            <strong id="liftBackSpeedValue">--</strong>
+                          </div>
+                          <div class="lift-state-metric">
+                            <span>电源 / 电流</span>
+                            <strong id="liftPowerValue">--</strong>
+                          </div>
+                          <div class="lift-state-metric">
+                            <span>到位</span>
+                            <strong id="liftReachValue">--</strong>
+                          </div>
+                        </div>
+                        <div class="device-status-line lift-state-line">
+                          <span>服务</span><strong class="status-text idle" id="liftServiceText">未启动</strong>
+                          <span>反馈</span><strong class="status-text idle" id="liftFeedbackText">未启动</strong>
+                          <span>初始化</span><strong class="status-text warn" id="liftInitText">未完成</strong>
+                          <span>限位</span><strong class="status-text ok" id="liftLimitText">正常</strong>
+                        </div>
+                      </div>
+                    </section>
                   </div>
-                  <div class="metric-grid" id="deviceBaseMetrics"></div>
-                  <div class="drive-pad compact-drive-pad">
-                    <span></span>
-                    <button data-device-drive="forward">前进</button>
-                    <span></span>
-                    <button data-device-drive="left">左转</button>
-                    <button data-device-drive="stop">停止</button>
-                    <button data-device-drive="right">右转</button>
-                    <span></span>
-                    <button data-device-drive="backward">后退</button>
-                    <span></span>
+                </article>
+
+                <article class="panel platform-remote-card">
+                  <div class="panel-head">
+                    <div>
+                      <h2>集中操作</h2>
+                      <p>固定宽度遥控面板</p>
+                    </div>
+                    <span class="state-badge idle">本地预览</span>
                   </div>
-                  <div class="base-control-panel" id="deviceBaseControlPanel"></div>
-                  <div class="device-card-actions">
-                    <button class="icon-button stop" data-device-stop="base">停止底盘</button>
+
+                  <div class="platform-remote-body">
+                    <section class="remote-section">
+                      <div class="section-title compact-title">
+                        <h2>移动底座</h2>
+                        <span>方向与速度</span>
+                      </div>
+                      <div class="drive-pad compact-drive-pad">
+                        <span></span>
+                        <button data-device-drive="forward" title="前进" aria-label="前进">↑</button>
+                        <span></span>
+                        <button data-device-drive="left" title="左转" aria-label="左转">↺</button>
+                        <button data-device-drive="stop" title="停止" aria-label="停止">●</button>
+                        <button data-device-drive="right" title="右转" aria-label="右转">↻</button>
+                        <span></span>
+                        <button data-device-drive="backward" title="后退" aria-label="后退">↓</button>
+                        <span></span>
+                      </div>
+                      <div class="base-control-panel" id="deviceBaseControlPanel"></div>
+                    </section>
+
+                    <section class="remote-section">
+                      <div class="section-title compact-title">
+                        <h2>升降轴 Action</h2>
+                        <span>目标高度与动作</span>
+                      </div>
+                      <div class="lift-action-panel">
+                        <div class="lift-action-target">
+                          <div class="lift-height-summary">
+                            <span>目标高度</span>
+                            <strong id="liftHeightValue">0.42 m</strong>
+                            <small><span id="liftMinLabel">0.05 m</span> - <span id="liftMaxLabel">0.88 m</span></small>
+                            <small id="liftModeValue">等待初始化</small>
+                          </div>
+                          <label class="slider-row lift-slider-row lift-height-action-row">
+                            <span>Action</span>
+                            <input
+                              id="liftHeightInput"
+                              type="range"
+                              min="0.05"
+                              max="0.88"
+                              step="0.01"
+                              value="0.42"
+                              data-lift-control="height"
+                              aria-label="升降轴目标高度"
+                            />
+                            <strong id="liftHeightPreview">0.42 m</strong>
+                          </label>
+                        </div>
+
+                        <div class="lift-action-controls">
+                          <button class="primary-button" id="liftApplyHeightButton" type="button">执行目标</button>
+                          <button class="secondary-button" id="liftInitButton" type="button">初始化</button>
+                          <button class="icon-button stop lift-stop-button" id="liftStopButton" type="button" data-device-stop="lift">停止</button>
+                        </div>
+
+                        <div class="lift-speed-panel">
+                          <label class="slider-row lift-slider-row">
+                            <span>速度</span>
+                            <small>0.02 m/s</small>
+                            <input id="liftSpeedInput" type="range" min="0.02" max="0.16" step="0.01" value="0.08" data-lift-control="speed" />
+                            <small>0.16 m/s</small>
+                            <strong id="liftSpeedPreview">0.08 m/s</strong>
+                          </label>
+                        </div>
+                        <div class="lift-ops-grid">
+                          <div class="lift-presets" aria-label="升降轴预设高度">
+                            <button data-lift-preset="0.18">低位</button>
+                            <button data-lift-preset="0.42">作业</button>
+                            <button data-lift-preset="0.72">高位</button>
+                          </div>
+                          <div class="lift-relative-panel" aria-label="升降轴相对移动">
+                            <label class="lift-step-row">
+                              <button class="lift-step-button up" type="button" data-lift-move="up">↑ 上升</button>
+                              <input id="liftStepUpInput" type="number" min="1" max="750" step="1" value="50" inputmode="numeric" data-lift-step="up" aria-label="上升距离" />
+                              <span>mm</span>
+                            </label>
+                            <label class="lift-step-row">
+                              <button class="lift-step-button down" type="button" data-lift-move="down">↓ 下降</button>
+                              <input id="liftStepDownInput" type="number" min="1" max="750" step="1" value="50" inputmode="numeric" data-lift-step="down" aria-label="下降距离" />
+                              <span>mm</span>
+                            </label>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
                   </div>
                 </article>
               </div>

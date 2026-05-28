@@ -1,7 +1,7 @@
 import threading
 
 from modules.logger import get_logger
-from modules.ros_io.serializers import import_message_class
+from modules.ros_io.serializers import import_message_class, import_service_class
 
 
 LOGGER = get_logger()
@@ -22,6 +22,7 @@ class RosRuntime:
         self._owns_context = False
         self._subscriptions = {}
         self._publishers = {}
+        self._clients = {}
 
     def _import_rclpy(self):
         if self._rclpy is not None:
@@ -95,6 +96,35 @@ class RosRuntime:
             LOGGER.info("ROS publisher registered: %s -> %s", key, topic)
             return publisher
 
+    def get_client(self, key, service_type, service_name):
+        with self._lock:
+            if key in self._clients:
+                return self._clients[key]
+            service_class = import_service_class(service_type)
+            self.ensure_started()
+            client = self._node.create_client(service_class, service_name)
+            self._clients[key] = client
+            LOGGER.info("ROS service client registered: %s -> %s", key, service_name)
+            return client
+
+    def call_service(self, key, service_type, service_name, request, timeout_sec=5.0, wait_timeout_sec=0.2):
+        client = self.get_client(key, service_type, service_name)
+        if not client.wait_for_service(timeout_sec=max(0.0, float(wait_timeout_sec))):
+            raise RosRuntimeError(f"ROS service is not available: {service_name}")
+
+        done = threading.Event()
+        future = client.call_async(request)
+        future.add_done_callback(lambda _: done.set())
+        if not done.wait(max(0.1, float(timeout_sec))):
+            if hasattr(future, "cancel"):
+                future.cancel()
+            raise RosRuntimeError(f"Timed out waiting for ROS service response: {service_name}")
+
+        try:
+            return future.result()
+        except Exception as exc:
+            raise RosRuntimeError(f"ROS service call failed: {service_name}: {exc}") from exc
+
     def shutdown(self):
         with self._lock:
             if self._executor is not None:
@@ -118,4 +148,4 @@ class RosRuntime:
             self._thread = None
             self._subscriptions.clear()
             self._publishers.clear()
-
+            self._clients.clear()
