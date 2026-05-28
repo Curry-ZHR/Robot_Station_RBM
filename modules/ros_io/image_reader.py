@@ -7,6 +7,7 @@ from modules.ros_io.serializers import RosMessageImportError
 
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+JPEG_SIGNATURE = b"\xff\xd8"
 
 
 @dataclass(frozen=True)
@@ -66,11 +67,15 @@ def _result(ok, code, detail, **extra):
     return payload
 
 
-def _content_type_for_format(format_name):
+def _content_type_for_format(format_name, payload=None):
     rendered = str(format_name or "").lower()
     if "png" in rendered:
         return "image/png"
     if "jpeg" in rendered or "jpg" in rendered:
+        return "image/jpeg"
+    if payload and payload.startswith(PNG_SIGNATURE):
+        return "image/png"
+    if payload and payload.startswith(JPEG_SIGNATURE):
         return "image/jpeg"
     return "application/octet-stream"
 
@@ -127,8 +132,10 @@ class CameraImageReader:
         self._runtime = runtime
         self._specs = specs or CAMERA_IMAGE_SPECS
         self._lock = threading.RLock()
+        self._condition = threading.Condition(self._lock)
         self._latest = {}
         self._events = {}
+        self._sequence = {}
         self._subscribed = set()
 
     def list_images(self):
@@ -149,7 +156,7 @@ class CameraImageReader:
             errors=errors,
         )
 
-    def read_frame(self, camera, kind, timeout_sec=0.0):
+    def read_frame(self, camera, kind, timeout_sec=0.0, after_sequence=None):
         spec = self._specs.get(f"{camera}_{kind}")
         if spec is None:
             return _result(False, "CAM-R-UNKNOWN", f"Unknown camera image feed: {camera}/{kind}.")
@@ -158,11 +165,20 @@ class CameraImageReader:
         if not subscribe_result["ok"]:
             return subscribe_result
 
-        event = self._events[spec.key]
-        if timeout_sec and timeout_sec > 0:
-            event.wait(timeout_sec)
-
+        deadline = time.monotonic() + timeout_sec if timeout_sec and timeout_sec > 0 else None
         with self._lock:
+            while True:
+                latest = self._latest.get(spec.key)
+                sequence = latest.get("sequence") if latest else None
+                if latest is not None and (after_sequence is None or sequence != after_sequence):
+                    break
+                if deadline is None:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._condition.wait(remaining)
+
             latest = self._latest.get(spec.key)
         if latest is None:
             return _result(False, "CAM-R-NODATA", f"No image received from {spec.topic}.", feed=spec.to_dict())
@@ -181,6 +197,7 @@ class CameraImageReader:
             stale=age_ms > int(spec.stale_after_sec * 1000),
             receivedAt=latest["received_at"],
             format=latest["format"],
+            sequence=latest["sequence"],
         )
 
     def _feed_status(self, spec):
@@ -203,6 +220,7 @@ class CameraImageReader:
             "ageMs": age_ms,
             "receivedAt": latest["received_at"],
             "format": latest["format"],
+            "sequence": latest["sequence"],
         }
 
     def _render_frame(self, spec, latest):
@@ -210,7 +228,7 @@ class CameraImageReader:
             visualized = _visualize_compressed_depth(latest["data"])
             if visualized is not None:
                 return visualized, "image/png", "depth_visualized"
-        return latest["data"], _content_type_for_format(latest["format"]), "compressed"
+        return latest["data"], _content_type_for_format(latest["format"], latest["data"]), "compressed"
 
     def _ensure_subscription(self, spec):
         with self._lock:
@@ -221,13 +239,17 @@ class CameraImageReader:
 
         def callback(message, topic_key=spec.key):
             with self._lock:
+                sequence = self._sequence.get(topic_key, 0) + 1
+                self._sequence[topic_key] = sequence
                 self._latest[topic_key] = {
                     "monotonic": time.monotonic(),
                     "received_at": time.strftime("%H:%M:%S"),
                     "format": str(getattr(message, "format", "")),
                     "data": bytes(getattr(message, "data", b"")),
+                    "sequence": sequence,
                 }
                 self._events[topic_key].set()
+                self._condition.notify_all()
 
         try:
             self._runtime.create_subscription(

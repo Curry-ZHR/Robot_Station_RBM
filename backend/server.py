@@ -3,6 +3,7 @@ import argparse
 import json
 import mimetypes
 import os
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -19,7 +20,13 @@ from modules.control.lifting import (
 from modules.control.piper import publish_joint_targets
 from modules.drivers.can.can_activate import activate_can
 from modules.logger import get_logger, setup_logger
-from modules.ros_io import get_camera_image_reader, get_ros_reader, get_ros_writer, shutdown_ros_io
+from modules.ros_io import (
+    get_camera_image_reader,
+    get_lidar_point_cloud_reader,
+    get_ros_reader,
+    get_ros_writer,
+    shutdown_ros_io,
+)
 from modules.runtime import get_service_manager, shutdown_services
 from modules.self_check.can_check.can_status import check_can_interface
 from modules.self_check.disk_check.disk_space import check_disk_space
@@ -76,6 +83,21 @@ def query_float(query, key, default=0.0, minimum=0.0, maximum=5.0):
     return max(minimum, min(maximum, value))
 
 
+def query_int(query, key, default=None, minimum=None, maximum=None):
+    values = parse_qs(query).get(key)
+    if not values:
+        return default
+    try:
+        value = int(values[0])
+    except (TypeError, ValueError):
+        return default
+    if minimum is not None:
+        value = max(minimum, value)
+    if maximum is not None:
+        value = min(maximum, value)
+    return value
+
+
 def query_bool(query, key, default=False):
     values = parse_qs(query).get(key)
     if not values:
@@ -127,6 +149,19 @@ def camera_result_status(result):
     return 500
 
 
+def lidar_result_status(result):
+    if result.get("ok"):
+        return 200
+    code = result.get("code", "")
+    if code.endswith("UNKNOWN"):
+        return 404
+    if code.endswith("NODATA"):
+        return 200
+    if code.endswith("UNAVAILABLE"):
+        return 503
+    return 500
+
+
 class RobotStationHandler(SimpleHTTPRequestHandler):
     server_version = "RobotStationHTTP/0.1"
 
@@ -156,9 +191,14 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 self.write_json(result, status=camera_result_status(result))
                 return
             parts = [part for part in camera_tail.split("/") if part]
+            if len(parts) == 3 and parts[2] == "stream":
+                fps = query_float(parsed.query, "fps", default=8.0, minimum=1.0, maximum=15.0)
+                self.write_camera_stream(reader, parts[0], parts[1], fps=fps)
+                return
             if len(parts) == 3 and parts[2] == "frame":
                 wait_sec = query_float(parsed.query, "wait", default=0.0, minimum=0.0, maximum=2.0)
-                result = reader.read_frame(parts[0], parts[1], timeout_sec=wait_sec)
+                after_sequence = query_int(parsed.query, "after", default=None, minimum=0)
+                result = reader.read_frame(parts[0], parts[1], timeout_sec=wait_sec, after_sequence=after_sequence)
                 if not result.get("ok"):
                     self.write_json(result, status=camera_result_status(result))
                     return
@@ -169,6 +209,7 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                         "X-Robot-Station-Frame-Age-Ms": str(result.get("ageMs", "")),
                         "X-Robot-Station-Frame-Stale": "1" if result.get("stale") else "0",
                         "X-Robot-Station-Render-Mode": str(result.get("renderMode", "")),
+                        "X-Robot-Station-Frame-Sequence": str(result.get("sequence", "")),
                     },
                 )
                 return
@@ -176,7 +217,52 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 {
                     "ok": False,
                     "code": "CAM-R-UNKNOWN",
-                    "detail": "Camera image path must be /api/sensors/cameras or /api/sensors/cameras/<camera>/<kind>/frame.",
+                    "detail": "Camera image path must be /api/sensors/cameras, /api/sensors/cameras/<camera>/<kind>/frame, or /api/sensors/cameras/<camera>/<kind>/stream.",
+                },
+                status=404,
+            )
+            return
+        lidar_tail = api_tail(parsed.path, "/api/sensors/lidar")
+        if lidar_tail is not None:
+            reader = get_lidar_point_cloud_reader()
+            if not lidar_tail:
+                result = reader.list_clouds()
+                self.write_json(result, status=lidar_result_status(result))
+                return
+            parts = [part for part in lidar_tail.split("/") if part]
+            if len(parts) == 2 and parts[1] == "frame":
+                wait_sec = query_float(parsed.query, "wait", default=0.0, minimum=0.0, maximum=2.0)
+                after_sequence = query_int(parsed.query, "after", default=None, minimum=0)
+                max_points = query_int(parsed.query, "max_points", default=None, minimum=1000, maximum=120000)
+                result = reader.read_frame(
+                    parts[0],
+                    timeout_sec=wait_sec,
+                    after_sequence=after_sequence,
+                    max_points=max_points,
+                )
+                if not result.get("ok"):
+                    self.write_json(result, status=lidar_result_status(result))
+                    return
+                self.write_binary(
+                    result["body"],
+                    result["contentType"],
+                    headers={
+                        "X-Robot-Station-PointCloud-Age-Ms": str(result.get("ageMs", "")),
+                        "X-Robot-Station-PointCloud-Stale": "1" if result.get("stale") else "0",
+                        "X-Robot-Station-PointCloud-Sequence": str(result.get("sequence", "")),
+                        "X-Robot-Station-PointCloud-Point-Count": str(result.get("pointCount", "")),
+                        "X-Robot-Station-PointCloud-Source-Point-Count": str(result.get("sourcePointCount", "")),
+                        "X-Robot-Station-PointCloud-Stride-Floats": str(result.get("strideFloats", "")),
+                        "X-Robot-Station-PointCloud-Frame-Id": str(result.get("frameId", "")),
+                        "X-Robot-Station-PointCloud-Fields": ",".join(result.get("fields", [])),
+                    },
+                )
+                return
+            self.write_json(
+                {
+                    "ok": False,
+                    "code": "LDR-R-UNKNOWN",
+                    "detail": "LiDAR point cloud path must be /api/sensors/lidar or /api/sensors/lidar/<cloud>/frame.",
                 },
                 status=404,
             )
@@ -348,6 +434,60 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
+
+    def write_camera_stream(self, reader, camera, kind, fps=8.0):
+        result = reader.read_frame(camera, kind, timeout_sec=2.0)
+        if not result.get("ok"):
+            self.write_json(result, status=camera_result_status(result))
+            return
+
+        boundary = "robotstationframe"
+        min_interval = 1.0 / max(1.0, fps)
+        self.send_response(200)
+        self.send_header("Content-Type", f"multipart/x-mixed-replace; boundary={boundary}")
+        self.send_header("Connection", "close")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        last_sequence = None
+        last_sent_at = 0.0
+        while True:
+            if not result.get("ok"):
+                time.sleep(0.2)
+                result = reader.read_frame(camera, kind, timeout_sec=2.0, after_sequence=last_sequence)
+                continue
+
+            sequence = result.get("sequence")
+            if sequence != last_sequence:
+                delay = min_interval - (time.monotonic() - last_sent_at)
+                if delay > 0:
+                    time.sleep(delay)
+                try:
+                    self.write_multipart_frame(boundary, result)
+                except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                    return
+                last_sequence = sequence
+                last_sent_at = time.monotonic()
+
+            result = reader.read_frame(camera, kind, timeout_sec=2.0, after_sequence=last_sequence)
+
+    def write_multipart_frame(self, boundary, result):
+        body = result["body"]
+        header = (
+            f"--{boundary}\r\n"
+            f"Content-Type: {result['contentType']}\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            f"X-Robot-Station-Frame-Age-Ms: {result.get('ageMs', '')}\r\n"
+            f"X-Robot-Station-Frame-Stale: {'1' if result.get('stale') else '0'}\r\n"
+            f"X-Robot-Station-Render-Mode: {result.get('renderMode', '')}\r\n"
+            f"X-Robot-Station-Frame-Sequence: {result.get('sequence', '')}\r\n"
+            "\r\n"
+        ).encode("ascii")
+        self.wfile.write(header)
+        self.wfile.write(body)
+        self.wfile.write(b"\r\n")
+        self.wfile.flush()
 
     def read_json_body(self):
         length = int(self.headers.get("Content-Length", "0") or 0)

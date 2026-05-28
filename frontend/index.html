@@ -547,12 +547,21 @@
                 <article class="panel">
                   <div class="panel-head">
                     <div>
-                      <h2>点云预览</h2>
-                      <p>/scan 10 Hz，/points 8 Hz</p>
+                      <h2>3D 点云</h2>
+                      <p id="lidarCloudTopic">/rslidar_points</p>
                     </div>
-                    <span class="state-badge ok">在线</span>
+                    <span class="state-badge idle" id="lidarCloudStatus">等待点云</span>
                   </div>
-                  <canvas class="lidar-canvas" width="900" height="320" id="lidarCanvas"></canvas>
+                  <div class="lidar-toolbar">
+                    <span><strong id="lidarPointCount">0</strong><small>点</small></span>
+                    <span><strong id="lidarFrameAge">--</strong><small>延迟</small></span>
+                    <span><strong id="lidarFrameRate">--</strong><small>Hz</small></span>
+                    <span><strong id="lidarFrameId">--</strong><small>frame</small></span>
+                  </div>
+                  <div class="lidar-viewer" id="lidarViewer">
+                    <div class="lidar-scene" id="lidarScene"></div>
+                    <div class="lidar-overlay" id="lidarOverlay">等待 /rslidar_points</div>
+                  </div>
                 </article>
               </div>
             </section>
