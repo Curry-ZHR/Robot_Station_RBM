@@ -331,23 +331,23 @@
                         <h2>移动底座</h2>
                         <span>方向与速度</span>
                       </div>
-	                      <div class="drive-pad compact-drive-pad">
-	                        <span></span>
-	                        <button data-device-drive="forward" title="前进" aria-label="前进">↑</button>
-	                        <span></span>
-	                        <button data-device-drive="left" title="左转" aria-label="左转">↺</button>
-                        <button data-device-drive="stop" title="停止" aria-label="停止">●</button>
-                        <button data-device-drive="right" title="右转" aria-label="右转">↻</button>
-                        <span></span>
-	                        <button data-device-drive="backward" title="后退" aria-label="后退">↓</button>
-	                        <span></span>
-	                      </div>
-	                      <div class="base-lateral-pad">
-	                        <button data-device-drive="strafe-left" title="向左横移" aria-label="向左横移">←</button>
-	                        <button data-device-drive="strafe-right" title="向右横移" aria-label="向右横移">→</button>
-	                      </div>
-	                      <div class="base-control-panel" id="deviceBaseControlPanel"></div>
-	                    </section>
+                      <div class="base-drive-cluster">
+                        <button class="base-rotate-button rotate-left" data-device-drive="left" title="左旋" aria-label="左旋">↺</button>
+                        <button class="base-rotate-button rotate-right" data-device-drive="right" title="右旋" aria-label="右旋">↻</button>
+                        <div class="drive-pad compact-drive-pad base-drive-pad">
+                          <span></span>
+                          <button data-device-drive="forward" title="前进" aria-label="前进">↑</button>
+                          <span></span>
+                          <button data-device-drive="strafe-left" title="向左横移" aria-label="向左横移">←</button>
+                          <button data-device-drive="stop" title="停止" aria-label="停止">●</button>
+                          <button data-device-drive="strafe-right" title="向右横移" aria-label="向右横移">→</button>
+                          <span></span>
+                          <button data-device-drive="backward" title="后退" aria-label="后退">↓</button>
+                          <span></span>
+                        </div>
+                      </div>
+                      <div class="base-control-panel" id="deviceBaseControlPanel"></div>
+                    </section>
 
                     <section class="remote-section">
                       <div class="section-title compact-title">
@@ -374,7 +374,19 @@
                               data-lift-control="height"
                               aria-label="升降轴目标高度"
                             />
-                            <strong id="liftHeightPreview">0.42 m</strong>
+                            <span class="number-field lift-height-number">
+                              <input
+                                id="liftHeightNumberInput"
+                                type="number"
+                                min="0.05"
+                                max="0.88"
+                                step="0.01"
+                                value="0.42"
+                                data-lift-control="height"
+                                aria-label="升降轴目标高度数值"
+                              />
+                              <small>m</small>
+                            </span>
                           </label>
                         </div>
 

@@ -330,9 +330,9 @@ const PIPER_JOINT_SPEED_STEP = 0.5;
 const ARM_ACTION_PUBLISH_DEBOUNCE_MS = 60;
 
 const deviceBaseControlItems = [
-  { key: "linear", label: "线速度", value: 0, min: -0.2, max: 0.2, step: 0.01, unit: "m/s" },
-  { key: "lateral", label: "横向速度", value: 0, min: -0.15, max: 0.15, step: 0.01, unit: "m/s" },
-  { key: "angular", label: "角速度", value: 0, min: -0.5, max: 0.5, step: 0.01, unit: "rad/s" },
+  { key: "linear", label: "前向速度", value: 0, min: 0, max: 1, step: 0.01, unit: "", commandMax: 0.2, commandUnit: "m/s" },
+  { key: "lateral", label: "横向速度", value: 0, min: 0, max: 1, step: 0.01, unit: "", commandMax: 0.15, commandUnit: "m/s" },
+  { key: "angular", label: "旋转速度", value: 0, min: 0, max: 1, step: 0.01, unit: "", commandMax: 0.5, commandUnit: "rad/s" },
 ];
 
 const liftPreviewLimits = {
@@ -466,6 +466,24 @@ function setStateBadge(selector, text, level) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function normalizedSpeedValue(item) {
+  if (!item) return 0;
+  const min = Number.isFinite(Number(item.min)) ? Number(item.min) : 0;
+  const max = Number.isFinite(Number(item.max)) ? Number(item.max) : 1;
+  const value = Number(item.value);
+  return Number.isFinite(value) ? clamp(value, min, max) : min;
+}
+
+function speedRiskColor(value) {
+  const percent = clamp(Number(value), 0, 1) * 100;
+  if (percent <= 50) {
+    const mix = percent / 50;
+    return `rgb(${Math.round(22 + 223 * mix)}, ${Math.round(163 - 5 * mix)}, ${Math.round(74 - 63 * mix)})`;
+  }
+  const mix = (percent - 50) / 50;
+  return `rgb(${Math.round(245 - 25 * mix)}, ${Math.round(158 - 120 * mix)}, ${Math.round(11 + 27 * mix)})`;
 }
 
 function normalizeJointSpeedDegS(value) {
@@ -1393,7 +1411,7 @@ function renderDeviceBaseMetrics() {
   });
   node.innerHTML = [
     ["指令", `${command.linearX.toFixed(2)} / ${command.linearY.toFixed(2)} m/s`],
-    ["旋转", `${command.angularZ.toFixed(2)} ${angular.unit}`],
+    ["旋转", `${command.angularZ.toFixed(2)} ${angular.commandUnit}`],
     ["反馈", feedbackLinear === null ? "--" : `${feedbackLinear.toFixed(2)} / ${(feedbackLateral || 0).toFixed(2)} m/s`],
     ["模式", chassisMotionModeText(motionMode)],
     ["角速", feedbackAngular === null ? "--" : `${feedbackAngular.toFixed(2)} rad/s`],
@@ -1537,6 +1555,12 @@ function renderLiftPreview() {
     heightInput.max = maxHeight.toFixed(3);
     if (document.activeElement !== heightInput) heightInput.value = height.toFixed(2);
   }
+  const heightNumberInput = $("#liftHeightNumberInput");
+  if (heightNumberInput) {
+    heightNumberInput.min = minHeight.toFixed(3);
+    heightNumberInput.max = maxHeight.toFixed(3);
+    if (document.activeElement !== heightNumberInput) heightNumberInput.value = height.toFixed(2);
+  }
   const speedInput = $("#liftSpeedInput");
   if (speedInput && document.activeElement !== speedInput) speedInput.value = speed.toFixed(2);
   const stepUpInput = $("#liftStepUpInput");
@@ -1569,7 +1593,7 @@ function renderLiftPreview() {
       button.disabled = serviceDisabled;
     });
   });
-  ["#liftApplyHeightButton", "#liftHeightInput", "[data-lift-preset]", "[data-lift-move]", "[data-lift-step]"].forEach((selector) => {
+  ["#liftApplyHeightButton", "#liftHeightInput", "#liftHeightNumberInput", "[data-lift-preset]", "[data-lift-move]", "[data-lift-step]"].forEach((selector) => {
     $$(selector).forEach((button) => {
       button.disabled = actionDisabled;
     });
@@ -1582,24 +1606,28 @@ function renderDeviceControls() {
   const baseNode = $("#deviceBaseControlPanel");
   if (baseNode) {
     baseNode.innerHTML = deviceBaseControlItems
-      .map(
-        (item) => `
-          <label class="slider-row base-slider-row">
+      .map((item) => {
+        const value = normalizedSpeedValue(item);
+        const percent = clamp(value, 0, 1) * 100;
+        const color = speedRiskColor(value);
+        return `
+          <label class="slider-row base-slider-row base-speed-row" style="--speed-risk: ${percent}%; --speed-color: ${color};">
             <span>${item.label}</span>
-            <small>${item.min} ${item.unit}</small>
+            <small>${item.min}</small>
             <input
               type="range"
               min="${item.min}"
               max="${item.max}"
               step="${item.step}"
-              value="${item.value}"
+              value="${value.toFixed(2)}"
               data-base-control="${item.key}"
+              aria-label="${item.label}"
             />
-            <small>${item.max} ${item.unit}</small>
-            <strong id="basePreview${item.key}">${item.value.toFixed(2)} ${item.unit}</strong>
+            <small>${item.max}</small>
+            <strong id="basePreview${item.key}">${value.toFixed(2)}</strong>
           </label>
-        `,
-      )
+        `;
+      })
       .join("");
   }
   renderLiftPreview();
@@ -2596,8 +2624,10 @@ async function fetchChassisState(options = {}) {
 
 function chassisBaseValue(key, fallback) {
   const item = deviceBaseControlItems.find((entry) => entry.key === key);
-  const value = item ? Math.abs(Number(item.value)) : 0;
-  return Number.isFinite(value) && value > 0 ? value : fallback;
+  if (!item) return fallback;
+  const value = normalizedSpeedValue(item);
+  const commandMax = Number(item.commandMax);
+  return Number.isFinite(commandMax) ? value * commandMax : value;
 }
 
 function chassisCommandForDrive(action) {
@@ -3649,8 +3679,16 @@ function bindEvents() {
     if (!input) return;
     const item = deviceBaseControlItems.find((entry) => entry.key === input.dataset.baseControl);
     if (!item) return;
-    item.value = Number(input.value);
-    $(`#basePreview${item.key}`).textContent = `${item.value.toFixed(2)} ${item.unit}`;
+    const value = Number(input.value);
+    if (!Number.isFinite(value)) return;
+    item.value = clamp(value, item.min, item.max);
+    const row = input.closest(".base-speed-row");
+    if (row) {
+      row.style.setProperty("--speed-risk", `${clamp(item.value, 0, 1) * 100}%`);
+      row.style.setProperty("--speed-color", speedRiskColor(item.value));
+    }
+    const preview = $(`#basePreview${item.key}`);
+    if (preview) preview.textContent = item.value.toFixed(2);
     renderDeviceBaseMetrics();
   });
 
@@ -3666,10 +3704,15 @@ function bindEvents() {
       renderLiftPreview();
       return;
     }
+    if (input.value === "") return;
     const value = Number(input.value);
     if (!Number.isFinite(value)) return;
     if (input.dataset.liftControl === "height") {
-      state.liftPreview.height = value;
+      const min = Number(input.min);
+      const max = Number(input.max);
+      const clampedHeight = clamp(value, Number.isFinite(min) ? min : liftPreviewLimits.min, Number.isFinite(max) ? max : liftPreviewLimits.max);
+      state.liftPreview.height = clampedHeight;
+      if (input.type === "number" && value !== clampedHeight) input.value = clampedHeight.toFixed(2);
       state.liftPreview.mode = "目标高度";
     }
     if (input.dataset.liftControl === "speed") {
