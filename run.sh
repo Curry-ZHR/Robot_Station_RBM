@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="${ROOT_DIR}/frontend"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-9999}"
+CONTROL_PORT="${CONTROL_PORT:-9998}"
 
 if [[ ! -f "${FRONTEND_DIR}/index.html" ]]; then
   echo "frontend/index.html not found"
@@ -56,4 +57,4 @@ if [[ -f "${LIDAR_SETUP}" ]]; then
 fi
 
 cd "${ROOT_DIR}"
-exec python3 -m backend.server --host "${HOST}" --port "${PORT}"
+exec python3 -m backend.server --host "${HOST}" --port "${PORT}" --control-port "${CONTROL_PORT}"

@@ -3,6 +3,7 @@ import argparse
 import json
 import mimetypes
 import os
+import threading
 import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -319,6 +320,28 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def handle_chassis_control(self, chassis_action):
+        payload = self.read_json_body()
+        handlers = {
+            "cmd_vel": publish_chassis_velocity,
+            "velocity": publish_chassis_velocity,
+            "stop": stop_chassis,
+        }
+        handler = handlers.get(chassis_action)
+        if handler is None:
+            self.write_json(
+                {
+                    "ok": False,
+                    "code": "CHASSIS-C-ACTION",
+                    "detail": f"Unsupported chassis action: {chassis_action}",
+                },
+                status=400,
+            )
+            return
+        result = handler(payload)
+        log_action_result(f"Chassis {chassis_action}", result)
+        self.write_json(result, status=ros_result_status(result))
+
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/control/piper/joint-targets":
@@ -329,49 +352,7 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             return
         chassis_action = api_tail(parsed.path, "/api/control/chassis")
         if chassis_action is not None:
-            payload = self.read_json_body()
-            request_start = time.perf_counter()
-            LOGGER.info(
-                "CHASSIS_DEBUG backend.request_received trace=%s seq=%s action=%s command=(%.4f, %.4f, %.4f) t=%.6f",
-                payload.get("commandTraceId", payload.get("traceId", "")),
-                payload.get("commandSequence", payload.get("sequence", "")),
-                chassis_action,
-                float(payload.get("linearX", payload.get("linear_x", 0)) or 0),
-                float(payload.get("linearY", payload.get("linear_y", 0)) or 0),
-                float(payload.get("angularZ", payload.get("angular_z", 0)) or 0),
-                request_start,
-            )
-            handlers = {
-                "cmd_vel": publish_chassis_velocity,
-                "velocity": publish_chassis_velocity,
-                "stop": stop_chassis,
-            }
-            handler = handlers.get(chassis_action)
-            if handler is None:
-                self.write_json(
-                    {
-                        "ok": False,
-                        "code": "CHASSIS-C-ACTION",
-                        "detail": f"Unsupported chassis action: {chassis_action}",
-                    },
-                    status=400,
-                )
-                return
-            result = handler(payload)
-            elapsed_ms = (time.perf_counter() - request_start) * 1000.0
-            result.setdefault("debugTiming", {})
-            result["debugTiming"]["backendRequestElapsedMs"] = round(elapsed_ms, 3)
-            LOGGER.info(
-                "CHASSIS_DEBUG backend.response_ready trace=%s seq=%s action=%s code=%s elapsed_ms=%.3f stale=%s",
-                payload.get("commandTraceId", payload.get("traceId", "")),
-                payload.get("commandSequence", payload.get("sequence", "")),
-                chassis_action,
-                result.get("code", ""),
-                elapsed_ms,
-                result.get("stale", False),
-            )
-            log_action_result(f"Chassis {chassis_action}", result)
-            self.write_json(result, status=ros_result_status(result))
+            self.handle_chassis_control(chassis_action)
             return
         lifting_action = api_tail(parsed.path, "/api/control/lifting")
         if lifting_action is not None:
@@ -550,26 +531,79 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             return {}
 
 
+class ChassisControlHandler(RobotStationHandler):
+    server_version = "RobotStationChassisHTTP/0.1"
+
+    def end_headers(self):
+        origin = self.headers.get("Origin") or "*"
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Vary", "Origin")
+        super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/health":
+            self.write_json({"status": "ok", "role": "chassis-control"})
+            return
+        if parsed.path == "/api/control/chassis/limits":
+            self.write_json(chassis_limits())
+            return
+        self.write_json({"error": "not_found", "path": parsed.path}, status=404)
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        chassis_action = api_tail(parsed.path, "/api/control/chassis")
+        if chassis_action is None:
+            self.write_json({"error": "not_found", "path": parsed.path}, status=404)
+            return
+        self.handle_chassis_control(chassis_action)
+
+
 def main():
     setup_logger()
     parser = argparse.ArgumentParser(description="Run Robot Station local server.")
     parser.add_argument("--host", default=os.environ.get("HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "9999")))
+    parser.add_argument("--control-port", type=int, default=int(os.environ.get("CONTROL_PORT", "9998")))
     args = parser.parse_args()
 
     if not (FRONTEND_DIR / "index.html").exists():
         raise SystemExit("frontend/index.html not found")
 
     httpd = ThreadingHTTPServer((args.host, args.port), RobotStationHandler)
+    control_httpd = None
+    control_thread = None
+    if args.control_port and args.control_port != args.port:
+        control_httpd = ThreadingHTTPServer((args.host, args.control_port), ChassisControlHandler)
+        control_thread = threading.Thread(
+            target=control_httpd.serve_forever,
+            name="chassis-control-http",
+            daemon=True,
+        )
+        control_thread.start()
     LOGGER.info("Robot Station starting")
     LOGGER.info("Serving frontend: %s", FRONTEND_DIR)
     LOGGER.info("URL: http://%s:%s", args.host, args.port)
+    if control_httpd is not None:
+        LOGGER.info("Chassis control URL: http://%s:%s", args.host, args.control_port)
     LOGGER.info("Press Ctrl+C to stop")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         LOGGER.info("Stopping Robot Station")
     finally:
+        if control_httpd is not None:
+            control_httpd.shutdown()
+            if control_thread is not None:
+                control_thread.join(timeout=2.0)
+            control_httpd.server_close()
         shutdown_services()
         shutdown_ros_io()
         httpd.server_close()
