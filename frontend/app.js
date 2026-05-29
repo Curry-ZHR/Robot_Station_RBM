@@ -494,6 +494,20 @@ function formatCommandSpeed(item, value = normalizedSpeedValue(item)) {
   return `${formatNumber(commandSpeedValue(item, value), digits)} ${unit}`.trim();
 }
 
+function chassisDebugStamp() {
+  return {
+    epochMs: Date.now(),
+    perfMs: Number(window.performance.now().toFixed(3)),
+  };
+}
+
+function logChassisDebug(stage, detail = {}) {
+  console.info("CHASSIS_DEBUG", stage, {
+    ...chassisDebugStamp(),
+    ...detail,
+  });
+}
+
 function speedRiskColor(value) {
   const percent = clamp(Number(value), 0, 1) * 100;
   if (percent <= 50) {
@@ -2802,12 +2816,29 @@ async function requestChassisVelocity(command, options = {}) {
   if (!chassisReady()) {
     if (!options.quiet) addLog("底盘", "Chassis 服务未启动，速度指令未发送");
     renderDeviceBaseMetrics();
+    logChassisDebug("frontend.request_skipped_not_ready", {
+      source: options.source || "速度指令",
+      command,
+    });
     return null;
   }
+  const requestStart = chassisDebugStamp();
+  const commandSequence = nextChassisCommandSequence();
+  const commandTraceId = `chassis-${commandSequence}-${requestStart.epochMs}`;
   const payload = {
     ...command,
-    commandSequence: nextChassisCommandSequence(),
+    commandSequence,
+    commandTraceId,
+    commandSource: options.source || "速度指令",
+    frontendRequestEpochMs: requestStart.epochMs,
+    frontendRequestPerfMs: requestStart.perfMs,
   };
+  logChassisDebug("frontend.fetch_start", {
+    trace: commandTraceId,
+    seq: commandSequence,
+    source: payload.commandSource,
+    command,
+  });
   try {
     const response = await fetch("/api/control/chassis/cmd_vel", {
       method: "POST",
@@ -2815,6 +2846,18 @@ async function requestChassisVelocity(command, options = {}) {
       body: JSON.stringify(payload),
     });
     const result = await response.json();
+    const responseStamp = chassisDebugStamp();
+    logChassisDebug("frontend.fetch_done", {
+      trace: commandTraceId,
+      seq: commandSequence,
+      status: response.status,
+      ok: response.ok && result.ok,
+      stale: Boolean(result.stale),
+      code: result.code,
+      elapsedMs: Number((responseStamp.perfMs - requestStart.perfMs).toFixed(3)),
+      serverDebug: result.debugTiming || null,
+      writerDebug: result.writer?.debugTiming || null,
+    });
     if (!response.ok || !result.ok) {
       throw new Error(result.detail || `HTTP ${response.status}`);
     }
@@ -2830,6 +2873,13 @@ async function requestChassisVelocity(command, options = {}) {
     if (!options.quiet) addLog("底盘", `${options.source || "速度指令"}：${result.code}`);
     return result;
   } catch (error) {
+    const errorStamp = chassisDebugStamp();
+    logChassisDebug("frontend.fetch_error", {
+      trace: commandTraceId,
+      seq: commandSequence,
+      elapsedMs: Number((errorStamp.perfMs - requestStart.perfMs).toFixed(3)),
+      error: error.message,
+    });
     addLog("底盘", `${options.source || "速度指令"}失败：${error.message}`);
     return null;
   }
@@ -2837,6 +2887,7 @@ async function requestChassisVelocity(command, options = {}) {
 
 function requestChassisStop(source = "底盘停止") {
   clearChassisStopTimers();
+  logChassisDebug("frontend.stop_burst_start", { source });
   requestChassisVelocity(chassisStopCommand(), { source });
   for (let index = 1; index < CHASSIS_STOP_REPEAT_COUNT; index += 1) {
     const timer = window.setTimeout(() => {
@@ -2850,6 +2901,7 @@ function requestChassisStop(source = "底盘停止") {
 }
 
 function startChassisDrive(action, label) {
+  logChassisDebug("frontend.drive_start", { action, label });
   if (action === "stop") {
     stopChassisDrive("底盘停止");
     return;
@@ -2872,6 +2924,10 @@ function startChassisDrive(action, label) {
 }
 
 function stopChassisDrive(source = "松开停止") {
+  logChassisDebug("frontend.drive_stop", {
+    source,
+    activeDrive: state.chassisControl.activeDrive,
+  });
   if (state.chassisControl.driveTimer) {
     window.clearInterval(state.chassisControl.driveTimer);
     state.chassisControl.driveTimer = null;
@@ -3814,11 +3870,37 @@ function bindEvents() {
     const label = button.textContent.trim();
     button.addEventListener("pointerdown", (event) => {
       event.preventDefault();
+      logChassisDebug("frontend.pointerdown", {
+        action: button.dataset.deviceDrive,
+        label,
+        pointerTimeStamp: Number(event.timeStamp.toFixed(3)),
+      });
       startChassisDrive(button.dataset.deviceDrive, label);
     });
-    button.addEventListener("pointerup", () => stopChassisDrive("松开停止"));
-    button.addEventListener("pointercancel", () => stopChassisDrive("取消点动"));
-    button.addEventListener("pointerleave", () => stopChassisDrive("离开按钮区域，停止"));
+    button.addEventListener("pointerup", (event) => {
+      logChassisDebug("frontend.pointerup", {
+        action: button.dataset.deviceDrive,
+        label,
+        pointerTimeStamp: Number(event.timeStamp.toFixed(3)),
+      });
+      stopChassisDrive("松开停止");
+    });
+    button.addEventListener("pointercancel", (event) => {
+      logChassisDebug("frontend.pointercancel", {
+        action: button.dataset.deviceDrive,
+        label,
+        pointerTimeStamp: Number(event.timeStamp.toFixed(3)),
+      });
+      stopChassisDrive("取消点动");
+    });
+    button.addEventListener("pointerleave", (event) => {
+      logChassisDebug("frontend.pointerleave", {
+        action: button.dataset.deviceDrive,
+        label,
+        pointerTimeStamp: Number(event.timeStamp.toFixed(3)),
+      });
+      stopChassisDrive("离开按钮区域，停止");
+    });
   });
 
   $$("[data-device-stop]").forEach((button) => {

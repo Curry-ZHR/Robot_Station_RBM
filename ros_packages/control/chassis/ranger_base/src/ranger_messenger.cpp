@@ -380,6 +380,12 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
   double steer_cmd;
   double radius;
   const double zero_tolerance = 1e-6;
+  auto debug_received_time = node_->get_clock()->now();
+
+  RCLCPP_INFO(
+      node_->get_logger(),
+      "CHASSIS_DEBUG ranger.cmd_vel_received ros_time=%.9f linear_x=%.4f linear_y=%.4f angular_z=%.4f",
+      debug_received_time.seconds(), msg->linear.x, msg->linear.y, msg->angular.z);
 
   if (std::abs(msg->linear.x) < zero_tolerance &&
       std::abs(msg->linear.y) < zero_tolerance &&
@@ -387,6 +393,11 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
     motion_mode_ = MotionState::MOTION_MODE_DUAL_ACKERMAN;
     robot_->SetMotionMode(MotionState::MOTION_MODE_DUAL_ACKERMAN);
     robot_->SetMotionCommand(0.0, 0.0);
+    auto debug_sent_time = node_->get_clock()->now();
+    RCLCPP_INFO(
+        node_->get_logger(),
+        "CHASSIS_DEBUG ranger.motion_command_sent ros_time=%.9f mode=dual_ackerman linear=0.0000 steer=0.0000 angular=0.0000 callback_elapsed_ms=%.3f",
+        debug_sent_time.seconds(), (debug_sent_time - debug_received_time).seconds() * 1000.0);
     return;
   }
 
@@ -395,9 +406,11 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
     if (std::abs(msg->linear.x) < zero_tolerance && robot_type_ == RangerSubType::kRangerMiniV1) {
       motion_mode_ = MotionState::MOTION_MODE_SIDE_SLIP;
       robot_->SetMotionMode(MotionState::MOTION_MODE_SIDE_SLIP);
+      RCLCPP_INFO(node_->get_logger(), "CHASSIS_DEBUG ranger.motion_mode_sent mode=side_slip");
     } else {
       motion_mode_ = MotionState::MOTION_MODE_PARALLEL;
       robot_->SetMotionMode(MotionState::MOTION_MODE_PARALLEL);
+      RCLCPP_INFO(node_->get_logger(), "CHASSIS_DEBUG ranger.motion_mode_sent mode=parallel");
     }
   } else {
     steer_cmd = CalculateSteeringAngle(*msg, radius);
@@ -405,9 +418,11 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
     if (radius < robot_params_.min_turn_radius) {
       motion_mode_ = MotionState::MOTION_MODE_SPINNING;
       robot_->SetMotionMode(MotionState::MOTION_MODE_SPINNING);
+      RCLCPP_INFO(node_->get_logger(), "CHASSIS_DEBUG ranger.motion_mode_sent mode=spinning radius=%.4f", radius);
     } else {
       motion_mode_ = MotionState::MOTION_MODE_DUAL_ACKERMAN;
       robot_->SetMotionMode(MotionState::MOTION_MODE_DUAL_ACKERMAN);
+      RCLCPP_INFO(node_->get_logger(), "CHASSIS_DEBUG ranger.motion_mode_sent mode=dual_ackerman radius=%.4f", radius);
     }
   }
 
@@ -422,6 +437,12 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
       }
       double phi_i = ConvertCentralAngleToInner(steer_cmd);
       robot_->SetMotionCommand(msg->linear.x, phi_i);
+      auto debug_sent_time = node_->get_clock()->now();
+      RCLCPP_INFO(
+          node_->get_logger(),
+          "CHASSIS_DEBUG ranger.motion_command_sent ros_time=%.9f mode=dual_ackerman linear=%.4f steer=%.4f angular=0.0000 callback_elapsed_ms=%.3f",
+          debug_sent_time.seconds(), msg->linear.x, phi_i,
+          (debug_sent_time - debug_received_time).seconds() * 1000.0);
       break;
     }
     case MotionState::MOTION_MODE_PARALLEL: {
@@ -443,9 +464,15 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
         steer_cmd = -robot_params_.max_steer_angle_parallel;
       }
       double vel = msg->linear.x >= 0 ? 1.0 : -1.0;
-      robot_->SetMotionCommand(vel * sqrt(msg->linear.x * msg->linear.x +
-                                          msg->linear.y * msg->linear.y),
-                               steer_cmd);
+      double linear_command = vel * sqrt(msg->linear.x * msg->linear.x +
+                                         msg->linear.y * msg->linear.y);
+      robot_->SetMotionCommand(linear_command, steer_cmd);
+      auto debug_sent_time = node_->get_clock()->now();
+      RCLCPP_INFO(
+          node_->get_logger(),
+          "CHASSIS_DEBUG ranger.motion_command_sent ros_time=%.9f mode=parallel linear=%.4f steer=%.4f angular=0.0000 callback_elapsed_ms=%.3f",
+          debug_sent_time.seconds(), linear_command, steer_cmd,
+          (debug_sent_time - debug_received_time).seconds() * 1000.0);
       break;
     }
     case MotionState::MOTION_MODE_SPINNING: {
@@ -457,6 +484,12 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
         a_v = -robot_params_.max_angular_speed;
       }
       robot_->SetMotionCommand(0.0, 0.0, a_v);
+      auto debug_sent_time = node_->get_clock()->now();
+      RCLCPP_INFO(
+          node_->get_logger(),
+          "CHASSIS_DEBUG ranger.motion_command_sent ros_time=%.9f mode=spinning linear=0.0000 steer=0.0000 angular=%.4f callback_elapsed_ms=%.3f",
+          debug_sent_time.seconds(), a_v,
+          (debug_sent_time - debug_received_time).seconds() * 1000.0);
       break;
     }
     case MotionState::MOTION_MODE_SIDE_SLIP: {
@@ -468,6 +501,12 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
         l_v = -robot_params_.max_linear_speed;
       }
       robot_->SetMotionCommand(0.0, 0.0, l_v);
+      auto debug_sent_time = node_->get_clock()->now();
+      RCLCPP_INFO(
+          node_->get_logger(),
+          "CHASSIS_DEBUG ranger.motion_command_sent ros_time=%.9f mode=side_slip linear=0.0000 steer=0.0000 lateral=%.4f callback_elapsed_ms=%.3f",
+          debug_sent_time.seconds(), l_v,
+          (debug_sent_time - debug_received_time).seconds() * 1000.0);
       break;
     }
   }

@@ -3,12 +3,14 @@ import os
 import threading
 import time
 
+from modules.logger import get_logger
 from modules.ros_io import get_ros_writer
 
 
 DEFAULT_MAX_LINEAR_MPS = 0.20
 DEFAULT_MAX_LATERAL_MPS = 0.15
 DEFAULT_MAX_ANGULAR_RAD_S = 0.50
+LOGGER = get_logger()
 _command_sequence_lock = threading.Lock()
 _latest_command_sequence = None
 
@@ -81,6 +83,14 @@ def _payload_sequence(payload):
     return None
 
 
+def _payload_trace_id(payload):
+    for key in ("commandTraceId", "command_trace_id", "traceId", "trace_id"):
+        value = payload.get(key)
+        if value is not None:
+            return str(value)
+    return ""
+
+
 def _accept_sequence(sequence):
     global _latest_command_sequence
     if sequence is None:
@@ -126,15 +136,34 @@ def _motion_mode(command):
 
 def publish_chassis_velocity(payload, writer=None):
     writer = writer or get_ros_writer()
+    controller_start = time.perf_counter()
     try:
         payload = _as_payload_dict(payload)
         sequence = _payload_sequence(payload)
+        trace_id = _payload_trace_id(payload)
         command, limits = _command_from_payload(payload)
     except ChassisControlValidationError as exc:
         return _result(False, "CHASSIS-C-PAYLOAD", str(exc), limits=_limits())
 
+    LOGGER.info(
+        "CHASSIS_DEBUG controller.received trace=%s seq=%s command=(%.4f, %.4f, %.4f) t=%.6f",
+        trace_id,
+        sequence,
+        command["linearX"],
+        command["linearY"],
+        command["angularZ"],
+        controller_start,
+    )
+
     accepted, latest_sequence = _accept_sequence(sequence)
     if not accepted:
+        LOGGER.info(
+            "CHASSIS_DEBUG controller.stale trace=%s seq=%s latest_seq=%s elapsed_ms=%.3f",
+            trace_id,
+            sequence,
+            latest_sequence,
+            (time.perf_counter() - controller_start) * 1000.0,
+        )
         return _result(
             True,
             "CHASSIS-C-STALE",
@@ -145,18 +174,34 @@ def publish_chassis_velocity(payload, writer=None):
             stale=True,
             commandSequence=sequence,
             latestCommandSequence=latest_sequence,
+            debugTiming={
+                "controllerElapsedMs": round((time.perf_counter() - controller_start) * 1000.0, 3),
+            },
             publishedAt=time.strftime("%H:%M:%S"),
         )
 
+    writer_start = time.perf_counter()
     result = writer.publish(
         "chassis_cmd_vel",
         {
             "linearX": command["linearX"],
             "linearY": command["linearY"],
             "angularZ": command["angularZ"],
+            "commandTraceId": trace_id,
+            "commandSequence": sequence,
         },
     )
+    writer_elapsed_ms = (time.perf_counter() - writer_start) * 1000.0
+    controller_elapsed_ms = (time.perf_counter() - controller_start) * 1000.0
     ok = bool(result.get("ok"))
+    LOGGER.info(
+        "CHASSIS_DEBUG controller.writer_done trace=%s seq=%s ok=%s writer_elapsed_ms=%.3f controller_elapsed_ms=%.3f",
+        trace_id,
+        sequence,
+        ok,
+        writer_elapsed_ms,
+        controller_elapsed_ms,
+    )
     return _result(
         ok,
         "CHASSIS-C-PUBLISHED" if ok else "CHASSIS-C-UNAVAILABLE",
@@ -167,6 +212,11 @@ def publish_chassis_velocity(payload, writer=None):
         topic=result.get("topic"),
         writer=result,
         commandSequence=sequence,
+        commandTraceId=trace_id,
+        debugTiming={
+            "controllerElapsedMs": round(controller_elapsed_ms, 3),
+            "controllerToWriterElapsedMs": round(writer_elapsed_ms, 3),
+        },
         publishedAt=time.strftime("%H:%M:%S"),
     )
 

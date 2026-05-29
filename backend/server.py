@@ -330,6 +330,17 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         chassis_action = api_tail(parsed.path, "/api/control/chassis")
         if chassis_action is not None:
             payload = self.read_json_body()
+            request_start = time.perf_counter()
+            LOGGER.info(
+                "CHASSIS_DEBUG backend.request_received trace=%s seq=%s action=%s command=(%.4f, %.4f, %.4f) t=%.6f",
+                payload.get("commandTraceId", payload.get("traceId", "")),
+                payload.get("commandSequence", payload.get("sequence", "")),
+                chassis_action,
+                float(payload.get("linearX", payload.get("linear_x", 0)) or 0),
+                float(payload.get("linearY", payload.get("linear_y", 0)) or 0),
+                float(payload.get("angularZ", payload.get("angular_z", 0)) or 0),
+                request_start,
+            )
             handlers = {
                 "cmd_vel": publish_chassis_velocity,
                 "velocity": publish_chassis_velocity,
@@ -347,6 +358,18 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 )
                 return
             result = handler(payload)
+            elapsed_ms = (time.perf_counter() - request_start) * 1000.0
+            result.setdefault("debugTiming", {})
+            result["debugTiming"]["backendRequestElapsedMs"] = round(elapsed_ms, 3)
+            LOGGER.info(
+                "CHASSIS_DEBUG backend.response_ready trace=%s seq=%s action=%s code=%s elapsed_ms=%.3f stale=%s",
+                payload.get("commandTraceId", payload.get("traceId", "")),
+                payload.get("commandSequence", payload.get("sequence", "")),
+                chassis_action,
+                result.get("code", ""),
+                elapsed_ms,
+                result.get("stale", False),
+            )
             log_action_result(f"Chassis {chassis_action}", result)
             self.write_json(result, status=ros_result_status(result))
             return
