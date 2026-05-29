@@ -5,25 +5,30 @@ import subprocess
 
 from modules.drivers.can.can_interface import (
     DEFAULT_BITRATE,
+    DEFAULT_CHASSIS_CAN_TARGETS,
     DEFAULT_PIPER_CAN_TARGETS,
     inspect_all_can,
+    load_chassis_can_config,
     load_piper_can_config,
 )
 
 
 ALLOWED_SOURCE_INTERFACES = {
     item.strip()
-    for item in os.environ.get("ROBOT_STATION_CAN_ALLOWED_SOURCES", "can0,can1").split(",")
+    for item in os.environ.get("ROBOT_STATION_CAN_ALLOWED_SOURCES", "can0,can1,can2").split(",")
     if item.strip()
 }
 ALLOWED_TARGET_INTERFACES = {
     item.strip()
-    for item in os.environ.get("ROBOT_STATION_CAN_ALLOWED_TARGETS", ",".join(DEFAULT_PIPER_CAN_TARGETS)).split(",")
+    for item in os.environ.get(
+        "ROBOT_STATION_CAN_ALLOWED_TARGETS",
+        ",".join(DEFAULT_PIPER_CAN_TARGETS + DEFAULT_CHASSIS_CAN_TARGETS),
+    ).split(",")
     if item.strip()
 }
 ALLOWED_BITRATES = {
     int(item)
-    for item in os.environ.get("ROBOT_STATION_CAN_ALLOWED_BITRATES", "1000000").split(",")
+    for item in os.environ.get("ROBOT_STATION_CAN_ALLOWED_BITRATES", "1000000,500000").split(",")
     if item.strip()
 }
 SUDOERS_SETUP_COMMAND = "bash scripts/install_can_sudoers.sh"
@@ -104,9 +109,9 @@ def _run(command, timeout_sec=4.0):
     return completed.returncode == 0, output
 
 
-def _configured_targets(config):
+def _configured_targets(config, preferred_targets):
     ports = config.get("ports", {})
-    targets = [target for target in DEFAULT_PIPER_CAN_TARGETS if target in ports]
+    targets = [target for target in preferred_targets if target in ports]
     targets.extend(target for target in ports if target not in targets)
     return [target for target in targets if target in ALLOWED_TARGET_INTERFACES]
 
@@ -116,12 +121,12 @@ def _missing_targets(inspection, targets):
     return [target for target in targets if target not in interfaces]
 
 
-def _ready_targets(inspection, targets, bitrate):
+def _ready_targets(inspection, targets, target_bitrates):
     details = inspection.get("details", {})
     ready = []
     for target in targets:
         info = details.get(target, {})
-        if info.get("isUp") and info.get("bitrate") == bitrate:
+        if info.get("isUp") and info.get("bitrate") == target_bitrates.get(target):
             ready.append(target)
     return ready
 
@@ -142,10 +147,10 @@ def _target_for_source(source, source_info, config, missing_targets, requested_t
             return target, ""
 
     if not bus_info:
-        return "", f"无法读取 {source} 的 USB bus-info，不能安全判断它属于左臂还是右臂。"
+        return "", f"无法读取 {source} 的 USB bus-info，不能安全判断它对应哪个 CAN 目标。"
 
     expected = ", ".join(f"{target}={bus}" for target, bus in ports.items()) or "未配置"
-    return "", f"{source} 的 USB bus-info 为 {bus_info}，但未匹配机械臂 CAN 配置：{expected}。"
+    return "", f"{source} 的 USB bus-info 为 {bus_info}，但未匹配 CAN 配置：{expected}。"
 
 
 def _source_target_pairs(inspection, config, missing_targets, requested_target=None):
@@ -153,7 +158,7 @@ def _source_target_pairs(inspection, config, missing_targets, requested_target=N
     if not sources:
         current = ", ".join(inspection.get("interfaces", [])) or "无"
         return [], (
-            f"机械臂 CAN 未完整就绪，且未发现可重命名的原始接口 {_allowed_source_label()}。"
+            f"CAN 未完整就绪，且未发现可重命名的原始接口 {_allowed_source_label()}。"
             f"当前接口：{current}。"
         )
 
@@ -237,7 +242,7 @@ def _activate_source_as_target(source, target, bitrate, inspection):
         True,
         "CAN-A-RENAMED",
         f"{source} 已按 bitrate {int(bitrate)} 激活并重命名为 {target}。",
-        "请重新执行 CAN 自检确认 can_left/can_right 是否都已就绪。",
+        "请重新执行 CAN 自检确认所有 CAN 目标是否都已就绪。",
         commands=commands,
         inspection=inspection,
         raw="\n".join(raw_outputs),
@@ -282,7 +287,7 @@ def _activate_existing_target(target, bitrate, inspection):
         True,
         "CAN-A-RECONFIGURED",
         f"{target} 已按 bitrate {int(bitrate)} 重新配置并 UP。",
-        "请重新执行 CAN 自检确认机械臂 CAN 是否都已就绪。",
+        "请重新执行 CAN 自检确认所有 CAN 目标是否都已就绪。",
         commands=commands,
         inspection=inspection,
         raw="\n".join(raw_outputs),
@@ -313,37 +318,93 @@ def _activation_summary(activated):
     )
 
 
-def activate_can(interface=None, bitrate=None):
-    config = load_piper_can_config()
-    bitrate = int(bitrate or config.get("bitrate") or DEFAULT_BITRATE)
-    targets = _configured_targets(config)
+def _activation_config(interface=None, bitrate=None):
     requested_target = interface if interface in ALLOWED_TARGET_INTERFACES else None
+    if interface and not requested_target:
+        return None, _result(
+            False,
+            "CAN-A-TARGET",
+            f"目标接口 {interface} 不在允许列表中。",
+            f"允许的目标接口：{', '.join(sorted(ALLOWED_TARGET_INTERFACES))}。",
+        )
 
-    if bitrate not in ALLOWED_BITRATES:
+    piper_config = load_piper_can_config()
+    chassis_config = load_chassis_can_config()
+    groups = [
+        ("机械臂", piper_config, DEFAULT_PIPER_CAN_TARGETS, int(bitrate or piper_config.get("bitrate") or DEFAULT_BITRATE)),
+        ("底盘", chassis_config, DEFAULT_CHASSIS_CAN_TARGETS, int(chassis_config.get("bitrate"))),
+    ]
+
+    ports = {}
+    target_bitrates = {}
+    targets = []
+    labels = []
+    for label, config, preferred_targets, group_bitrate in groups:
+        group_targets = _configured_targets(config, preferred_targets)
+        if requested_target and requested_target not in group_targets:
+            continue
+        selected_targets = [target for target in group_targets if not requested_target or target == requested_target]
+        if not selected_targets:
+            continue
+        labels.append(label)
+        for target in selected_targets:
+            if target not in targets:
+                targets.append(target)
+            ports[target] = config.get("ports", {}).get(target, "")
+            target_bitrates[target] = int(group_bitrate)
+
+    if requested_target and requested_target not in targets:
+        return None, _result(
+            False,
+            "CAN-A-TARGET",
+            f"目标接口 {requested_target} 不在 CAN 配置中。",
+            "请检查 robot_station/config/can_ports.json。",
+        )
+
+    return {
+        "ports": ports,
+        "targets": targets,
+        "target_bitrates": target_bitrates,
+        "labels": labels,
+        "requested_target": requested_target,
+    }, None
+
+
+def _format_target_rates(targets, target_bitrates):
+    return ", ".join(f"{target}:{target_bitrates.get(target)}" for target in targets)
+
+
+def activate_can(interface=None, bitrate=None):
+    config, config_error = _activation_config(interface=interface, bitrate=bitrate)
+    if config_error:
+        return config_error
+
+    targets = config["targets"]
+    target_bitrates = config["target_bitrates"]
+    requested_target = config["requested_target"]
+    invalid_bitrates = {
+        target: rate
+        for target, rate in target_bitrates.items()
+        if rate not in ALLOWED_BITRATES
+    }
+    if invalid_bitrates:
+        detail = ", ".join(f"{target}={rate}" for target, rate in invalid_bitrates.items())
         return _result(
             False,
             "CAN-A-BITRATE",
-            f"机械臂 CAN bitrate {bitrate} 不在允许列表中。",
-            "Piper 机械臂 CAN 应使用 1000000；请检查机器人配置。",
+            f"CAN bitrate 不在允许列表中：{detail}。",
+            "机械臂应使用 1000000，底盘应使用 500000；请检查 robot_station/config/can_ports.json。",
         )
 
     if not targets:
         return _result(
             False,
             "CAN-A-CONFIG",
-            "未配置机械臂 CAN 目标接口。",
-            "请在 robot_station/config/can_ports.json 配置 can_left/can_right 的 USB bus-info。",
+            "未配置 CAN 目标接口。",
+            "请在 robot_station/config/can_ports.json 配置 can_left/can_right 和 can_chassis 的 USB bus-info。",
         )
 
-    if requested_target and requested_target not in targets:
-        return _result(
-            False,
-            "CAN-A-TARGET",
-            f"目标接口 {requested_target} 不在机械臂 CAN 配置中。",
-            f"允许的目标接口：{', '.join(targets)}。",
-        )
-
-    inspection = inspect_all_can(expected_bitrate=bitrate)
+    inspection = inspect_all_can(expected_bitrates=target_bitrates)
     if inspection.get("error"):
         return _result(
             False,
@@ -353,12 +414,12 @@ def activate_can(interface=None, bitrate=None):
             inspection=inspection,
         )
 
-    ready = _ready_targets(inspection, targets, bitrate)
+    ready = _ready_targets(inspection, targets, target_bitrates)
     if len(ready) == len(targets):
         return _result(
             True,
             "CAN-A-NOOP",
-            f"机械臂 CAN 已就绪：{', '.join(targets)}，bitrate {bitrate}。",
+            f"CAN 已就绪：{_format_target_rates(targets, target_bitrates)}。",
             "无需重新激活。",
             inspection=inspection,
         )
@@ -378,7 +439,7 @@ def activate_can(interface=None, bitrate=None):
         if not requested_target or target == requested_target
     ]
     for target in repair_targets:
-        activation = _activate_existing_target(target, bitrate, inspection)
+        activation = _activate_existing_target(target, target_bitrates[target], inspection)
         if not activation.get("ok"):
             commands, raw, activated = _merge_activation_payload(activations)
             activation["commands"] = commands + activation.get("commands", [])
@@ -388,15 +449,15 @@ def activate_can(interface=None, bitrate=None):
         activations.append(activation)
 
     if repair_targets and not source_pairs:
-        refreshed = inspect_all_can(expected_bitrate=bitrate)
-        refreshed_ready = _ready_targets(refreshed, targets, bitrate)
+        refreshed = inspect_all_can(expected_bitrates=target_bitrates)
+        refreshed_ready = _ready_targets(refreshed, targets, target_bitrates)
         commands, raw, activated = _merge_activation_payload(activations)
         if len(refreshed_ready) == len(targets):
             activation.update(
                 {
                     "code": "CAN-A-OK",
-                    "detail": f"机械臂 CAN 已全部就绪：{', '.join(targets)}。本次激活：{_activation_summary(activated)}。",
-                    "advice": "可以继续执行机械臂反馈检查或启动 Piper 控制节点。",
+                    "detail": f"CAN 已全部就绪：{_format_target_rates(targets, target_bitrates)}。本次激活：{_activation_summary(activated)}。",
+                    "advice": "可以继续执行机械臂反馈检查，或启动 Piper/Chassis 控制节点。",
                     "commands": commands,
                     "inspection": refreshed,
                     "raw": raw,
@@ -409,14 +470,14 @@ def activate_can(interface=None, bitrate=None):
         remaining_not_ready = [
             target
             for target in targets
-            if target in refreshed.get("interfaces", []) and target not in _ready_targets(refreshed, targets, bitrate)
+            if target in refreshed.get("interfaces", []) and target not in _ready_targets(refreshed, targets, target_bitrates)
         ]
         remaining = refreshed_missing + remaining_not_ready
         activation.update(
             {
                 "code": "CAN-A-PARTIAL",
-                "detail": f"已修复 {_activation_summary(activated)}，但机械臂 CAN 仍未完整就绪：{', '.join(remaining)}。",
-                "advice": "请确认另一只机械臂 USB-CAN 已连接，或再次执行自检/激活。",
+                "detail": f"已修复 {_activation_summary(activated)}，但 CAN 仍未完整就绪：{', '.join(remaining)}。",
+                "advice": "请确认机械臂和底盘 USB-CAN 已连接，或再次执行自检/激活。",
                 "commands": commands,
                 "inspection": refreshed,
                 "raw": raw,
@@ -440,10 +501,10 @@ def activate_can(interface=None, bitrate=None):
                 False,
                 "CAN-A-TARGET",
                 f"目标接口 {target} 不在允许列表中。",
-                "机械臂 CAN 自修复只允许重命名为 can_left/can_right。",
+                "CAN 自修复只允许重命名为 can_left/can_right/can_chassis。",
                 inspection=inspection,
             )
-        activation = _activate_source_as_target(source, target, bitrate, inspection)
+        activation = _activate_source_as_target(source, target, target_bitrates[target], inspection)
         if not activation.get("ok"):
             commands, raw, activated = _merge_activation_payload(activations)
             activation["commands"] = commands + activation.get("commands", [])
@@ -452,15 +513,15 @@ def activate_can(interface=None, bitrate=None):
             return activation
         activations.append(activation)
 
-    refreshed = inspect_all_can(expected_bitrate=bitrate)
-    refreshed_ready = _ready_targets(refreshed, targets, bitrate)
+    refreshed = inspect_all_can(expected_bitrates=target_bitrates)
+    refreshed_ready = _ready_targets(refreshed, targets, target_bitrates)
     commands, raw, activated = _merge_activation_payload(activations)
     if len(refreshed_ready) == len(targets):
         return _result(
             True,
             "CAN-A-OK",
-            f"机械臂 CAN 已全部就绪：{', '.join(targets)}。本次激活：{_activation_summary(activated)}。",
-            "可以继续执行机械臂反馈检查或启动 Piper 控制节点。",
+            f"CAN 已全部就绪：{_format_target_rates(targets, target_bitrates)}。本次激活：{_activation_summary(activated)}。",
+            "可以继续执行机械臂反馈检查，或启动 Piper/Chassis 控制节点。",
             commands=commands,
             inspection=refreshed,
             raw=raw,
@@ -477,8 +538,8 @@ def activate_can(interface=None, bitrate=None):
     return _result(
         True,
         "CAN-A-PARTIAL",
-        f"已激活 {_activation_summary(activated)}，但机械臂 CAN 仍未完整就绪：{', '.join(remaining) or '状态未刷新'}。",
-        f"请确认另一只机械臂 USB-CAN 已连接，系统原始接口应出现在 {_allowed_source_label()} 中，然后再次执行自检/激活。",
+        f"已激活 {_activation_summary(activated)}，但 CAN 仍未完整就绪：{', '.join(remaining) or '状态未刷新'}。",
+        f"请确认机械臂和底盘 USB-CAN 已连接，系统原始接口应出现在 {_allowed_source_label()} 中，然后再次执行自检/激活。",
         commands=commands,
         inspection=refreshed,
         raw=raw,

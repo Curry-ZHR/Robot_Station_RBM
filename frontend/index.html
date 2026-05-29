@@ -38,7 +38,7 @@
               <span>ROS</span>
               <i aria-hidden="true"></i>
             </button>
-            <button class="status-switch is-warn" id="canStatus" type="button" title="点击激活机械臂 CAN">
+            <button class="status-switch is-warn" id="canStatus" type="button" title="点击激活 CAN">
               <span>CAN</span>
               <i aria-hidden="true"></i>
             </button>
@@ -48,6 +48,10 @@
             </button>
             <button class="status-switch is-idle" id="liftingRuntimeStatus" type="button" aria-pressed="false" title="启动或关闭 Lifting">
               <span>Lifting</span>
+              <i aria-hidden="true"></i>
+            </button>
+            <button class="status-switch is-idle" id="chassisRuntimeStatus" type="button" aria-pressed="false" title="启动或关闭 Chassis">
+              <span>Chassis</span>
               <i aria-hidden="true"></i>
             </button>
             <button class="status-switch is-idle" id="cameraRuntimeStatus" type="button" aria-pressed="false" title="启动或关闭 Camera">
@@ -266,8 +270,8 @@
                         <span>状态与速度预览</span>
                       </div>
                       <div class="device-status-line">
-                        <span>控制</span><strong class="status-text idle">本地预览</strong>
-                        <span>里程计</span><strong class="status-text idle">未接入</strong>
+                        <span>控制</span><strong class="status-text idle" id="baseControlText">未启动</strong>
+                        <span>里程计</span><strong class="status-text idle" id="baseOdomText">未接入</strong>
                       </div>
                       <div class="metric-grid" id="deviceBaseMetrics"></div>
                     </section>
@@ -327,19 +331,23 @@
                         <h2>移动底座</h2>
                         <span>方向与速度</span>
                       </div>
-                      <div class="drive-pad compact-drive-pad">
-                        <span></span>
-                        <button data-device-drive="forward" title="前进" aria-label="前进">↑</button>
-                        <span></span>
-                        <button data-device-drive="left" title="左转" aria-label="左转">↺</button>
+	                      <div class="drive-pad compact-drive-pad">
+	                        <span></span>
+	                        <button data-device-drive="forward" title="前进" aria-label="前进">↑</button>
+	                        <span></span>
+	                        <button data-device-drive="left" title="左转" aria-label="左转">↺</button>
                         <button data-device-drive="stop" title="停止" aria-label="停止">●</button>
                         <button data-device-drive="right" title="右转" aria-label="右转">↻</button>
                         <span></span>
-                        <button data-device-drive="backward" title="后退" aria-label="后退">↓</button>
-                        <span></span>
-                      </div>
-                      <div class="base-control-panel" id="deviceBaseControlPanel"></div>
-                    </section>
+	                        <button data-device-drive="backward" title="后退" aria-label="后退">↓</button>
+	                        <span></span>
+	                      </div>
+	                      <div class="base-lateral-pad">
+	                        <button data-device-drive="strafe-left" title="向左横移" aria-label="向左横移">←</button>
+	                        <button data-device-drive="strafe-right" title="向右横移" aria-label="向右横移">→</button>
+	                      </div>
+	                      <div class="base-control-panel" id="deviceBaseControlPanel"></div>
+	                    </section>
 
                     <section class="remote-section">
                       <div class="section-title compact-title">
@@ -605,7 +613,7 @@
                   <form class="config-form">
                     <label>机械臂<input value="AgileX Piper x2" /></label>
                     <label>底盘<input value="AgileX mobile base" /></label>
-                    <label>机械臂 CAN<input value="can_left / can_right" /></label>
+                    <label>CAN<input value="can_left / can_right / can_chassis" /></label>
                     <label>默认数据目录<input value="/data/robot_station" /></label>
                   </form>
                 </article>

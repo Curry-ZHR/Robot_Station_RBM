@@ -1,3 +1,6 @@
+import math
+
+
 JOINT_NAMES = ["joint0", "joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
 
 
@@ -130,10 +133,76 @@ def build_bool_command(payload, message_class, stamp=None):
     return message
 
 
+def _finite_number(value, field):
+    parsed = _number(value, field)
+    if not math.isfinite(parsed):
+        raise CommandValidationError(f"{field} must be a finite number.")
+    return parsed
+
+
+def _payload_number(payload, keys, field, nested=None, default=0.0):
+    marker = object()
+    value = marker
+    for key in keys:
+        if key in payload:
+            value = payload[key]
+            break
+    if value is marker and nested:
+        nested_payload = payload.get(nested[0])
+        if isinstance(nested_payload, dict) and nested[1] in nested_payload:
+            value = nested_payload[nested[1]]
+    if value is marker:
+        value = default
+    return _finite_number(value, field)
+
+
+def build_twist_command(payload, message_class, stamp=None):
+    payload = _as_payload_dict(payload)
+    message = message_class()
+    message.linear.x = _payload_number(
+        payload,
+        ("linearX", "linear_x", "x", "vx", "forward"),
+        "linearX",
+        nested=("linear", "x"),
+    )
+    message.linear.y = _payload_number(
+        payload,
+        ("linearY", "linear_y", "y", "vy", "lateral"),
+        "linearY",
+        nested=("linear", "y"),
+    )
+    message.linear.z = _payload_number(
+        payload,
+        ("linearZ", "linear_z", "z", "vz"),
+        "linearZ",
+        nested=("linear", "z"),
+    )
+    message.angular.x = _payload_number(
+        payload,
+        ("angularX", "angular_x", "rollRate"),
+        "angularX",
+        nested=("angular", "x"),
+    )
+    message.angular.y = _payload_number(
+        payload,
+        ("angularY", "angular_y", "pitchRate"),
+        "angularY",
+        nested=("angular", "y"),
+    )
+    message.angular.z = _payload_number(
+        payload,
+        ("angularZ", "angular_z", "yawRate", "wz", "angularVelocity"),
+        "angularZ",
+        nested=("angular", "z"),
+    )
+    return message
+
+
 BUILDERS = {
     "joint_state": build_joint_state_command,
     "pos_cmd": build_pos_cmd,
     "bool": build_bool_command,
+    "twist": build_twist_command,
 }
 
 
@@ -143,4 +212,3 @@ def build_command(builder_name, payload, message_class, stamp=None):
     except KeyError as exc:
         raise CommandValidationError(f"Unknown command builder: {builder_name}") from exc
     return builder(payload, message_class, stamp=stamp)
-

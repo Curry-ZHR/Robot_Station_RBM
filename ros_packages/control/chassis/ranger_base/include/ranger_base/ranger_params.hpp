@@ -57,6 +57,11 @@ struct RangerMiniV2Params {
   static constexpr double max_round_angle = 0.935671;
   static constexpr double min_turn_radius = 0.4764;
 };
+
+struct RangerMiniV3Params : RangerMiniV2Params {
+  // Ranger Mini 3.0 uses the same wrapper kinematics limits as Mini 2.0
+  // unless a deployment provides model-specific measured values.
+};
 }  // namespace westonrobot
 
 #endif  // RANGER_PARAMS_HPP

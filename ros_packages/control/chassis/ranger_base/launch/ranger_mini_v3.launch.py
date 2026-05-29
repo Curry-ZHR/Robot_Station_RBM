@@ -13,8 +13,8 @@ def generate_launch_description():
     use_sim_time_arg = DeclareLaunchArgument('use_sim_time', default_value='false',
                                              description='Use simulation clock if true')
 
-    port_name_arg = DeclareLaunchArgument('port_name', default_value='can0',
-                                         description='CAN bus name, e.g. can0')
+    port_name_arg = DeclareLaunchArgument('port_name', default_value='can_chassis',
+                                         description='CAN bus name, e.g. can_chassis')
     odom_frame_arg = DeclareLaunchArgument('odom_frame', default_value='odom',
                                            description='Odometry frame id')
     base_link_frame_arg = DeclareLaunchArgument('base_frame', default_value='base_link',
@@ -43,6 +43,8 @@ def generate_launch_description():
                 'odom_topic_name': launch.substitutions.LaunchConfiguration('odom_topic_name'),
                 'simulated_robot': launch.substitutions.LaunchConfiguration('simulated_robot'),
                 'publish_odom_tf': launch.substitutions.LaunchConfiguration('publish_odom_tf'),
+                'update_rate': launch.substitutions.LaunchConfiguration('update_rate'),
+                'robot_model': launch.substitutions.LaunchConfiguration('robot_model'),
         }])
 
     return LaunchDescription([

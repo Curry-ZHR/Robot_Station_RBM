@@ -19,6 +19,7 @@ fi
 ROS_SETUP="/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
 PIPER_SETUP="${ROOT_DIR}/ros_packages/control/piper/install/setup.bash"
 LIFTING_SETUP="${ROOT_DIR}/ros_packages/control/lifting/install/setup.bash"
+CHASSIS_SETUP="${ROOT_DIR}/ros_packages/control/chassis/install/setup.bash"
 CAMERA_SETUP="${ROOT_DIR}/ros_packages/sensors/camera/orbbec/install/setup.bash"
 LIDAR_SETUP="${ROOT_DIR}/ros_packages/sensors/lidar/install/setup.bash"
 
@@ -40,6 +41,10 @@ fi
 
 if [[ -f "${LIFTING_SETUP}" ]]; then
   source_setup "${LIFTING_SETUP}"
+fi
+
+if [[ -f "${CHASSIS_SETUP}" ]]; then
+  source_setup "${CHASSIS_SETUP}"
 fi
 
 if [[ -f "${CAMERA_SETUP}" ]]; then

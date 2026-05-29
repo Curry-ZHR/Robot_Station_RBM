@@ -9,6 +9,8 @@
 
 #include "ranger_base/ranger_messenger.hpp"
 
+#include <limits>
+
 #include "ranger_base/kinematics_model.hpp"
 
 using namespace rclcpp;
@@ -61,7 +63,7 @@ void RangerROSMessenger::Run() {
 
 void RangerROSMessenger::LoadParameters() {
   //load parameter from launch files
-  port_name_ = node_->declare_parameter<std::string>("port_name","can0");
+  port_name_ = node_->declare_parameter<std::string>("port_name","can_chassis");
   robot_model_ = node_->declare_parameter<std::string>("robot_model","ranger");
   odom_frame_ =  node_->declare_parameter<std::string>("odom_frame","odom");
   base_frame_ = node_->declare_parameter<std::string>("base_frame", "base_link");
@@ -93,36 +95,48 @@ void RangerROSMessenger::LoadParameters() {
         RangerMiniV1Params::max_steer_angle_parallel;
     robot_params_.max_round_angle = RangerMiniV1Params::max_round_angle;
     robot_params_.min_turn_radius = RangerMiniV1Params::min_turn_radius;
+  } else if (robot_model_ == "ranger_mini_v2") {
+    robot_type_ = RangerSubType::kRangerMiniV2;
+
+    robot_params_.track = RangerMiniV2Params::track;
+    robot_params_.wheelbase = RangerMiniV2Params::wheelbase;
+    robot_params_.max_linear_speed = RangerMiniV2Params::max_linear_speed;
+    robot_params_.max_angular_speed = RangerMiniV2Params::max_angular_speed;
+    robot_params_.max_speed_cmd = RangerMiniV2Params::max_speed_cmd;
+    robot_params_.max_steer_angle_central =
+        RangerMiniV2Params::max_steer_angle_central;
+    robot_params_.max_steer_angle_parallel =
+        RangerMiniV2Params::max_steer_angle_parallel;
+    robot_params_.max_round_angle = RangerMiniV2Params::max_round_angle;
+    robot_params_.min_turn_radius = RangerMiniV2Params::min_turn_radius;
+  } else if (robot_model_ == "ranger_mini_v3") {
+    robot_type_ = RangerSubType::kRangerMiniV3;
+
+    robot_params_.track = RangerMiniV3Params::track;
+    robot_params_.wheelbase = RangerMiniV3Params::wheelbase;
+    robot_params_.max_linear_speed = RangerMiniV3Params::max_linear_speed;
+    robot_params_.max_angular_speed = RangerMiniV3Params::max_angular_speed;
+    robot_params_.max_speed_cmd = RangerMiniV3Params::max_speed_cmd;
+    robot_params_.max_steer_angle_central =
+        RangerMiniV3Params::max_steer_angle_central;
+    robot_params_.max_steer_angle_parallel =
+        RangerMiniV3Params::max_steer_angle_parallel;
+    robot_params_.max_round_angle = RangerMiniV3Params::max_round_angle;
+    robot_params_.min_turn_radius = RangerMiniV3Params::min_turn_radius;
   } else {
-    if (robot_model_ == "ranger_mini_v2") {
-      robot_type_ = RangerSubType::kRangerMiniV2;
+    robot_type_ = RangerSubType::kRanger;
 
-      robot_params_.track = RangerMiniV2Params::track;
-      robot_params_.wheelbase = RangerMiniV2Params::wheelbase;
-      robot_params_.max_linear_speed = RangerMiniV2Params::max_linear_speed;
-      robot_params_.max_angular_speed = RangerMiniV2Params::max_angular_speed;
-      robot_params_.max_speed_cmd = RangerMiniV2Params::max_speed_cmd;
-      robot_params_.max_steer_angle_central =
-          RangerMiniV2Params::max_steer_angle_central;
-      robot_params_.max_steer_angle_parallel =
-          RangerMiniV2Params::max_steer_angle_parallel;
-      robot_params_.max_round_angle = RangerMiniV2Params::max_round_angle;
-      robot_params_.min_turn_radius = RangerMiniV2Params::min_turn_radius;
-    } else {
-      robot_type_ = RangerSubType::kRanger;
-
-      robot_params_.track = RangerParams::track;
-      robot_params_.wheelbase = RangerParams::wheelbase;
-      robot_params_.max_linear_speed = RangerParams::max_linear_speed;
-      robot_params_.max_angular_speed = RangerParams::max_angular_speed;
-      robot_params_.max_speed_cmd = RangerParams::max_speed_cmd;
-      robot_params_.max_steer_angle_central =
-          RangerParams::max_steer_angle_central;
-      robot_params_.max_steer_angle_parallel =
-          RangerParams::max_steer_angle_parallel;
-      robot_params_.max_round_angle = RangerParams::max_round_angle;
-      robot_params_.min_turn_radius = RangerParams::min_turn_radius;
-    }
+    robot_params_.track = RangerParams::track;
+    robot_params_.wheelbase = RangerParams::wheelbase;
+    robot_params_.max_linear_speed = RangerParams::max_linear_speed;
+    robot_params_.max_angular_speed = RangerParams::max_angular_speed;
+    robot_params_.max_speed_cmd = RangerParams::max_speed_cmd;
+    robot_params_.max_steer_angle_central =
+        RangerParams::max_steer_angle_central;
+    robot_params_.max_steer_angle_parallel =
+        RangerParams::max_steer_angle_parallel;
+    robot_params_.max_round_angle = RangerParams::max_round_angle;
+    robot_params_.min_turn_radius = RangerParams::min_turn_radius;
   }
 }
 
@@ -344,7 +358,7 @@ void RangerROSMessenger::UpdateOdometry(double linear, double angular,
     odom_msg.twist.twist.angular.z = angular;
   }
 
-  //odom_pub_->publish(odom_msg);
+  odom_pub_->publish(odom_msg);
 
   // // publish tf transformation
   if (publish_odom_tf_) {
@@ -358,17 +372,27 @@ void RangerROSMessenger::UpdateOdometry(double linear, double angular,
     tf_msg.transform.translation.z = 0.0;
     tf_msg.transform.rotation = odom_quat;
 
-    //tf_broadcaster_->sendTransform(tf_msg);
+    tf_broadcaster_->sendTransform(tf_msg);
   }
 }
 
 void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr msg) {
   double steer_cmd;
   double radius;
+  const double zero_tolerance = 1e-6;
+
+  if (std::abs(msg->linear.x) < zero_tolerance &&
+      std::abs(msg->linear.y) < zero_tolerance &&
+      std::abs(msg->angular.z) < zero_tolerance) {
+    motion_mode_ = MotionState::MOTION_MODE_DUAL_ACKERMAN;
+    robot_->SetMotionMode(MotionState::MOTION_MODE_DUAL_ACKERMAN);
+    robot_->SetMotionCommand(0.0, 0.0);
+    return;
+  }
 
   // analyze Twist msg and switch motion_mode
-  if (msg->linear.y != 0) {
-    if (msg->linear.x == 0.0 && robot_type_ == RangerSubType::kRangerMiniV1) {
+  if (std::abs(msg->linear.y) >= zero_tolerance) {
+    if (std::abs(msg->linear.x) < zero_tolerance && robot_type_ == RangerSubType::kRangerMiniV1) {
       motion_mode_ = MotionState::MOTION_MODE_SIDE_SLIP;
       robot_->SetMotionMode(MotionState::MOTION_MODE_SIDE_SLIP);
     } else {
@@ -459,6 +483,12 @@ double RangerROSMessenger::CalculateSteeringAngle(geometry_msgs::msg::Twist msg,
                                                   double& radius) {
   double linear = std::abs(msg.linear.x);
   double angular = std::abs(msg.angular.z);
+  const double zero_tolerance = 1e-6;
+
+  if (angular < zero_tolerance) {
+    radius = std::numeric_limits<double>::infinity();
+    return 0.0;
+  }
 
   // Circular motion
   radius = linear / angular;

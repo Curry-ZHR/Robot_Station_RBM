@@ -5,7 +5,7 @@ const state = {
     {
       level: "warn",
       title: "CAN 状态待确认",
-      detail: "机械臂 CAN 还没有通过自检，请先执行整机自检。",
+      detail: "CAN 还没有通过自检，请先执行整机自检。",
     },
     {
       level: "warn",
@@ -29,6 +29,9 @@ const state = {
     status: "stopped",
   },
   liftingRuntime: {
+    status: "stopped",
+  },
+  chassisRuntime: {
     status: "stopped",
   },
   cameraRuntime: {
@@ -87,6 +90,16 @@ const state = {
     stepDownMm: 50,
     mode: "等待初始化",
   },
+  chassisControl: {
+    driveTimer: null,
+    activeDrive: null,
+    busy: false,
+    command: {
+      linearX: 0,
+      linearY: 0,
+      angularZ: 0,
+    },
+  },
   liftingState: {
     ok: false,
     code: "ROS-R-WAITING",
@@ -109,6 +122,18 @@ const state = {
       minHeightM: 0.05,
       maxHeightM: 0.88,
     },
+  },
+  chassisState: {
+    ok: false,
+    code: "ROS-R-WAITING",
+    detail: "等待底盘反馈。",
+    system: null,
+    motion: null,
+    battery: null,
+    odom: null,
+    ageMs: null,
+    stale: true,
+    receivedAt: null,
   },
   piperActions: {
     left: {
@@ -179,9 +204,9 @@ const selfCheckItems = [
     status: "未检测",
     source: "系统",
     code: "CAN-I-000",
-    advice: "can_left/can_right 未就绪时先激活机械臂 CAN。",
-    detail: "检查机械臂 CAN 接口是否存在、是否 UP、bitrate 是否正确。",
-    metric: { label: "机械臂 CAN", value: "--", percent: 0, level: "idle" },
+    advice: "can_left/can_right/can_chassis 未就绪时先激活 CAN。",
+    detail: "检查机械臂和底盘 CAN 接口是否存在、是否 UP、bitrate 是否正确。",
+    metric: { label: "CAN", value: "--", percent: 0, level: "idle" },
   },
   {
     name: "机械臂反馈",
@@ -339,6 +364,17 @@ const liftingRuntimeLabels = {
   unknown: { title: "升降轴状态未知，点击刷新", level: "idle", pressed: false },
 };
 
+const chassisRuntimeLabels = {
+  stopped: { title: "Chassis 未启动，点击启动", level: "idle", pressed: false },
+  starting: { title: "Chassis 启动中", level: "warn", pressed: false, busy: true },
+  running: { title: "Chassis 运行中，点击清理关闭", level: "ok", pressed: true },
+  stopping: { title: "Chassis 清理关闭中", level: "warn", pressed: true, busy: true },
+  external: { title: "检测到旧 Chassis ROS，点击清理", level: "warn", pressed: true },
+  failed: { title: "Chassis 启动失败，点击重试", level: "danger", pressed: false },
+  error: { title: "Chassis 异常，点击重试", level: "danger", pressed: false },
+  unknown: { title: "Chassis 状态未知，点击刷新", level: "idle", pressed: false },
+};
+
 const cameraRuntimeLabels = {
   stopped: { title: "Camera 未启动，点击启动", level: "idle", pressed: false },
   starting: { title: "Camera 启动中", level: "warn", pressed: false, busy: true },
@@ -381,6 +417,19 @@ const lidarRuntimeLabels = {
 };
 
 const liftingTopicKey = "lifting_motor_state";
+const chassisTopicKeys = {
+  system: "chassis_system_state",
+  motion: "chassis_motion_state",
+  battery: "chassis_battery_state",
+  odom: "chassis_odom",
+};
+
+const chassisMotionModeLabels = {
+  0: "阿克曼",
+  1: "蟹行",
+  2: "旋转",
+  3: "侧滑",
+};
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
@@ -470,6 +519,10 @@ function liftingReady() {
   return state.liftingRuntime.status === "running" || state.liftingRuntime.status === "external";
 }
 
+function chassisReady() {
+  return state.chassisRuntime.status === "running" || state.chassisRuntime.status === "external";
+}
+
 function liftingInitialized() {
   return liftingReady() && state.liftingState.ok && !state.liftingState.stale && state.liftingState.initState;
 }
@@ -480,6 +533,10 @@ function getPiperRuntimeLabel() {
 
 function getLiftingRuntimeLabel() {
   return liftingRuntimeLabels[state.liftingRuntime.status] || liftingRuntimeLabels.error;
+}
+
+function getChassisRuntimeLabel() {
+  return chassisRuntimeLabels[state.chassisRuntime.status] || chassisRuntimeLabels.error;
 }
 
 function getCameraRuntimeLabel() {
@@ -506,6 +563,12 @@ function setLiftingRuntime(status) {
   state.liftingRuntime.status = liftingRuntimeLabels[status] ? status : "unknown";
   renderLiftingRuntime();
   renderLiftPreview();
+}
+
+function setChassisRuntime(status) {
+  state.chassisRuntime.status = chassisRuntimeLabels[status] ? status : "unknown";
+  renderChassisRuntime();
+  renderDeviceBaseMetrics();
 }
 
 function setCameraRuntime(status) {
@@ -1267,6 +1330,28 @@ async function toggleArmDirectControl() {
   }
 }
 
+function nestedValue(source, path) {
+  return path.reduce((current, key) => (current && current[key] !== undefined ? current[key] : undefined), source);
+}
+
+function nestedNumber(source, path) {
+  const value = Number(nestedValue(source, path));
+  return Number.isFinite(value) ? value : null;
+}
+
+function chassisMotionModeText(mode) {
+  const key = Number(mode);
+  return chassisMotionModeLabels[key] || "--";
+}
+
+function chassisFeedbackLevel() {
+  if (state.chassisState.ok && state.chassisState.stale) return "warn";
+  if (state.chassisState.ok) return "ok";
+  if (state.chassisState.code === "ROS-R-WAITING") return "idle";
+  if (state.chassisState.code === "ROS-R-NODATA") return "warn";
+  return chassisReady() ? "danger" : "idle";
+}
+
 function renderDeviceBaseMetrics() {
   const node = $("#deviceBaseMetrics");
   if (!node) return;
@@ -1274,11 +1359,45 @@ function renderDeviceBaseMetrics() {
   const linear = valueFor("linear");
   const lateral = valueFor("lateral");
   const angular = valueFor("angular");
+  const command = state.chassisControl.command || { linearX: 0, linearY: 0, angularZ: 0 };
+  const system = state.chassisState.system || {};
+  const battery = state.chassisState.battery || {};
+  const odom = state.chassisState.odom || {};
+  const feedbackLinear = nestedNumber(odom, ["twist", "twist", "linear", "x"]);
+  const feedbackLateral = nestedNumber(odom, ["twist", "twist", "linear", "y"]);
+  const feedbackAngular = nestedNumber(odom, ["twist", "twist", "angular", "z"]);
+  const systemVoltage = Number(system.battery_voltage);
+  const bmsVoltage = Number(battery.voltage);
+  const voltage = Number.isFinite(bmsVoltage) ? bmsVoltage : systemVoltage;
+  const motionMode = system.motion_mode !== undefined ? system.motion_mode : state.chassisState.motion?.motion_mode;
+  const feedbackText = state.chassisState.ok
+    ? state.chassisState.stale
+      ? "延迟"
+      : "在线"
+    : chassisReady()
+      ? "等待"
+      : "未启动";
+  const feedbackLevel = chassisFeedbackLevel();
+  const odomText = state.chassisState.odom
+    ? state.chassisState.stale
+      ? "延迟"
+      : "在线"
+    : "未接入";
+  const serviceExternal = state.chassisRuntime.status === "external";
+  const serviceText = serviceExternal ? "外部运行" : chassisReady() ? feedbackText : "未启动";
+  const serviceLevel = serviceExternal ? "warn" : chassisReady() ? feedbackLevel : "idle";
+  setStatusText("#baseControlText", serviceText, serviceLevel);
+  setStatusText("#baseOdomText", odomText, state.chassisState.odom ? feedbackLevel : "idle");
+  $$("[data-device-drive]").forEach((button) => {
+    button.disabled = !chassisReady() && button.dataset.deviceDrive !== "stop";
+  });
   node.innerHTML = [
-    ["前后", `${linear.value.toFixed(2)} ${linear.unit}`],
-    ["横移", `${lateral.value.toFixed(2)} ${lateral.unit}`],
-    ["旋转", `${angular.value.toFixed(2)} ${angular.unit}`],
-    ["限速", "低速"],
+    ["指令", `${command.linearX.toFixed(2)} / ${command.linearY.toFixed(2)} m/s`],
+    ["旋转", `${command.angularZ.toFixed(2)} ${angular.unit}`],
+    ["反馈", feedbackLinear === null ? "--" : `${feedbackLinear.toFixed(2)} / ${(feedbackLateral || 0).toFixed(2)} m/s`],
+    ["模式", chassisMotionModeText(motionMode)],
+    ["角速", feedbackAngular === null ? "--" : `${feedbackAngular.toFixed(2)} rad/s`],
+    ["电压", Number.isFinite(voltage) ? `${voltage.toFixed(1)} V` : "--"],
   ]
     .map(([name, value]) => `<div class="metric-card"><span>${name}</span><strong>${value}</strong></div>`)
     .join("");
@@ -1310,6 +1429,15 @@ function liftingFeedbackLevel() {
 function renderLiftingRuntime() {
   const label = getLiftingRuntimeLabel();
   renderStatusSwitch("#liftingRuntimeStatus", "Lifting", label.level, {
+    pressed: label.pressed,
+    busy: label.busy,
+    title: label.title,
+  });
+}
+
+function renderChassisRuntime() {
+  const label = getChassisRuntimeLabel();
+  renderStatusSwitch("#chassisRuntimeStatus", "Chassis", label.level, {
     pressed: label.pressed,
     busy: label.busy,
     title: label.title,
@@ -1729,7 +1857,7 @@ function updateCanTopbar(canResult) {
     readonly: ready || busy,
     busy,
     pressed: ready,
-    title: busy ? "CAN 激活中" : ready ? "CAN 已激活" : "点击激活机械臂 CAN",
+    title: busy ? "CAN 激活中" : ready ? "CAN 已激活" : "点击激活 CAN",
   });
 }
 
@@ -1754,24 +1882,28 @@ async function refreshCanInterfaceStatus(options = {}) {
 async function activateCanInterface(item = currentCanCheckResult(), options = {}) {
   if (state.canActivation.busy || item.status === "正常") return;
   const can = item.can || {};
-  const targets = can.requestedTargets || ["can_left", "can_right"];
+  const targets = can.requestedTargets || ["can_left", "can_right", "can_chassis"];
   const bitrate = can.expectedBitrate || 1000000;
+  const expectedBitrates = can.expectedBitrates || {};
+  const targetSummary = targets
+    .map((target) => `${target}/${expectedBitrates[target] || bitrate}`)
+    .join(" / ");
   if (options.confirm !== false) {
     const ok = await confirmAction(
-      "激活机械臂 CAN",
-      `将使用 sudo -n 修复 ${targets.join(" / ")}，bitrate ${bitrate}。该动作会修改系统 CAN 网络接口状态。`,
+      "激活 CAN",
+      `将使用 sudo -n 修复 ${targetSummary}。该动作会修改系统 CAN 网络接口状态。`,
     );
     if (!ok) return;
   }
 
-  addLog("系统", `尝试激活机械臂 CAN：${targets.join(" / ")} / ${bitrate}`);
+  addLog("系统", `尝试激活 CAN：${targetSummary}`);
   state.canActivation.busy = true;
   updateCanTopbar(item);
   try {
     const response = await fetch("/api/actions/can/activate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bitrate }),
+      body: JSON.stringify({}),
     });
     const payload = await response.json();
     addLog("系统", `CAN 激活结果：${payload.code} / ${payload.ok ? "成功" : "失败"}`);
@@ -2106,6 +2238,30 @@ async function fetchLiftingRuntimeStatus(options = {}) {
   }
 }
 
+function applyChassisServicePayload(payload) {
+  const service = payload && payload.service;
+  if (!service || !service.status) return false;
+  setChassisRuntime(service.status);
+  return true;
+}
+
+async function fetchChassisRuntimeStatus(options = {}) {
+  try {
+    const response = await fetch("/api/runtime/services/chassis", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || !applyChassisServicePayload(payload)) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    return payload;
+  } catch (error) {
+    if (!options.silent) {
+      setChassisRuntime("error");
+      addLog("底盘", `Chassis 状态查询失败：${error.message}`);
+    }
+    return null;
+  }
+}
+
 function applyCameraServicePayload(payload) {
   const service = payload && payload.service;
   if (!service || !service.status) return false;
@@ -2202,6 +2358,42 @@ function toggleLiftingRuntime() {
     return;
   }
   requestLiftingRuntimeAction("start");
+}
+
+async function requestChassisRuntimeAction(action) {
+  const nextStatus = action === "stop" ? "stopping" : "starting";
+  setChassisRuntime(nextStatus);
+  addLog("底盘", action === "stop" ? "请求清理 Chassis ROS" : "请求启动 Chassis 服务");
+  try {
+    const response = await fetch(`/api/runtime/services/chassis/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const payload = await response.json();
+    applyChassisServicePayload(payload);
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    addLog("底盘", `Chassis 服务动作完成：${payload.code}`);
+    return payload;
+  } catch (error) {
+    setChassisRuntime("error");
+    addLog("底盘", `Chassis 服务动作失败：${error.message}`);
+    return null;
+  } finally {
+    window.setTimeout(() => fetchChassisRuntimeStatus({ silent: true }), 800);
+  }
+}
+
+function toggleChassisRuntime() {
+  if (state.chassisRuntime.status === "starting" || state.chassisRuntime.status === "stopping") return;
+  if (state.chassisRuntime.status === "running" || state.chassisRuntime.status === "external") {
+    stopChassisDrive("关闭 Chassis");
+    requestChassisRuntimeAction("stop");
+    return;
+  }
+  requestChassisRuntimeAction("start");
 }
 
 async function requestCameraRuntimeAction(action) {
@@ -2342,6 +2534,166 @@ async function fetchLiftingMotorState() {
       detail: error.message,
     });
     return null;
+  }
+}
+
+function applyChassisStatePayloads(results) {
+  const byKind = {};
+  results.forEach((item) => {
+    byKind[item.kind] = item.payload;
+  });
+  const okPayloads = Object.values(byKind).filter((payload) => payload && payload.ok);
+  state.chassisState.system = byKind.system && byKind.system.ok ? byKind.system.data || null : null;
+  state.chassisState.motion = byKind.motion && byKind.motion.ok ? byKind.motion.data || null : null;
+  state.chassisState.battery = byKind.battery && byKind.battery.ok ? byKind.battery.data || null : null;
+  state.chassisState.odom = byKind.odom && byKind.odom.ok ? byKind.odom.data || null : null;
+  state.chassisState.ok = okPayloads.length > 0;
+  state.chassisState.code = state.chassisState.ok
+    ? okPayloads.some((payload) => payload.stale) ? "ROS-R-STALE" : "ROS-R-OK"
+    : (byKind.system && byKind.system.code) || "ROS-R-NODATA";
+  state.chassisState.detail = state.chassisState.ok
+    ? "底盘反馈在线。"
+    : (byKind.system && byKind.system.detail) || "等待底盘反馈。";
+  state.chassisState.stale = !state.chassisState.ok || okPayloads.every((payload) => payload.stale);
+  const ages = okPayloads.map((payload) => Number(payload.ageMs)).filter(Number.isFinite);
+  state.chassisState.ageMs = ages.length ? Math.max(...ages) : null;
+  state.chassisState.receivedAt = okPayloads.find((payload) => payload.receivedAt)?.receivedAt || null;
+  renderDeviceBaseMetrics();
+}
+
+async function fetchChassisTopic(kind, key) {
+  try {
+    const response = await fetch(`/api/ros/topics/${key}?wait=0.05`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok && !payload.code) {
+      payload.ok = false;
+      payload.code = `HTTP-${response.status}`;
+      payload.detail = `HTTP ${response.status}`;
+    }
+    return { kind, payload };
+  } catch (error) {
+    return {
+      kind,
+      payload: {
+        ok: false,
+        code: "ROS-R-FETCH",
+        detail: error.message,
+      },
+    };
+  }
+}
+
+async function fetchChassisState(options = {}) {
+  const results = await Promise.all(
+    Object.entries(chassisTopicKeys).map(([kind, key]) => fetchChassisTopic(kind, key)),
+  );
+  applyChassisStatePayloads(results);
+  if (!options.silent && !state.chassisState.ok) {
+    addLog("底盘", state.chassisState.detail);
+  }
+  return results;
+}
+
+function chassisBaseValue(key, fallback) {
+  const item = deviceBaseControlItems.find((entry) => entry.key === key);
+  const value = item ? Math.abs(Number(item.value)) : 0;
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function chassisCommandForDrive(action) {
+  const linearSpeed = chassisBaseValue("linear", 0.10);
+  const lateralSpeed = chassisBaseValue("lateral", 0.08);
+  const angularSpeed = chassisBaseValue("angular", 0.25);
+  if (action === "forward") return { linearX: linearSpeed, linearY: 0, angularZ: 0 };
+  if (action === "backward") return { linearX: -linearSpeed, linearY: 0, angularZ: 0 };
+  if (action === "strafe-left") return { linearX: 0, linearY: lateralSpeed, angularZ: 0 };
+  if (action === "strafe-right") return { linearX: 0, linearY: -lateralSpeed, angularZ: 0 };
+  if (action === "left") return { linearX: 0, linearY: 0, angularZ: angularSpeed };
+  if (action === "right") return { linearX: 0, linearY: 0, angularZ: -angularSpeed };
+  return { linearX: 0, linearY: 0, angularZ: 0 };
+}
+
+async function requestChassisVelocity(command, options = {}) {
+  if (!chassisReady()) {
+    addLog("底盘", "Chassis 服务未启动，速度指令未发送");
+    renderDeviceBaseMetrics();
+    return null;
+  }
+  try {
+    const response = await fetch("/api/control/chassis/cmd_vel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(command),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.detail || `HTTP ${response.status}`);
+    }
+    state.chassisControl.command = {
+      linearX: Number(command.linearX) || 0,
+      linearY: Number(command.linearY) || 0,
+      angularZ: Number(command.angularZ) || 0,
+    };
+    renderDeviceBaseMetrics();
+    if (!options.quiet) addLog("底盘", `${options.source || "速度指令"}：${result.code}`);
+    return result;
+  } catch (error) {
+    addLog("底盘", `${options.source || "速度指令"}失败：${error.message}`);
+    return null;
+  }
+}
+
+async function requestChassisStop(source = "底盘停止") {
+  try {
+    const response = await fetch("/api/control/chassis/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.detail || `HTTP ${response.status}`);
+    }
+    state.chassisControl.command = { linearX: 0, linearY: 0, angularZ: 0 };
+    renderDeviceBaseMetrics();
+    addLog("底盘", `${source}：${result.code}`);
+    return result;
+  } catch (error) {
+    addLog("底盘", `${source}失败：${error.message}`);
+    return null;
+  }
+}
+
+function startChassisDrive(action, label) {
+  if (action === "stop") {
+    stopChassisDrive("底盘停止");
+    return;
+  }
+  if (!chassisReady()) {
+    requestChassisVelocity(chassisCommandForDrive(action), { source: `点动${label}`, quiet: true });
+    return;
+  }
+  if (state.chassisControl.driveTimer) {
+    window.clearInterval(state.chassisControl.driveTimer);
+  }
+  const command = chassisCommandForDrive(action);
+  state.chassisControl.activeDrive = action;
+  addLog("底盘", `点动开始：${label}`);
+  requestChassisVelocity(command, { source: `点动${label}`, quiet: true });
+  state.chassisControl.driveTimer = window.setInterval(() => {
+    requestChassisVelocity(command, { source: `点动${label}`, quiet: true });
+  }, 100);
+}
+
+function stopChassisDrive(source = "松开停止") {
+  if (state.chassisControl.driveTimer) {
+    window.clearInterval(state.chassisControl.driveTimer);
+    state.chassisControl.driveTimer = null;
+  }
+  const hadActiveDrive = Boolean(state.chassisControl.activeDrive);
+  state.chassisControl.activeDrive = null;
+  if (hadActiveDrive || source === "底盘停止" || source === "关闭 Chassis") {
+    requestChassisStop(source);
   }
 }
 
@@ -3179,6 +3531,7 @@ function bindEvents() {
   $("#canStatus").addEventListener("click", () => activateCanInterface(currentCanCheckResult(), { confirm: false }));
   $("#piperRuntimeStatus").addEventListener("click", togglePiperRuntime);
   $("#liftingRuntimeStatus").addEventListener("click", toggleLiftingRuntime);
+  $("#chassisRuntimeStatus").addEventListener("click", toggleChassisRuntime);
   $("#cameraRuntimeStatus").addEventListener("click", toggleCameraRuntime);
   $("#lidarRuntimeStatus").addEventListener("click", toggleLidarRuntime);
   $("#armCompareList").addEventListener("input", (event) => {
@@ -3271,10 +3624,14 @@ function bindEvents() {
   });
 
   $$("[data-device-drive]").forEach((button) => {
-    const label = button.textContent;
-    button.addEventListener("pointerdown", () => addLog("底盘", `点动开始：${label}`));
-    button.addEventListener("pointerup", () => addLog("底盘", "松开停止"));
-    button.addEventListener("pointerleave", () => addLog("底盘", "离开按钮区域，停止"));
+    const label = button.textContent.trim();
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      startChassisDrive(button.dataset.deviceDrive, label);
+    });
+    button.addEventListener("pointerup", () => stopChassisDrive("松开停止"));
+    button.addEventListener("pointercancel", () => stopChassisDrive("取消点动"));
+    button.addEventListener("pointerleave", () => stopChassisDrive("离开按钮区域，停止"));
   });
 
   $$("[data-device-stop]").forEach((button) => {
@@ -3375,6 +3732,7 @@ function init() {
   renderDeviceControls();
   renderPiperRuntime();
   renderLiftingRuntime();
+  renderChassisRuntime();
   renderCameraRuntime();
   renderLidarRuntime();
   renderHistory();
@@ -3390,6 +3748,8 @@ function init() {
   fetchPiperRuntimeStatus({ silent: true });
   fetchLiftingLimits();
   fetchLiftingRuntimeStatus({ silent: true });
+  fetchChassisRuntimeStatus({ silent: true });
+  fetchChassisState({ silent: true });
   fetchCameraRuntimeStatus({ silent: true });
   fetchCameraFrames({ silent: true });
   fetchLidarRuntimeStatus({ silent: true });
@@ -3401,11 +3761,13 @@ function init() {
   window.setInterval(syncClock, 1000);
   window.setInterval(() => fetchPiperRuntimeStatus({ silent: true }), 3000);
   window.setInterval(() => fetchLiftingRuntimeStatus({ silent: true }), 3000);
+  window.setInterval(() => fetchChassisRuntimeStatus({ silent: true }), 3000);
   window.setInterval(() => fetchCameraRuntimeStatus({ silent: true }), 3000);
   window.setInterval(() => fetchCameraFrames({ silent: true }), 1000);
   window.setInterval(() => fetchLidarRuntimeStatus({ silent: true }), 3000);
   window.setInterval(() => fetchLidarCloudStatus({ silent: true }), 1000);
   window.setInterval(fetchLiftingMotorState, 500);
+  window.setInterval(() => fetchChassisState({ silent: true }), 500);
   window.setInterval(fetchPiperJointStates, 250);
 }
 

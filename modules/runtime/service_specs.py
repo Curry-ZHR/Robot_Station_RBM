@@ -2,6 +2,8 @@ from dataclasses import asdict, dataclass, field
 import os
 from pathlib import Path
 
+from modules.drivers.can.can_interface import DEFAULT_CHASSIS_CAN_TARGETS, load_chassis_can_config
+
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
@@ -28,11 +30,20 @@ class ManagedServiceSpec:
         return payload
 
 
+def _default_chassis_can_port():
+    ports = load_chassis_can_config().get("ports", {})
+    for target in DEFAULT_CHASSIS_CAN_TARGETS:
+        if target in ports:
+            return target
+    return next(iter(ports), "can_chassis")
+
+
 def default_service_specs():
     ros_distro = os.environ.get("ROS_DISTRO", "humble")
     piper_joint_speed_percent = os.environ.get("PIPER_JOINT_SPEED_PERCENT", "10")
     piper_install = ROOT_DIR / "ros_packages" / "control" / "piper" / "install" / "setup.bash"
     lifting_install = ROOT_DIR / "ros_packages" / "control" / "lifting" / "install" / "setup.bash"
+    chassis_install = ROOT_DIR / "ros_packages" / "control" / "chassis" / "install" / "setup.bash"
     camera_ws = ROOT_DIR / "ros_packages" / "sensors" / "camera" / "orbbec"
     camera_install = camera_ws / "install" / "setup.bash"
     camera_start_script = camera_ws / "scripts" / "start_orbbec_camera.sh"
@@ -41,6 +52,11 @@ def default_service_specs():
     lidar_config = lidar_ws / "rslidar_sdk" / "config" / "config.yaml"
     lifting_motor_id = os.environ.get("LIFTING_MOTOR_ID", "1")
     lifting_executable = os.environ.get("LIFTING_SERVICE_EXECUTABLE", "service_850pro")
+    chassis_launch_file = os.environ.get("CHASSIS_LAUNCH_FILE", "ranger_mini_v3.launch.py")
+    chassis_can_port = os.environ.get("CHASSIS_CAN_PORT", _default_chassis_can_port())
+    chassis_robot_model = os.environ.get("CHASSIS_ROBOT_MODEL", "ranger_mini_v3")
+    chassis_update_rate = os.environ.get("CHASSIS_UPDATE_RATE", "50")
+    chassis_publish_odom_tf = os.environ.get("CHASSIS_PUBLISH_ODOM_TF", "false")
     return {
         "piper": ManagedServiceSpec(
             key="piper",
@@ -98,6 +114,35 @@ def default_service_specs():
             shutdown_timeout_sec=8.0,
             startup_grace_sec=0.8,
             description="Launch the lifting axis motor service node.",
+        ),
+        "chassis": ManagedServiceSpec(
+            key="chassis",
+            name="Ranger Mini chassis ROS control",
+            command=(
+                "ros2",
+                "launch",
+                "ranger_base",
+                chassis_launch_file,
+                f"port_name:={chassis_can_port}",
+                f"robot_model:={chassis_robot_model}",
+                f"update_rate:={chassis_update_rate}",
+                f"publish_odom_tf:={chassis_publish_odom_tf}",
+            ),
+            setup_scripts=(
+                f"/opt/ros/{ros_distro}/setup.bash",
+                str(chassis_install),
+            ),
+            cleanup_process_patterns=(
+                "ranger_base_node",
+                "ros2 launch ranger_base",
+                "ranger_mini_v3.launch.py",
+                "ranger_mini_v2.launch.py",
+                "ranger.launch.py",
+            ),
+            cwd=str(ROOT_DIR),
+            shutdown_timeout_sec=8.0,
+            startup_grace_sec=0.8,
+            description="Launch the Ranger Mini chassis ROS control node.",
         ),
         "camera": ManagedServiceSpec(
             key="camera",

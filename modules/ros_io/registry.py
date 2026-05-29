@@ -120,6 +120,38 @@ READ_TOPICS = {
         stale_after_sec=0.8,
         description="Lifting axis motor state feedback.",
     ),
+    "chassis_system_state": TopicReadSpec(
+        key="chassis_system_state",
+        name="Chassis system state",
+        topic="/system_state",
+        message_type="ranger_msgs/msg/SystemState",
+        stale_after_sec=0.8,
+        description="Ranger chassis system, control mode, error code, battery voltage, and motion mode.",
+    ),
+    "chassis_motion_state": TopicReadSpec(
+        key="chassis_motion_state",
+        name="Chassis motion state",
+        topic="/motion_state",
+        message_type="ranger_msgs/msg/MotionState",
+        stale_after_sec=0.8,
+        description="Ranger chassis motion mode feedback.",
+    ),
+    "chassis_battery_state": TopicReadSpec(
+        key="chassis_battery_state",
+        name="Chassis battery state",
+        topic="/battery_state",
+        message_type="sensor_msgs/msg/BatteryState",
+        stale_after_sec=1.0,
+        description="Ranger chassis BMS feedback.",
+    ),
+    "chassis_odom": TopicReadSpec(
+        key="chassis_odom",
+        name="Chassis odometry",
+        topic="/odom",
+        message_type="nav_msgs/msg/Odometry",
+        stale_after_sec=0.8,
+        description="Ranger chassis odometry published by ranger_base_node.",
+    ),
 }
 
 
@@ -219,6 +251,15 @@ WRITE_ACTIONS = {
         message_type="std_msgs/msg/Bool",
         builder="bool",
         description="Publish the shared enable flag used by current Piper launch files.",
+    ),
+    "chassis_cmd_vel": TopicWriteSpec(
+        key="chassis_cmd_vel",
+        name="Chassis velocity command",
+        topic="/cmd_vel",
+        message_type="geometry_msgs/msg/Twist",
+        builder="twist",
+        qos_depth=5,
+        description="Publish Ranger chassis velocity commands.",
     ),
 }
 

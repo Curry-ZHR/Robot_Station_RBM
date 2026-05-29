@@ -2172,6 +2172,23 @@ button:disabled {
   filter: drop-shadow(0 6px 12px rgba(15, 23, 42, 0.08));
 }
 
+.base-lateral-pad {
+  display: grid;
+  grid-template-columns: repeat(2, 72px);
+  gap: 6px;
+  justify-content: center;
+}
+
+.base-lateral-pad button {
+  min-height: 34px;
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1d2733;
+  font-size: 18px;
+  font-weight: 800;
+}
+
 .device-zone-base .drive-pad button,
 .lift-motion-cluster button,
 .lift-presets button {

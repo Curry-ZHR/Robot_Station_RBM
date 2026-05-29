@@ -3,5 +3,11 @@
   "ports": {
     "can_left": "1-13:1.0",
     "can_right": "1-12:1.0"
+  },
+  "chassis": {
+    "bitrate": 500000,
+    "ports": {
+      "can_chassis": "1-1:1.0"
+    }
   }
 }

@@ -28,22 +28,35 @@ fi
 
 cat >"${TMP_FILE}" <<EOF
 # Robot Station CAN activation whitelist.
-# Allows ${TARGET_USER} to activate and rename only Piper CAN interfaces.
+# Allows ${TARGET_USER} to activate and rename Robot Station CAN interfaces.
 Cmnd_Alias ROBOT_STATION_CAN = \\
     ${IP_BIN} link set can0 down, \\
     ${IP_BIN} link set can1 down, \\
+    ${IP_BIN} link set can2 down, \\
     ${IP_BIN} link set can_left down, \\
     ${IP_BIN} link set can_right down, \\
+    ${IP_BIN} link set can_chassis down, \\
     ${IP_BIN} link set can0 type can bitrate 1000000, \\
     ${IP_BIN} link set can1 type can bitrate 1000000, \\
+    ${IP_BIN} link set can2 type can bitrate 1000000, \\
+    ${IP_BIN} link set can0 type can bitrate 500000, \\
+    ${IP_BIN} link set can1 type can bitrate 500000, \\
+    ${IP_BIN} link set can2 type can bitrate 500000, \\
     ${IP_BIN} link set can_left type can bitrate 1000000, \\
     ${IP_BIN} link set can_right type can bitrate 1000000, \\
+    ${IP_BIN} link set can_chassis type can bitrate 500000, \\
     ${IP_BIN} link set can0 name can_left, \\
     ${IP_BIN} link set can0 name can_right, \\
+    ${IP_BIN} link set can0 name can_chassis, \\
     ${IP_BIN} link set can1 name can_left, \\
     ${IP_BIN} link set can1 name can_right, \\
+    ${IP_BIN} link set can1 name can_chassis, \\
+    ${IP_BIN} link set can2 name can_left, \\
+    ${IP_BIN} link set can2 name can_right, \\
+    ${IP_BIN} link set can2 name can_chassis, \\
     ${IP_BIN} link set can_left up, \\
-    ${IP_BIN} link set can_right up
+    ${IP_BIN} link set can_right up, \\
+    ${IP_BIN} link set can_chassis up
 
 ${TARGET_USER} ALL=(root) NOPASSWD: ROBOT_STATION_CAN
 EOF

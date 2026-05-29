@@ -8,6 +8,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from modules.control.chassis import chassis_limits, publish_chassis_velocity, stop_chassis
 from modules.control.lifting import (
     clear_lifting_error,
     initialize_lifting,
@@ -183,6 +184,9 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/control/lifting/limits":
             self.write_json(lifting_limits())
             return
+        if parsed.path == "/api/control/chassis/limits":
+            self.write_json(chassis_limits())
+            return
         camera_tail = api_tail(parsed.path, "/api/sensors/cameras")
         if camera_tail is not None:
             reader = get_camera_image_reader()
@@ -323,6 +327,29 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             log_action_result("Piper joint targets", result)
             self.write_json(result, status=ros_result_status(result))
             return
+        chassis_action = api_tail(parsed.path, "/api/control/chassis")
+        if chassis_action is not None:
+            payload = self.read_json_body()
+            handlers = {
+                "cmd_vel": publish_chassis_velocity,
+                "velocity": publish_chassis_velocity,
+                "stop": stop_chassis,
+            }
+            handler = handlers.get(chassis_action)
+            if handler is None:
+                self.write_json(
+                    {
+                        "ok": False,
+                        "code": "CHASSIS-C-ACTION",
+                        "detail": f"Unsupported chassis action: {chassis_action}",
+                    },
+                    status=400,
+                )
+                return
+            result = handler(payload)
+            log_action_result(f"Chassis {chassis_action}", result)
+            self.write_json(result, status=ros_result_status(result))
+            return
         lifting_action = api_tail(parsed.path, "/api/control/lifting")
         if lifting_action is not None:
             payload = self.read_json_body()
@@ -381,7 +408,7 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             payload = self.read_json_body()
             interface = payload.get("interface")
             try:
-                bitrate = int(payload.get("bitrate", 1000000))
+                bitrate = int(payload["bitrate"]) if payload.get("bitrate") is not None else None
             except (TypeError, ValueError):
                 LOGGER.error("CAN activate rejected: invalid bitrate %r", payload.get("bitrate"))
                 self.write_json({"ok": False, "code": "CAN-A-BITRATE", "detail": "invalid bitrate"}, status=400)
