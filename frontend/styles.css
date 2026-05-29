@@ -462,7 +462,8 @@ button:disabled {
 }
 
 .device-control-view.is-active,
-.platform-control-view.is-active {
+.platform-control-view.is-active,
+.robot-view.is-active {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-height: calc(100vh - 90px);
@@ -470,7 +471,8 @@ button:disabled {
 }
 
 .device-page-head,
-.platform-page-head {
+.platform-page-head,
+.robot-page-head {
   margin-bottom: 10px;
 }
 
@@ -508,6 +510,271 @@ button:disabled {
   min-height: 0;
   height: clamp(560px, calc(100vh - 154px), 780px);
   margin-bottom: 0;
+}
+
+.robot-view-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(290px, 0.65fr);
+  gap: 12px;
+  min-height: 0;
+  height: clamp(560px, calc(100vh - 154px), 780px);
+  margin-bottom: 0;
+}
+
+.robot-viewport-card {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.robot-view .panel {
+  padding: 10px;
+}
+
+.robot-viewport {
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.robot-stage {
+  position: relative;
+  min-height: 430px;
+  height: 100%;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 48% 42%, rgba(37, 99, 235, 0.08), transparent 28%),
+    linear-gradient(135deg, #f8fafc 0%, #eef2f7 58%, #e8eef2 100%);
+  isolation: isolate;
+}
+
+.robot-floor {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(101, 114, 130, 0.13) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(101, 114, 130, 0.13) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.32));
+}
+
+.robot-base-figure {
+  position: absolute;
+  left: 50%;
+  top: 52%;
+  width: min(62%, 560px);
+  aspect-ratio: 1.42;
+  transform: translate(-50%, -45%) rotate(var(--base-yaw, 0deg));
+  transform-origin: 50% 50%;
+  transition: transform 180ms ease;
+  z-index: 1;
+}
+
+.robot-base-body {
+  position: absolute;
+  inset: 22% 18%;
+  border: 1px solid #94a3b8;
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(226, 232, 240, 0.96)),
+    #e2e8f0;
+  box-shadow: 0 18px 32px rgba(15, 23, 42, 0.12);
+}
+
+.robot-wheel {
+  position: absolute;
+  width: 22%;
+  height: 15%;
+  border: 1px solid #334155;
+  border-radius: 7px;
+  background: #475569;
+  box-shadow: inset 0 0 0 4px rgba(255, 255, 255, 0.08);
+}
+
+.robot-wheel.front-left {
+  left: 6%;
+  top: 16%;
+}
+
+.robot-wheel.front-right {
+  right: 6%;
+  top: 16%;
+}
+
+.robot-wheel.rear-left {
+  left: 6%;
+  bottom: 16%;
+}
+
+.robot-wheel.rear-right {
+  right: 6%;
+  bottom: 16%;
+}
+
+.robot-lift-mast {
+  position: absolute;
+  left: 49%;
+  bottom: 34%;
+  width: 2%;
+  height: 40%;
+  border-radius: 999px;
+  background: #0f766e;
+  box-shadow: 0 0 0 5px rgba(15, 118, 110, 0.12);
+}
+
+.robot-lift-carriage {
+  position: absolute;
+  left: 43%;
+  bottom: var(--lift-position, 47%);
+  width: 14%;
+  height: 10px;
+  border-radius: 999px;
+  background: #f59e0b;
+  transition: bottom 180ms ease;
+}
+
+.robot-arm {
+  position: absolute;
+  bottom: var(--lift-position, 47%);
+  height: 9px;
+  border-radius: 999px;
+  box-shadow: 0 7px 16px rgba(15, 23, 42, 0.16);
+  transition:
+    bottom 180ms ease,
+    transform 180ms ease;
+}
+
+.robot-arm.upper {
+  width: 28%;
+  background: #2563eb;
+}
+
+.robot-arm.lower {
+  width: 20%;
+  background: #0f766e;
+}
+
+.robot-arm.left-arm.upper {
+  right: 50%;
+  transform-origin: 100% 50%;
+  transform: rotate(var(--left-shoulder, 18deg));
+}
+
+.robot-arm.left-arm.lower {
+  right: 75%;
+  transform-origin: 100% 50%;
+  transform: rotate(var(--left-elbow, -14deg));
+}
+
+.robot-arm.right-arm.upper {
+  left: 50%;
+  transform-origin: 0 50%;
+  transform: rotate(var(--right-shoulder, -18deg));
+}
+
+.robot-arm.right-arm.lower {
+  left: 75%;
+  transform-origin: 0 50%;
+  transform: rotate(var(--right-elbow, 14deg));
+}
+
+.robot-view-overlay {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  display: grid;
+  gap: 3px;
+  max-width: min(320px, calc(100% - 28px));
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--muted);
+  font-size: 12px;
+  backdrop-filter: blur(8px);
+}
+
+.robot-view-overlay strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.robot-viewport-footer {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.robot-viewport-footer span {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.robot-viewport-footer strong,
+.robot-viewport-footer small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.robot-viewport-footer strong {
+  font-size: 13px;
+}
+
+.robot-viewport-footer small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.robot-state-stack {
+  display: grid;
+  grid-template-rows: auto auto auto;
+  gap: 12px;
+  min-height: 0;
+}
+
+.robot-state-card {
+  min-height: 0;
+}
+
+.robot-summary-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.robot-component-list,
+.robot-resource-list {
+  display: grid;
+  gap: 8px;
+}
+
+.robot-component-row,
+.robot-resource-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.robot-component-row small {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel {
@@ -3059,19 +3326,22 @@ button:disabled {
   }
 
   .device-control-view.is-active,
-  .platform-control-view.is-active {
+  .platform-control-view.is-active,
+  .robot-view.is-active {
     min-height: 0;
     overflow: visible;
   }
 
   .device-control-grid,
-  .platform-control-grid {
+  .platform-control-grid,
+  .robot-view-grid {
     height: auto;
   }
 
   .device-card,
   .platform-sensing-card,
-  .platform-remote-card {
+  .platform-remote-card,
+  .robot-viewport-card {
     overflow: visible;
   }
 
@@ -3113,13 +3383,15 @@ button:disabled {
   }
 
   .device-control-view.is-active,
-  .platform-control-view.is-active {
+  .platform-control-view.is-active,
+  .robot-view.is-active {
     min-height: 0;
     overflow: visible;
   }
 
   .device-control-grid,
-  .platform-control-grid {
+  .platform-control-grid,
+  .robot-view-grid {
     grid-template-columns: 1fr;
     grid-template-rows: auto;
     height: auto;
@@ -3135,7 +3407,8 @@ button:disabled {
   }
 
   .platform-sensing-card,
-  .platform-remote-card {
+  .platform-remote-card,
+  .robot-viewport-card {
     overflow: visible;
   }
 
@@ -3241,6 +3514,7 @@ button:disabled {
   .split-grid,
   .device-control-grid,
   .platform-control-grid,
+  .robot-view-grid,
   .platform-row-body,
   .dual-arm-grid,
   .video-grid {
@@ -3313,6 +3587,14 @@ button:disabled {
   .lift-action-target .lift-visual-slider {
     justify-self: center;
   }
+
+  .robot-stage {
+    min-height: 340px;
+  }
+
+  .robot-state-stack {
+    grid-template-rows: auto;
+  }
 }
 
 @media (max-width: 520px) {
@@ -3332,7 +3614,10 @@ button:disabled {
   .device-control-grid,
   .platform-control-grid,
   .platform-row-body,
-  .device-status-line {
+  .device-status-line,
+  .robot-view-grid,
+  .robot-summary-grid,
+  .robot-viewport-footer {
     grid-template-columns: 1fr;
   }
 
@@ -3354,6 +3639,15 @@ button:disabled {
   .lidar-viewer {
     min-height: 260px;
     height: 56vh;
+  }
+
+  .robot-stage {
+    min-height: 300px;
+  }
+
+  .robot-component-row,
+  .robot-resource-list > div {
+    grid-template-columns: 1fr;
   }
 
   .arm-inline-head {

@@ -1,5 +1,6 @@
 import math
 import os
+import threading
 import time
 
 from modules.ros_io import get_ros_writer
@@ -8,6 +9,8 @@ from modules.ros_io import get_ros_writer
 DEFAULT_MAX_LINEAR_MPS = 0.20
 DEFAULT_MAX_LATERAL_MPS = 0.15
 DEFAULT_MAX_ANGULAR_RAD_S = 0.50
+_command_sequence_lock = threading.Lock()
+_latest_command_sequence = None
 
 
 class ChassisControlValidationError(ValueError):
@@ -68,6 +71,27 @@ def _payload_number(payload, keys, field, default=0.0):
     return _number(default, field)
 
 
+def _payload_sequence(payload):
+    for key in ("commandSequence", "command_sequence", "sequence"):
+        if key in payload:
+            sequence = _number(payload[key], key)
+            if sequence < 0:
+                raise ChassisControlValidationError(f"{key} must be >= 0.")
+            return int(sequence)
+    return None
+
+
+def _accept_sequence(sequence):
+    global _latest_command_sequence
+    if sequence is None:
+        return True, _latest_command_sequence
+    with _command_sequence_lock:
+        if _latest_command_sequence is not None and sequence < _latest_command_sequence:
+            return False, _latest_command_sequence
+        _latest_command_sequence = sequence
+        return True, _latest_command_sequence
+
+
 def _validate_command(command):
     limits = _limits()
     checks = (
@@ -103,9 +127,26 @@ def _motion_mode(command):
 def publish_chassis_velocity(payload, writer=None):
     writer = writer or get_ros_writer()
     try:
+        payload = _as_payload_dict(payload)
+        sequence = _payload_sequence(payload)
         command, limits = _command_from_payload(payload)
     except ChassisControlValidationError as exc:
         return _result(False, "CHASSIS-C-PAYLOAD", str(exc), limits=_limits())
+
+    accepted, latest_sequence = _accept_sequence(sequence)
+    if not accepted:
+        return _result(
+            True,
+            "CHASSIS-C-STALE",
+            "Skipped stale chassis velocity command.",
+            command=command,
+            motionMode=_motion_mode(command),
+            limits=limits,
+            stale=True,
+            commandSequence=sequence,
+            latestCommandSequence=latest_sequence,
+            publishedAt=time.strftime("%H:%M:%S"),
+        )
 
     result = writer.publish(
         "chassis_cmd_vel",
@@ -125,16 +166,25 @@ def publish_chassis_velocity(payload, writer=None):
         limits=limits,
         topic=result.get("topic"),
         writer=result,
+        commandSequence=sequence,
         publishedAt=time.strftime("%H:%M:%S"),
     )
 
 
 def stop_chassis(payload=None, writer=None):
     try:
-        _as_payload_dict(payload)
+        payload = _as_payload_dict(payload)
     except ChassisControlValidationError as exc:
         return _result(False, "CHASSIS-C-PAYLOAD", str(exc), limits=_limits())
-    return publish_chassis_velocity({"linearX": 0.0, "linearY": 0.0, "angularZ": 0.0}, writer=writer)
+    return publish_chassis_velocity(
+        {
+            **payload,
+            "linearX": 0.0,
+            "linearY": 0.0,
+            "angularZ": 0.0,
+        },
+        writer=writer,
+    )
 
 
 def chassis_limits():

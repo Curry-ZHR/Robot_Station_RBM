@@ -154,7 +154,7 @@ void RangerROSMessenger::SetupSubscription() {
 
   // subscriber
   motion_cmd_sub_ = node_->create_subscription<geometry_msgs::msg::Twist>(
-      "/cmd_vel", 5, std::bind(&RangerROSMessenger::TwistCmdCallback, this, std::placeholders::_1)
+      "/cmd_vel", 1, std::bind(&RangerROSMessenger::TwistCmdCallback, this, std::placeholders::_1)
       );
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
 }

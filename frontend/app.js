@@ -92,8 +92,10 @@ const state = {
   },
   chassisControl: {
     driveTimer: null,
+    stopTimers: [],
     activeDrive: null,
     busy: false,
+    commandSequence: Date.now(),
     command: {
       linearX: 0,
       linearY: 0,
@@ -330,10 +332,13 @@ const PIPER_JOINT_SPEED_STEP = 0.5;
 const ARM_ACTION_PUBLISH_DEBOUNCE_MS = 60;
 
 const deviceBaseControlItems = [
-  { key: "linear", label: "前向速度", value: 0, min: 0, max: 1, step: 0.01, unit: "", commandMax: 0.2, commandUnit: "m/s" },
-  { key: "lateral", label: "横向速度", value: 0, min: 0, max: 1, step: 0.01, unit: "", commandMax: 0.15, commandUnit: "m/s" },
-  { key: "angular", label: "旋转速度", value: 0, min: 0, max: 1, step: 0.01, unit: "", commandMax: 0.5, commandUnit: "rad/s" },
+  { key: "linear", label: "前向速度", value: 0, min: 0, max: 1, step: 0.01, unit: "", commandMax: 0.2, commandUnit: "m/s", commandDigits: 3 },
+  { key: "lateral", label: "横向速度", value: 0, min: 0, max: 1, step: 0.01, unit: "", commandMax: 0.15, commandUnit: "m/s", commandDigits: 3 },
+  { key: "angular", label: "旋转速度", value: 0, min: 0, max: 1, step: 0.01, unit: "", commandMax: 0.5, commandUnit: "rad/s", commandDigits: 3 },
 ];
+const CHASSIS_DRIVE_REPEAT_MS = 100;
+const CHASSIS_STOP_REPEAT_COUNT = 3;
+const CHASSIS_STOP_REPEAT_MS = 25;
 
 const liftPreviewLimits = {
   min: 0.05,
@@ -474,6 +479,19 @@ function normalizedSpeedValue(item) {
   const max = Number.isFinite(Number(item.max)) ? Number(item.max) : 1;
   const value = Number(item.value);
   return Number.isFinite(value) ? clamp(value, min, max) : min;
+}
+
+function commandSpeedValue(item, value = normalizedSpeedValue(item)) {
+  if (!item) return 0;
+  const commandMax = Number(item.commandMax);
+  return Number.isFinite(commandMax) ? value * commandMax : value;
+}
+
+function formatCommandSpeed(item, value = normalizedSpeedValue(item)) {
+  if (!item) return "--";
+  const digits = Number.isInteger(item.commandDigits) ? item.commandDigits : 2;
+  const unit = item.commandUnit || item.unit || "";
+  return `${formatNumber(commandSpeedValue(item, value), digits)} ${unit}`.trim();
 }
 
 function speedRiskColor(value) {
@@ -1419,6 +1437,7 @@ function renderDeviceBaseMetrics() {
   ]
     .map(([name, value]) => `<div class="metric-card"><span>${name}</span><strong>${value}</strong></div>`)
     .join("");
+  renderRobotViewStatus();
 }
 
 function liftPercent(height = state.liftPreview.height) {
@@ -1442,6 +1461,128 @@ function liftingFeedbackLevel() {
   if (state.liftingState.code === "ROS-R-WAITING") return "idle";
   if (state.liftingState.code === "ROS-R-NODATA") return "warn";
   return liftingReady() ? "danger" : "idle";
+}
+
+function robotAgeText(ageMs) {
+  const parsed = Number(ageMs);
+  if (!Number.isFinite(parsed)) return "--";
+  if (parsed < 1000) return `${Math.max(0, Math.round(parsed))} ms`;
+  return `${(parsed / 1000).toFixed(1)} s`;
+}
+
+function yawFromOdom(odom) {
+  const x = nestedNumber(odom, ["pose", "pose", "orientation", "x"]);
+  const y = nestedNumber(odom, ["pose", "pose", "orientation", "y"]);
+  const z = nestedNumber(odom, ["pose", "pose", "orientation", "z"]);
+  const w = nestedNumber(odom, ["pose", "pose", "orientation", "w"]);
+  if ([x, y, z, w].some((value) => value === null)) return null;
+  return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+}
+
+function robotJointDeg(side, index, fallback = 0) {
+  const value = stateValueFor(state.piperJoints[side], index);
+  return Number.isFinite(value) ? radToDeg(value) : fallback;
+}
+
+function renderRobotViewFigure() {
+  const stage = $("#robotViewStage");
+  if (!stage) return;
+  const actualHeight = Number(state.liftingState.heightM);
+  const heightForFigure = Number.isFinite(actualHeight) ? actualHeight : state.liftPreview.height;
+  const liftPosition = 34 + liftPercent(heightForFigure) * 0.36;
+  const yaw = yawFromOdom(state.chassisState.odom || {});
+  stage.style.setProperty("--lift-position", `${liftPosition.toFixed(1)}%`);
+  if (yaw !== null) stage.style.setProperty("--base-yaw", `${yaw}rad`);
+  stage.style.setProperty("--left-shoulder", `${clamp(-18 + robotJointDeg("left", 0), -58, 42)}deg`);
+  stage.style.setProperty("--right-shoulder", `${clamp(18 + robotJointDeg("right", 0), -42, 58)}deg`);
+  stage.style.setProperty("--left-elbow", `${clamp(-10 - robotJointDeg("left", 1) * 0.35, -50, 30)}deg`);
+  stage.style.setProperty("--right-elbow", `${clamp(10 + robotJointDeg("right", 1) * 0.35, -30, 50)}deg`);
+}
+
+function renderRobotViewStatus() {
+  const summaryNode = $("#robotSummaryMetrics");
+  if (!summaryNode) return;
+
+  const leftArm = armStatusText("left");
+  const rightArm = armStatusText("right");
+  const chassisLevel = chassisFeedbackLevel();
+  const liftLevel = liftingFeedbackLevel();
+  const chassisText = state.chassisState.ok
+    ? state.chassisState.stale ? "延迟" : "在线"
+    : chassisReady() ? "等待" : "未启动";
+  const liftText = state.liftingState.ok
+    ? state.liftingState.stale ? "延迟" : "在线"
+    : liftingReady() ? "等待" : "未启动";
+  const actualHeight = Number(state.liftingState.heightM);
+  const odom = state.chassisState.odom || {};
+  const linearX = nestedNumber(odom, ["twist", "twist", "linear", "x"]);
+  const linearY = nestedNumber(odom, ["twist", "twist", "linear", "y"]);
+  const ages = [
+    state.chassisState.ageMs,
+    state.liftingState.ageMs,
+    state.piperJoints.left.ageMs,
+    state.piperJoints.right.ageMs,
+  ]
+    .filter((value) => value !== null && value !== undefined)
+    .map(Number)
+    .filter(Number.isFinite);
+  const maxAge = ages.length ? Math.max(...ages) : null;
+  const liveLevels = [leftArm.level, rightArm.level, chassisLevel, liftLevel];
+  const okCount = liveLevels.filter((level) => level === "ok").length;
+  const warnCount = liveLevels.filter((level) => level === "warn").length;
+  const syncLevel = okCount === liveLevels.length ? "ok" : okCount || warnCount ? "warn" : "idle";
+  const syncText = syncLevel === "ok" ? "反馈同步" : syncLevel === "warn" ? "部分反馈" : "等待反馈";
+
+  setStateBadge("#robotModelBadge", "模型待接入", "idle");
+  setStateBadge("#robotSyncBadge", syncText, syncLevel);
+
+  const updates = [
+    ["#robotFrameText", state.chassisState.odom ? "odom / base_link" : "base_link"],
+    ["#robotModelSourceText", "前端占位"],
+    ["#robotSyncAgeText", robotAgeText(maxAge)],
+    ["#robotOverlayTitle", syncText],
+    ["#robotOverlayDetail", "URDF 与 mesh 加载接口未接入"],
+    ["#robotModelDetail", state.chassisState.odom ? "底盘里程计已接入视图状态" : "等待模型资源接入"],
+  ];
+  updates.forEach(([selector, text]) => {
+    const node = $(selector);
+    if (node) node.textContent = text;
+  });
+
+  summaryNode.innerHTML = [
+    ["底盘", state.chassisState.odom ? chassisText : "--"],
+    ["速度", linearX === null ? "--" : `${linearX.toFixed(2)} / ${(linearY || 0).toFixed(2)} m/s`],
+    ["升降", Number.isFinite(actualHeight) ? `${actualHeight.toFixed(3)} m` : "--"],
+    ["左臂", leftArm.text],
+    ["右臂", rightArm.text],
+    ["延迟", robotAgeText(maxAge)],
+  ]
+    .map(([name, value]) => `<div class="metric-card"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
+    .join("");
+
+  const componentRows = [
+    ["底盘", chassisText, chassisLevel, state.chassisState.odom ? "里程计 /odom" : state.chassisState.detail],
+    ["升降轴", liftText, liftLevel, state.liftingState.ok ? "LiftMotorStatePub" : state.liftingState.detail],
+    ["左臂", leftArm.text, leftArm.level, leftArm.detail],
+    ["右臂", rightArm.text, rightArm.level, rightArm.detail],
+    ["模型资源", "待接入", "idle", "Ranger URDF 与 mesh 接口未配置"],
+  ];
+  const componentNode = $("#robotComponentList");
+  if (componentNode) {
+    componentNode.innerHTML = componentRows
+      .map(
+        ([name, text, level, detail]) => `
+          <div class="robot-component-row">
+            <span>${escapeHtml(name)}</span>
+            <strong class="status-text ${escapeHtml(level)}">${escapeHtml(text)}</strong>
+            <small>${escapeHtml(detail || "--")}</small>
+          </div>
+        `,
+      )
+      .join("");
+  }
+
+  renderRobotViewFigure();
 }
 
 function renderLiftingRuntime() {
@@ -1598,6 +1739,7 @@ function renderLiftPreview() {
       button.disabled = actionDisabled;
     });
   });
+  renderRobotViewStatus();
 }
 
 function renderDeviceControls() {
@@ -1613,7 +1755,7 @@ function renderDeviceControls() {
         return `
           <label class="slider-row base-slider-row base-speed-row" style="--speed-risk: ${percent}%; --speed-color: ${color};">
             <span>${item.label}</span>
-            <small>${item.min}</small>
+            <small>${formatCommandSpeed(item, item.min)}</small>
             <input
               type="range"
               min="${item.min}"
@@ -1622,9 +1764,10 @@ function renderDeviceControls() {
               value="${value.toFixed(2)}"
               data-base-control="${item.key}"
               aria-label="${item.label}"
+              aria-valuetext="${formatCommandSpeed(item, value)}"
             />
-            <small>${item.max}</small>
-            <strong id="basePreview${item.key}">${value.toFixed(2)}</strong>
+            <small>${formatCommandSpeed(item, item.max)}</small>
+            <strong id="basePreview${item.key}">${formatCommandSpeed(item, value)}</strong>
           </label>
         `;
       })
@@ -2625,9 +2768,7 @@ async function fetchChassisState(options = {}) {
 function chassisBaseValue(key, fallback) {
   const item = deviceBaseControlItems.find((entry) => entry.key === key);
   if (!item) return fallback;
-  const value = normalizedSpeedValue(item);
-  const commandMax = Number(item.commandMax);
-  return Number.isFinite(commandMax) ? value * commandMax : value;
+  return commandSpeedValue(item);
 }
 
 function chassisCommandForDrive(action) {
@@ -2643,26 +2784,47 @@ function chassisCommandForDrive(action) {
   return { linearX: 0, linearY: 0, angularZ: 0 };
 }
 
+function nextChassisCommandSequence() {
+  state.chassisControl.commandSequence += 1;
+  return state.chassisControl.commandSequence;
+}
+
+function chassisStopCommand() {
+  return { linearX: 0, linearY: 0, angularZ: 0 };
+}
+
+function clearChassisStopTimers() {
+  state.chassisControl.stopTimers.forEach((timer) => window.clearTimeout(timer));
+  state.chassisControl.stopTimers = [];
+}
+
 async function requestChassisVelocity(command, options = {}) {
   if (!chassisReady()) {
-    addLog("底盘", "Chassis 服务未启动，速度指令未发送");
+    if (!options.quiet) addLog("底盘", "Chassis 服务未启动，速度指令未发送");
     renderDeviceBaseMetrics();
     return null;
   }
+  const payload = {
+    ...command,
+    commandSequence: nextChassisCommandSequence(),
+  };
   try {
     const response = await fetch("/api/control/chassis/cmd_vel", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(command),
+      body: JSON.stringify(payload),
     });
     const result = await response.json();
     if (!response.ok || !result.ok) {
       throw new Error(result.detail || `HTTP ${response.status}`);
     }
+    if (result.stale) {
+      return result;
+    }
     state.chassisControl.command = {
-      linearX: Number(command.linearX) || 0,
-      linearY: Number(command.linearY) || 0,
-      angularZ: Number(command.angularZ) || 0,
+      linearX: Number(payload.linearX) || 0,
+      linearY: Number(payload.linearY) || 0,
+      angularZ: Number(payload.angularZ) || 0,
     };
     renderDeviceBaseMetrics();
     if (!options.quiet) addLog("底盘", `${options.source || "速度指令"}：${result.code}`);
@@ -2673,24 +2835,17 @@ async function requestChassisVelocity(command, options = {}) {
   }
 }
 
-async function requestChassisStop(source = "底盘停止") {
-  try {
-    const response = await fetch("/api/control/chassis/stop", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: "{}",
-    });
-    const result = await response.json();
-    if (!response.ok || !result.ok) {
-      throw new Error(result.detail || `HTTP ${response.status}`);
-    }
-    state.chassisControl.command = { linearX: 0, linearY: 0, angularZ: 0 };
-    renderDeviceBaseMetrics();
-    addLog("底盘", `${source}：${result.code}`);
-    return result;
-  } catch (error) {
-    addLog("底盘", `${source}失败：${error.message}`);
-    return null;
+function requestChassisStop(source = "底盘停止") {
+  clearChassisStopTimers();
+  requestChassisVelocity(chassisStopCommand(), { source });
+  for (let index = 1; index < CHASSIS_STOP_REPEAT_COUNT; index += 1) {
+    const timer = window.setTimeout(() => {
+      requestChassisVelocity(chassisStopCommand(), {
+        source,
+        quiet: true,
+      });
+    }, index * CHASSIS_STOP_REPEAT_MS);
+    state.chassisControl.stopTimers.push(timer);
   }
 }
 
@@ -2699,6 +2854,7 @@ function startChassisDrive(action, label) {
     stopChassisDrive("底盘停止");
     return;
   }
+  clearChassisStopTimers();
   if (!chassisReady()) {
     requestChassisVelocity(chassisCommandForDrive(action), { source: `点动${label}`, quiet: true });
     return;
@@ -2706,13 +2862,13 @@ function startChassisDrive(action, label) {
   if (state.chassisControl.driveTimer) {
     window.clearInterval(state.chassisControl.driveTimer);
   }
-  const command = chassisCommandForDrive(action);
   state.chassisControl.activeDrive = action;
   addLog("底盘", `点动开始：${label}`);
-  requestChassisVelocity(command, { source: `点动${label}`, quiet: true });
+  requestChassisVelocity(chassisCommandForDrive(action), { source: `点动${label}`, quiet: true });
   state.chassisControl.driveTimer = window.setInterval(() => {
-    requestChassisVelocity(command, { source: `点动${label}`, quiet: true });
-  }, 100);
+    if (!state.chassisControl.activeDrive) return;
+    requestChassisVelocity(chassisCommandForDrive(state.chassisControl.activeDrive), { source: `点动${label}`, quiet: true });
+  }, CHASSIS_DRIVE_REPEAT_MS);
 }
 
 function stopChassisDrive(source = "松开停止") {
@@ -2823,6 +2979,7 @@ function applyPiperJointPayload(side, payload) {
 
 function renderPiperJointFeedback() {
   renderArmComparisons();
+  renderRobotViewStatus();
 }
 
 async function fetchPiperJointStates() {
@@ -3687,9 +3844,13 @@ function bindEvents() {
       row.style.setProperty("--speed-risk", `${clamp(item.value, 0, 1) * 100}%`);
       row.style.setProperty("--speed-color", speedRiskColor(item.value));
     }
+    input.setAttribute("aria-valuetext", formatCommandSpeed(item));
     const preview = $(`#basePreview${item.key}`);
-    if (preview) preview.textContent = item.value.toFixed(2);
+    if (preview) preview.textContent = formatCommandSpeed(item);
     renderDeviceBaseMetrics();
+    if (state.chassisControl.activeDrive) {
+      requestChassisVelocity(chassisCommandForDrive(state.chassisControl.activeDrive), { source: "速度调整", quiet: true });
+    }
   });
 
   $("#liftControlPanel").addEventListener("input", (event) => {
@@ -3783,6 +3944,7 @@ function init() {
   renderActionLocks();
   renderCameraFrames();
   renderLidarCloudStatus();
+  renderRobotViewStatus();
   initializeLidarViewer();
   addLog("系统", "Robot Station 前端原型已加载");
   addLog("ROS", "等待接入真实 ROS 状态");

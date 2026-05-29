@@ -21,6 +21,7 @@
           <button class="nav-item is-active" data-view="self-check">自检</button>
           <button class="nav-item" data-view="device-control">双臂控制</button>
           <button class="nav-item" data-view="platform-control">平台控制</button>
+          <button class="nav-item" data-view="robot-view">整机视图</button>
           <button class="nav-item" data-view="sensors">传感器</button>
           <button class="nav-item" data-view="control">中控</button>
           <button class="nav-item" data-view="homing">归位</button>
@@ -98,7 +99,7 @@
                 </div>
                 <div>
                   <span class="strip-label">速度限制</span>
-                  <strong>机械臂 10% / 底盘 0.20 m/s</strong>
+                  <strong>机械臂 10 deg/s / 底盘 0.20 m/s</strong>
                 </div>
                 <div>
                   <span class="strip-label">数据目录</span>
@@ -428,6 +429,94 @@
                     </section>
                   </div>
                 </article>
+              </div>
+            </section>
+
+            <section class="view robot-view" data-view-panel="robot-view">
+              <div class="page-head compact robot-page-head">
+                <div>
+                  <p class="eyebrow">整机视图</p>
+                  <h1>机器人状态视图</h1>
+                </div>
+                <div class="device-view-status">
+                  <strong>Ranger Mini v3 / 升降轴 / Piper x2</strong>
+                </div>
+              </div>
+
+              <div class="robot-view-grid">
+                <article class="panel robot-viewport-card">
+                  <div class="panel-head">
+                    <div>
+                      <h2>整机模型</h2>
+                      <p id="robotModelDetail">等待模型资源接入</p>
+                    </div>
+                    <span class="state-badge idle" id="robotModelBadge">模型待接入</span>
+                  </div>
+                  <div class="robot-viewport">
+                    <div class="robot-stage" id="robotViewStage" aria-label="整机状态示意">
+                      <div class="robot-floor" aria-hidden="true"></div>
+                      <div class="robot-base-figure" aria-hidden="true">
+                        <span class="robot-wheel front-left"></span>
+                        <span class="robot-wheel front-right"></span>
+                        <span class="robot-wheel rear-left"></span>
+                        <span class="robot-wheel rear-right"></span>
+                        <span class="robot-base-body"></span>
+                        <span class="robot-lift-mast"></span>
+                        <span class="robot-lift-carriage"></span>
+                        <span class="robot-arm left-arm upper"></span>
+                        <span class="robot-arm left-arm lower"></span>
+                        <span class="robot-arm right-arm upper"></span>
+                        <span class="robot-arm right-arm lower"></span>
+                      </div>
+                      <div class="robot-view-overlay">
+                        <strong id="robotOverlayTitle">前端视图已就绪</strong>
+                        <span id="robotOverlayDetail">URDF 与 mesh 加载接口未接入</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="robot-viewport-footer">
+                    <span><strong id="robotFrameText">base_link</strong><small>frame</small></span>
+                    <span><strong id="robotModelSourceText">前端占位</strong><small>model</small></span>
+                    <span><strong id="robotSyncAgeText">--</strong><small>延迟</small></span>
+                  </div>
+                </article>
+
+                <div class="robot-state-stack">
+                  <article class="panel robot-state-card">
+                    <div class="panel-head">
+                      <div>
+                        <h2>关键反馈</h2>
+                        <p>底盘、升降轴、双臂状态</p>
+                      </div>
+                      <span class="state-badge idle" id="robotSyncBadge">等待反馈</span>
+                    </div>
+                    <div class="metric-grid robot-summary-grid" id="robotSummaryMetrics"></div>
+                  </article>
+
+                  <article class="panel robot-state-card">
+                    <div class="panel-head">
+                      <div>
+                        <h2>组件状态</h2>
+                        <p>运行服务与 ROS 反馈</p>
+                      </div>
+                    </div>
+                    <div class="robot-component-list" id="robotComponentList"></div>
+                  </article>
+
+                  <article class="panel robot-state-card">
+                    <div class="panel-head">
+                      <div>
+                        <h2>模型资源</h2>
+                        <p>URDF 与 mesh 接入状态</p>
+                      </div>
+                    </div>
+                    <div class="robot-resource-list">
+                      <div><span>Ranger URDF</span><strong class="status-text idle">待配置</strong></div>
+                      <div><span>Piper URDF</span><strong class="status-text ok">本地已有</strong></div>
+                      <div><span>Mesh 解析</span><strong class="status-text idle">待接入</strong></div>
+                    </div>
+                  </article>
+                </div>
               </div>
             </section>
 

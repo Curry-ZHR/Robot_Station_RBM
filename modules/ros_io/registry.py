@@ -258,7 +258,7 @@ WRITE_ACTIONS = {
         topic="/cmd_vel",
         message_type="geometry_msgs/msg/Twist",
         builder="twist",
-        qos_depth=5,
+        qos_depth=1,
         description="Publish Ranger chassis velocity commands.",
     ),
 }
