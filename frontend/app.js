@@ -105,6 +105,7 @@ const state = {
     modelRoot: null,
     displayRoot: null,
     joints: {},
+    poseSyncEnabled: false,
     controls: null,
     animationFrame: null,
     resizeObserver: null,
@@ -341,6 +342,9 @@ const piperJointTopicKeys = {
   left: "piper_left_joint_state_double",
   right: "piper_right_joint_state_double",
 };
+
+const piperJointPollIntervalMs = 50;
+const piperJointReadWaitSec = 0.04;
 
 const piperEnableActionKey = "piper_enable_all";
 
@@ -1620,6 +1624,12 @@ function robotJointDeg(side, index, fallback = 0) {
 function renderRobotViewFigure() {
   const stage = $("#robotViewStage");
   if (!stage) return;
+  if (!state.robotModel.poseSyncEnabled) {
+    ["--lift-position", "--base-yaw", "--left-shoulder", "--right-shoulder", "--left-elbow", "--right-elbow"].forEach((property) => {
+      stage.style.removeProperty(property);
+    });
+    return;
+  }
   const actualHeight = Number(state.liftingState.heightM);
   const heightForFigure = Number.isFinite(actualHeight) ? actualHeight : state.liftPreview.height;
   const liftPosition = 34 + liftPercent(heightForFigure) * 0.36;
@@ -1674,6 +1684,49 @@ function setRobotLoadProgress(patch = {}) {
     ...patch,
   };
   renderRobotLoadProgress();
+}
+
+function robotFeedbackSyncMeta() {
+  const liveLevels = [armStatusText("left").level, armStatusText("right").level, chassisFeedbackLevel(), liftingFeedbackLevel()];
+  const okCount = liveLevels.filter((level) => level === "ok").length;
+  const warnCount = liveLevels.filter((level) => level === "warn").length;
+  const level = okCount === liveLevels.length ? "ok" : okCount || warnCount ? "warn" : "idle";
+  return {
+    level,
+    text: level === "ok" ? "反馈同步" : level === "warn" ? "部分反馈" : "等待反馈",
+  };
+}
+
+function robotPoseSyncButtonMeta() {
+  const robot = state.robotModel;
+  const busy = robot.status === "fetching" || robot.status === "loading";
+  const active = Boolean(robot.poseSyncEnabled && robot.hasModel);
+  const feedback = robotFeedbackSyncMeta();
+  if (!robot.hasModel) {
+    return {
+      active: false,
+      disabled: true,
+      text: busy ? "加载中" : "姿态同步",
+      title: "请先加载整机模型",
+    };
+  }
+  return {
+    active,
+    disabled: busy,
+    text: active ? (feedback.level === "ok" ? "同步中" : feedback.level === "warn" ? "部分同步" : "等待 State") : "姿态同步",
+    title: active ? "关闭后整机模型保持当前姿态" : "开启后整机模型跟随 State 姿态",
+  };
+}
+
+function renderRobotPoseSyncButton() {
+  const button = $("#robotPoseSyncButton");
+  if (!button) return;
+  const meta = robotPoseSyncButtonMeta();
+  button.disabled = meta.disabled;
+  button.textContent = meta.text;
+  button.title = meta.title;
+  button.classList.toggle("is-active", meta.active);
+  button.setAttribute("aria-pressed", meta.active ? "true" : "false");
 }
 
 function robotMeshProgressValue() {
@@ -1749,6 +1802,7 @@ function renderRobotModelControls() {
     button.disabled = !robot.selectedKey || robot.status === "fetching" || robot.status === "loading";
     button.textContent = robot.status === "loading" ? "加载中" : "加载";
   }
+  renderRobotPoseSyncButton();
 }
 
 async function fetchRobotModels(options = {}) {
@@ -2114,6 +2168,35 @@ function updateRobotModelTransforms() {
   robot.modelRoot.rotation.z = yaw === null ? 0 : yaw;
 }
 
+function setRobotPoseSyncEnabled(enabled, options = {}) {
+  const robot = state.robotModel;
+  if (enabled && !robot.hasModel) {
+    if (!options.silent) addLog("模型", "姿态同步需要先加载整机模型");
+    renderRobotPoseSyncButton();
+    return false;
+  }
+
+  const nextEnabled = Boolean(enabled);
+  if (robot.poseSyncEnabled === nextEnabled) {
+    renderRobotPoseSyncButton();
+    return robot.poseSyncEnabled;
+  }
+
+  robot.poseSyncEnabled = nextEnabled;
+  if (robot.poseSyncEnabled) {
+    updateRobotModelTransforms();
+    if (!options.silent) addLog("模型", "姿态同步已开启：整机视图跟随 State");
+  } else if (!options.silent) {
+    addLog("模型", "姿态同步已关闭：整机视图保持当前姿态");
+  }
+  renderRobotViewStatus();
+  return robot.poseSyncEnabled;
+}
+
+function toggleRobotPoseSync() {
+  setRobotPoseSyncEnabled(!state.robotModel.poseSyncEnabled);
+}
+
 async function loadRobotModel(key = state.robotModel.selectedKey) {
   if (!key) return null;
   if (state.robotModel.loadPromise) return state.robotModel.loadPromise;
@@ -2175,7 +2258,7 @@ async function loadRobotModel(key = state.robotModel.selectedKey) {
     state.robotModel.metadata = model;
     state.robotModel.loadedKey = key;
     state.robotModel.hasModel = true;
-    updateRobotModelTransforms();
+    if (state.robotModel.poseSyncEnabled) updateRobotModelTransforms();
     frameRobotModelInViewer(root);
     setRobotLoadProgress({
       active: false,
@@ -2194,6 +2277,7 @@ async function loadRobotModel(key = state.robotModel.selectedKey) {
     return await promise;
   } catch (error) {
     state.robotModel.hasModel = false;
+    state.robotModel.poseSyncEnabled = false;
     setRobotLoadProgress({
       active: false,
       label: "加载失败",
@@ -2257,23 +2341,20 @@ function renderRobotViewStatus() {
     .map(Number)
     .filter(Number.isFinite);
   const maxAge = ages.length ? Math.max(...ages) : null;
-  const liveLevels = [leftArm.level, rightArm.level, chassisLevel, liftLevel];
-  const okCount = liveLevels.filter((level) => level === "ok").length;
-  const warnCount = liveLevels.filter((level) => level === "warn").length;
-  const syncLevel = okCount === liveLevels.length ? "ok" : okCount || warnCount ? "warn" : "idle";
-  const syncText = syncLevel === "ok" ? "反馈同步" : syncLevel === "warn" ? "部分反馈" : "等待反馈";
   const robot = state.robotModel;
+  const feedbackSync = robotFeedbackSyncMeta();
   const modelMeta = robotModelStatusMeta();
   const selectedModel = robot.models.find((model) => model.key === robot.selectedKey);
   const modelName = robot.metadata?.name || selectedModel?.name || selectedModel?.key || "--";
 
   setStateBadge("#robotModelBadge", modelMeta.text, modelMeta.level);
-  setStateBadge("#robotSyncBadge", syncText, syncLevel);
+  setStateBadge("#robotSyncBadge", robot.poseSyncEnabled ? feedbackSync.text : "未同步", robot.poseSyncEnabled ? feedbackSync.level : "idle");
 
   const stage = $("#robotViewStage");
   if (stage) {
     stage.classList.toggle("is-loading", robot.status === "fetching" || robot.status === "loading");
     stage.classList.toggle("is-model-loaded", robot.hasModel);
+    stage.classList.toggle("is-pose-syncing", robot.poseSyncEnabled && robot.hasModel);
   }
 
   const updates = [
@@ -2327,7 +2408,7 @@ function renderRobotViewStatus() {
   renderRobotModelControls();
   renderRobotResourceList();
   renderRobotLoadProgress();
-  updateRobotModelTransforms();
+  if (robot.poseSyncEnabled) updateRobotModelTransforms();
   renderRobotViewFigure();
 }
 
@@ -3734,7 +3815,7 @@ async function fetchPiperJointStates() {
   const results = await Promise.all(
     entries.map(async ([side, key]) => {
       try {
-        const response = await fetch(`/api/ros/topics/${key}?wait=0.1`, { cache: "no-store" });
+        const response = await fetch(`/api/ros/topics/${key}?wait=${piperJointReadWaitSec}`, { cache: "no-store" });
         const payload = await response.json();
         if (!response.ok && !payload.code) {
           payload.ok = false;
@@ -4510,6 +4591,7 @@ function bindEvents() {
   $("#robotModelLoadButton").addEventListener("click", () => {
     loadRobotModel();
   });
+  $("#robotPoseSyncButton").addEventListener("click", toggleRobotPoseSync);
   $("#armCompareList").addEventListener("input", (event) => {
     const input = event.target.closest("[data-action-kind]");
     if (!input) return;
@@ -4770,7 +4852,7 @@ function init() {
   window.setInterval(() => fetchLidarCloudStatus({ silent: true }), 1000);
   window.setInterval(fetchLiftingMotorState, 500);
   window.setInterval(() => fetchChassisState({ silent: true }), 500);
-  window.setInterval(fetchPiperJointStates, 250);
+  window.setInterval(fetchPiperJointStates, piperJointPollIntervalMs);
 }
 
 init();

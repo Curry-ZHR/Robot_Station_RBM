@@ -563,6 +563,13 @@ body[data-active-view="robot-view"] .workbench {
   white-space: nowrap;
 }
 
+.robot-model-actions .pose-sync-button.is-active {
+  border-color: var(--accent-2);
+  background: #ecfdf5;
+  color: var(--accent-2);
+  font-weight: 700;
+}
+
 .robot-load-progress {
   display: grid;
   gap: 7px;
