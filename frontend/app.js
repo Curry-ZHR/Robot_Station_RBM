@@ -77,6 +77,38 @@ const state = {
     animationFrame: null,
     resizeObserver: null,
   },
+  robotModel: {
+    models: [],
+    selectedKey: "",
+    status: "idle",
+    detail: "等待模型资源接入",
+    loadedKey: "",
+    metadata: null,
+    loadPromise: null,
+    progress: {
+      active: false,
+      value: 0,
+      label: "等待加载",
+      detail: "选择模型后点击加载",
+      level: "idle",
+      meshLoaded: 0,
+      meshTotal: 0,
+    },
+    initialized: false,
+    initPromise: null,
+    hasModel: false,
+    error: "",
+    three: null,
+    scene: null,
+    camera: null,
+    renderer: null,
+    modelRoot: null,
+    displayRoot: null,
+    joints: {},
+    controls: null,
+    animationFrame: null,
+    resizeObserver: null,
+  },
   armControl: {
     active: false,
     busy: false,
@@ -156,6 +188,7 @@ const state = {
       ok: false,
       code: "ROS-R-WAITING",
       detail: "等待左臂关节反馈。",
+      names: [],
       positions: [],
       ageMs: null,
       stale: true,
@@ -165,6 +198,7 @@ const state = {
       ok: false,
       code: "ROS-R-WAITING",
       detail: "等待右臂关节反馈。",
+      names: [],
       positions: [],
       ageMs: null,
       stale: true,
@@ -408,7 +442,11 @@ const lidarCloudKey = "rslidar_points";
 const lidarFrameIntervalMs = 120;
 const lidarMaxPoints = 60000;
 const threeModuleUrl = "./vendor/three.module.min.js";
+const colladaLoaderUrl = "./vendor/ColladaLoader.js";
+const stlLoaderUrl = "./vendor/STLLoader.js";
+const urdfLoaderUrl = "./vendor/URDFLoader.js";
 let threeModulePromise = null;
+let threeLoaderPromise = null;
 
 const lidarRuntimeLabels = {
   stopped: { title: "LiDAR 未启动，点击启动", level: "idle", pressed: false },
@@ -655,6 +693,11 @@ function showView(view) {
   $$(".view").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.viewPanel === view));
   if (view === "sensors") {
     window.setTimeout(resizeLidarViewer, 0);
+  }
+  if (view === "robot-view") {
+    fetchRobotModels({ silent: true });
+    initializeRobotViewer();
+    window.setTimeout(resizeRobotViewer, 0);
   }
 }
 
@@ -932,6 +975,64 @@ function renderArmCompareBadge() {
 function stateValueFor(feedback, index) {
   if (!feedback || !feedback.ok || !Array.isArray(feedback.positions)) return NaN;
   return Number(feedback.positions[index]);
+}
+
+function normalizedJointStateName(name) {
+  return String(name || "").trim().replace(/^\/+/, "");
+}
+
+function jointStateNameMatches(actualName, expectedName) {
+  const actual = normalizedJointStateName(actualName);
+  const expected = normalizedJointStateName(expectedName);
+  return actual === expected || actual.endsWith(`/${expected}`);
+}
+
+function jointStateIndexForName(feedback, expectedName) {
+  const names = Array.isArray(feedback?.names) ? feedback.names : [];
+  if (!names.length || !Array.isArray(feedback?.positions) || names.length !== feedback.positions.length) return -1;
+  return names.findIndex((name) => jointStateNameMatches(name, expectedName));
+}
+
+function hasZeroBasedPiperJointNames(feedback) {
+  const names = Array.isArray(feedback?.names) ? feedback.names : [];
+  return names.some((name) => jointStateNameMatches(name, "joint0"));
+}
+
+// Piper feedback uses joint0..joint6, while the URDF uses joint1..joint8.
+function robotArmStateValueFor(feedback, side, robotJointName, fallbackIndex) {
+  if (!feedback || !feedback.ok || !Array.isArray(feedback.positions)) return NaN;
+  const names = Array.isArray(feedback.names) ? feedback.names : [];
+  if (names.length === feedback.positions.length) {
+    const bareName = String(robotJointName || "").split("/").pop();
+    const exactCandidates = [robotJointName, `${side}/${bareName}`].filter(Boolean);
+    for (const candidate of exactCandidates) {
+      const namedIndex = jointStateIndexForName(feedback, candidate);
+      if (namedIndex >= 0) return Number(feedback.positions[namedIndex]);
+    }
+
+    const piperIndex = hasZeroBasedPiperJointNames(feedback) ? fallbackIndex : fallbackIndex + 1;
+    const piperCandidates = [`joint${piperIndex}`, `joint_${piperIndex}`];
+    for (const candidate of piperCandidates) {
+      const namedIndex = jointStateIndexForName(feedback, candidate);
+      if (namedIndex >= 0) return Number(feedback.positions[namedIndex]);
+    }
+  }
+  return Number(feedback.positions[fallbackIndex]);
+}
+
+function gripperStateValueFor(feedback) {
+  if (!feedback || !feedback.ok || !Array.isArray(feedback.positions)) return NaN;
+  const names = Array.isArray(feedback.names) ? feedback.names : [];
+  if (names.length === feedback.positions.length) {
+    const candidates = hasZeroBasedPiperJointNames(feedback)
+      ? ["joint6", "joint_6", "gripper", "gripper_joint"]
+      : ["joint7", "joint_7", "gripper", "gripper_joint"];
+    for (const candidate of candidates) {
+      const namedIndex = jointStateIndexForName(feedback, candidate);
+      if (namedIndex >= 0) return Number(feedback.positions[namedIndex]);
+    }
+  }
+  return Number(feedback.positions[6]);
 }
 
 function actionValueFor(side, index) {
@@ -1531,9 +1632,606 @@ function renderRobotViewFigure() {
   stage.style.setProperty("--right-elbow", `${clamp(10 + robotJointDeg("right", 1) * 0.35, -30, 50)}deg`);
 }
 
+function robotModelStatusMeta() {
+  const robot = state.robotModel;
+  if (robot.status === "fetching") return { text: "查询模型", level: "warn" };
+  if (robot.status === "loading") return { text: "加载中", level: "warn" };
+  if (robot.status === "ready") return { text: "模型已加载", level: "ok" };
+  if (robot.status === "error") return { text: "加载失败", level: "danger" };
+  if (robot.models.length) return { text: "可加载", level: "idle" };
+  return { text: "模型待接入", level: "idle" };
+}
+
+function robotAssetName(filename) {
+  return String(filename || "")
+    .split(/[\\/]/)
+    .filter(Boolean)
+    .pop() || "mesh";
+}
+
+function renderRobotLoadProgress() {
+  const progress = state.robotModel.progress;
+  const node = $("#robotLoadProgress");
+  if (!node || !progress) return;
+  const value = clamp(Number(progress.value) || 0, 0, 100);
+  node.setAttribute("aria-valuenow", String(Math.round(value)));
+  node.classList.toggle("is-active", Boolean(progress.active));
+  node.classList.toggle("is-error", progress.level === "danger");
+
+  const text = $("#robotLoadProgressText");
+  if (text) text.textContent = progress.label || "等待加载";
+  const percent = $("#robotLoadProgressValue");
+  if (percent) percent.textContent = `${Math.round(value)}%`;
+  const bar = $("#robotLoadProgressBar");
+  if (bar) bar.style.width = `${value}%`;
+  const detail = $("#robotLoadProgressDetail");
+  if (detail) detail.textContent = progress.detail || "选择模型后点击加载";
+}
+
+function setRobotLoadProgress(patch = {}) {
+  state.robotModel.progress = {
+    ...state.robotModel.progress,
+    ...patch,
+  };
+  renderRobotLoadProgress();
+}
+
+function robotMeshProgressValue() {
+  const progress = state.robotModel.progress;
+  const total = Math.max(0, Number(progress.meshTotal) || 0);
+  const loaded = clamp(Number(progress.meshLoaded) || 0, 0, total || 0);
+  if (!total) return 90;
+  return 42 + (loaded / total) * 50;
+}
+
+function createRobotMeshProgress(totalMeshes) {
+  setRobotLoadProgress({
+    active: true,
+    value: totalMeshes ? 42 : 90,
+    label: totalMeshes ? `加载 mesh 0/${totalMeshes}` : "URDF 无 mesh 资源",
+    detail: totalMeshes ? "准备读取几何资源" : "准备生成关节结构",
+    level: "warn",
+    meshLoaded: 0,
+    meshTotal: totalMeshes,
+  });
+  return {
+    note(filename, event) {
+      const loaded = Number(event?.loaded);
+      const total = Number(event?.total);
+      const percent = Number.isFinite(loaded) && Number.isFinite(total) && total > 0 ? ` ${Math.round((loaded / total) * 100)}%` : "";
+      setRobotLoadProgress({
+        value: Math.max(state.robotModel.progress.value, robotMeshProgressValue()),
+        label: `加载 mesh ${state.robotModel.progress.meshLoaded + 1}/${state.robotModel.progress.meshTotal}`,
+        detail: `${robotAssetName(filename)}${percent}`,
+      });
+    },
+    done(filename) {
+      const total = Math.max(0, Number(state.robotModel.progress.meshTotal) || 0);
+      const nextLoaded = Math.min(total, state.robotModel.progress.meshLoaded + 1);
+      setRobotLoadProgress({
+        value: total ? 42 + (nextLoaded / total) * 50 : 90,
+        label: `加载 mesh ${nextLoaded}/${total}`,
+        detail: `${robotAssetName(filename)} 已解析`,
+        meshLoaded: nextLoaded,
+      });
+    },
+  };
+}
+
+function setRobotModelStatus(status, detail = "") {
+  state.robotModel.status = status;
+  state.robotModel.detail = detail || state.robotModel.detail;
+  state.robotModel.error = status === "error" ? state.robotModel.detail : "";
+  renderRobotModelControls();
+  renderRobotViewStatus();
+  renderRobotLoadProgress();
+}
+
+function renderRobotModelControls() {
+  const robot = state.robotModel;
+  const select = $("#robotModelSelect");
+  if (select) {
+    const options = robot.models.length
+      ? robot.models
+          .map((model) => `<option value="${escapeHtml(model.key)}">${escapeHtml(model.name || model.key)}</option>`)
+          .join("")
+      : `<option value="">暂无模型</option>`;
+    if (select.dataset.options !== options) {
+      select.innerHTML = options;
+      select.dataset.options = options;
+    }
+    select.value = robot.selectedKey || "";
+    select.disabled = robot.status === "fetching" || robot.status === "loading" || robot.models.length === 0;
+  }
+
+  const button = $("#robotModelLoadButton");
+  if (button) {
+    button.disabled = !robot.selectedKey || robot.status === "fetching" || robot.status === "loading";
+    button.textContent = robot.status === "loading" ? "加载中" : "加载";
+  }
+}
+
+async function fetchRobotModels(options = {}) {
+  if (state.robotModel.status === "fetching") return null;
+  if (!state.robotModel.hasModel) setRobotModelStatus("fetching", "正在读取模型清单");
+  try {
+    const response = await fetch("/api/robot-models", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok || !Array.isArray(payload.models)) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    state.robotModel.models = payload.models;
+    if (!state.robotModel.selectedKey && payload.models.length) {
+      state.robotModel.selectedKey = payload.models[0].key;
+    }
+    const selected = payload.models.find((model) => model.key === state.robotModel.selectedKey) || payload.models[0];
+    if (selected) state.robotModel.selectedKey = selected.key;
+    const loadedName = state.robotModel.metadata?.name || state.robotModel.loadedKey;
+    const detail = state.robotModel.hasModel
+      ? `${loadedName || selected?.name || selected?.key} 已加载到整机视图`
+      : selected
+        ? `已发现 ${selected.name || selected.key}，点击加载显示 URDF`
+        : "未发现可用模型";
+    setRobotModelStatus(state.robotModel.hasModel ? "ready" : "available", detail);
+    return payload;
+  } catch (error) {
+    setRobotModelStatus("error", `模型清单读取失败：${error.message}`);
+    if (!options.silent) addLog("模型", `模型清单读取失败：${error.message}`);
+    return null;
+  }
+}
+
+function updateRobotCamera() {
+  const robot = state.robotModel;
+  if (!robot.camera || !robot.controls) return;
+  const controls = robot.controls;
+  const horizontal = controls.distance * Math.cos(controls.pitch);
+  robot.camera.position.set(
+    controls.target.x + horizontal * Math.cos(controls.yaw),
+    controls.target.y + horizontal * Math.sin(controls.yaw),
+    controls.target.z + controls.distance * Math.sin(controls.pitch),
+  );
+  robot.camera.lookAt(controls.target);
+}
+
+function resizeRobotViewer() {
+  const robot = state.robotModel;
+  const container = $("#robotViewStage");
+  if (!container || !robot.renderer || !robot.camera) return;
+  const rect = container.getBoundingClientRect();
+  const width = Math.floor(rect.width);
+  const height = Math.floor(rect.height);
+  if (width <= 0 || height <= 0) return;
+  robot.camera.aspect = width / height;
+  robot.camera.updateProjectionMatrix();
+  robot.renderer.setSize(width, height, false);
+}
+
+function bindRobotViewerControls(surface) {
+  const controls = state.robotModel.controls;
+  if (!surface || !controls) return;
+
+  surface.addEventListener("pointerdown", (event) => {
+    controls.dragging = true;
+    controls.lastX = event.clientX;
+    controls.lastY = event.clientY;
+    surface.setPointerCapture(event.pointerId);
+  });
+
+  surface.addEventListener("pointermove", (event) => {
+    if (!controls.dragging) return;
+    const dx = event.clientX - controls.lastX;
+    const dy = event.clientY - controls.lastY;
+    controls.lastX = event.clientX;
+    controls.lastY = event.clientY;
+    controls.yaw -= dx * 0.006;
+    controls.pitch = clamp(controls.pitch + dy * 0.006, -1.1, 1.25);
+    updateRobotCamera();
+  });
+
+  const release = (event) => {
+    controls.dragging = false;
+    if (surface.hasPointerCapture(event.pointerId)) {
+      surface.releasePointerCapture(event.pointerId);
+    }
+  };
+  surface.addEventListener("pointerup", release);
+  surface.addEventListener("pointercancel", release);
+  surface.addEventListener(
+    "wheel",
+    (event) => {
+      event.preventDefault();
+      controls.distance = clamp(controls.distance * (event.deltaY > 0 ? 1.1 : 0.9), 1.2, 80);
+      updateRobotCamera();
+    },
+    { passive: false },
+  );
+}
+
+async function initializeRobotViewer() {
+  const robot = state.robotModel;
+  if (robot.initialized) return true;
+  if (robot.initPromise) return robot.initPromise;
+
+  robot.initPromise = loadThreeLoaders()
+    .then(({ THREE }) => {
+      const container = $("#robotViewStage");
+      if (!container) return false;
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x09111f);
+
+      const camera = new THREE.PerspectiveCamera(58, 1, 0.01, 5000);
+      camera.up.set(0, 0, 1);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setClearColor(0x09111f, 1);
+      if (THREE.SRGBColorSpace) renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+      const oldCanvas = container.querySelector("canvas");
+      if (oldCanvas) oldCanvas.remove();
+      container.appendChild(renderer.domElement);
+
+      const displayRoot = new THREE.Group();
+      scene.add(displayRoot);
+
+      const grid = new THREE.GridHelper(12, 24, 0x64748b, 0x1e293b);
+      grid.rotation.x = Math.PI / 2;
+      scene.add(grid);
+      scene.add(new THREE.AxesHelper(1.2));
+
+      const ambient = new THREE.AmbientLight(0xffffff, 1.4);
+      scene.add(ambient);
+      const keyLight = new THREE.DirectionalLight(0xffffff, 2.0);
+      keyLight.position.set(3.5, -4, 6);
+      scene.add(keyLight);
+      const fillLight = new THREE.DirectionalLight(0xc7d2fe, 0.8);
+      fillLight.position.set(-4, 3, 3);
+      scene.add(fillLight);
+
+      robot.three = THREE;
+      robot.scene = scene;
+      robot.camera = camera;
+      robot.renderer = renderer;
+      robot.displayRoot = displayRoot;
+      robot.controls = {
+        yaw: -2.35,
+        pitch: 0.52,
+        distance: 7.2,
+        target: new THREE.Vector3(0, 0, 0),
+        dragging: false,
+        lastX: 0,
+        lastY: 0,
+      };
+
+      bindRobotViewerControls(renderer.domElement);
+      robot.resizeObserver = new ResizeObserver(resizeRobotViewer);
+      robot.resizeObserver.observe(container);
+      window.addEventListener("resize", resizeRobotViewer);
+
+      const animate = () => {
+        robot.animationFrame = window.requestAnimationFrame(animate);
+        renderer.render(scene, camera);
+      };
+
+      updateRobotCamera();
+      resizeRobotViewer();
+      animate();
+      robot.initialized = true;
+      return true;
+    })
+    .catch((error) => {
+      setRobotModelStatus("error", `3D 引擎加载失败：${error.message}`);
+      return false;
+    });
+
+  return robot.initPromise;
+}
+
+function parseRobotUrdfXml(urdfText) {
+  const documentXml = new DOMParser().parseFromString(urdfText, "application/xml");
+  const parseError = documentXml.querySelector("parsererror");
+  if (parseError) throw new Error("URDF XML 解析失败");
+  if (!documentXml.querySelector("robot")) throw new Error("URDF 缺少 robot 根节点");
+  return documentXml;
+}
+
+function countRobotVisualMeshes(documentXml) {
+  return Array.from(documentXml.querySelectorAll("link > visual > geometry > mesh")).length;
+}
+
+function robotAssetUrl(path) {
+  try {
+    return new URL(path, window.location.href).toString();
+  } catch (error) {
+    return path;
+  }
+}
+
+function robotAssetExtension(path) {
+  const cleanPath = String(path || "").split(/[?#]/, 1)[0];
+  return cleanPath.includes(".") ? cleanPath.split(".").pop().toLowerCase() : "";
+}
+
+function loadWithThreeLoader(loader, url, onProgress) {
+  return new Promise((resolve, reject) => {
+    loader.load(url, resolve, onProgress, reject);
+  });
+}
+
+function prepareRobotViewerObject(THREE, object) {
+  object.traverse((child) => {
+    if (!child.isMesh) return;
+    child.castShadow = false;
+    child.receiveShadow = true;
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    materials.filter(Boolean).forEach((material) => {
+      if ("side" in material) material.side = THREE.DoubleSide;
+      if ("needsUpdate" in material) material.needsUpdate = true;
+    });
+  });
+}
+
+async function buildRobotModelWithRobotViewerLoader(THREE, URDFLoader, ColladaLoader, STLLoader, model, urdfText) {
+  const documentXml = parseRobotUrdfXml(urdfText);
+  const meshTotal = countRobotVisualMeshes(documentXml);
+  const meshProgress = createRobotMeshProgress(meshTotal);
+  const manager = new THREE.LoadingManager();
+  const loader = new URDFLoader(manager);
+  const colladaLoader = new ColladaLoader(manager);
+  const stlLoader = new STLLoader(manager);
+  const urdfBaseUrl = new URL("./", new URL(model.urdfUrl, window.location.href)).toString();
+  const meshLoads = [];
+
+  loader.parseVisual = true;
+  loader.parseCollision = false;
+  loader.packages = (packageName) => `/api/robot-model-assets/${encodeURIComponent(model.family)}/${encodeURIComponent(model.key)}`;
+  loader.loadMeshCb = (path, _manager, done) => {
+    const url = robotAssetUrl(path);
+    const name = path || url;
+    const extension = robotAssetExtension(url);
+    meshProgress.note(name);
+    const meshLoad = (async () => {
+      if (extension === "dae") {
+        const collada = await loadWithThreeLoader(colladaLoader, url, (event) => meshProgress.note(name, event));
+        return collada.scene;
+      }
+      if (extension === "stl") {
+        const geometry = await loadWithThreeLoader(stlLoader, url, (event) => meshProgress.note(name, event));
+        return new THREE.Mesh(geometry, new THREE.MeshPhongMaterial());
+      }
+      throw new Error(`不支持的 mesh 格式：${robotAssetName(path)}`);
+    })()
+      .then((object) => {
+        done(object, null);
+        meshProgress.done(name);
+        return object;
+      })
+      .catch((error) => {
+        done(null, error);
+        meshProgress.done(name);
+        throw new Error(`${robotAssetName(path)} 加载失败：${error.message || error}`);
+      });
+    meshLoads.push(meshLoad);
+  };
+
+  const root = loader.parse(urdfText, urdfBaseUrl);
+  root.name = model.key || root.robotName || "robot_model";
+  await Promise.all(meshLoads);
+  prepareRobotViewerObject(THREE, root);
+  setRobotLoadProgress({
+    active: true,
+    value: 94,
+    label: "生成关节结构",
+    detail: "Robot Viewer URDFLoader 已完成 link / joint 层级",
+    level: "warn",
+  });
+  return { root, joints: root.joints || {} };
+}
+
+function frameRobotModelInViewer(modelRoot) {
+  const robot = state.robotModel;
+  const THREE = robot.three;
+  if (!THREE || !modelRoot || !robot.controls) return;
+
+  modelRoot.position.set(0, 0, 0);
+  modelRoot.scale.setScalar(1);
+  modelRoot.updateMatrixWorld(true);
+
+  const box = new THREE.Box3().setFromObject(modelRoot);
+  if (box.isEmpty()) return;
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const scale = maxDim > 0 ? clamp(4.4 / maxDim, 0.0002, 60) : 1;
+  modelRoot.scale.setScalar(scale);
+
+  modelRoot.position.set(
+    -center.x * scale,
+    -center.y * scale,
+    -box.min.z * scale,
+  );
+
+  const framedSize = maxDim * scale;
+  robot.controls.target.set(0, 0, (center.z - box.min.z) * scale);
+  robot.controls.distance = clamp(framedSize * 1.45, 2.4, 12);
+  updateRobotCamera();
+}
+
+function setRobotJointValue(name, value, options = {}) {
+  const robot = state.robotModel;
+  const joint = robot.joints[name];
+  const parsed = Number(value);
+  if (!joint || !Number.isFinite(parsed)) return;
+  if (typeof joint.setJointValue === "function") {
+    const previousIgnoreLimits = joint.ignoreLimits;
+    if (options.clamp === false) joint.ignoreLimits = true;
+    joint.setJointValue(parsed);
+    joint.ignoreLimits = previousIgnoreLimits;
+  }
+}
+
+function robotJointLimitValue(joint, key, fallback) {
+  const value = Number(joint?.limit?.[key]);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function updateRobotModelTransforms() {
+  const robot = state.robotModel;
+  if (!robot.hasModel || !robot.modelRoot || !robot.three) return;
+  const jointMap = robot.metadata && robot.metadata.jointMap ? robot.metadata.jointMap : {};
+  const actualHeight = Number(state.liftingState.heightM);
+  const heightForModel = Number.isFinite(actualHeight) ? actualHeight : state.liftPreview.height;
+  const liftJointName = jointMap.lift || "lifting_joint";
+  const liftJoint = robot.joints[liftJointName];
+  if (liftJoint) {
+    const lower = robotJointLimitValue(liftJoint, "lower", -0.6);
+    const upper = robotJointLimitValue(liftJoint, "upper", 0);
+    setRobotJointValue(liftJointName, lower + (upper - lower) * (liftPercent(heightForModel) / 100));
+  }
+
+  ["left", "right"].forEach((side) => {
+    const feedback = state.piperJoints[side];
+    const armNames = jointMap[`${side}Arm`] || [];
+    armNames.forEach((name, index) => {
+      const value = robotArmStateValueFor(feedback, side, name, index);
+      if (Number.isFinite(value)) setRobotJointValue(name, value, { clamp: false });
+    });
+
+    const gripperNames = jointMap[`${side}Gripper`] || [];
+    const gripperValue = gripperStateValueFor(feedback);
+    if (gripperNames.length >= 2 && Number.isFinite(gripperValue)) {
+      const opening = clamp(Math.abs(gripperValue), 0, 0.05);
+      setRobotJointValue(gripperNames[0], opening);
+      setRobotJointValue(gripperNames[1], -opening);
+    }
+  });
+
+  const yaw = yawFromOdom(state.chassisState.odom || {});
+  robot.modelRoot.rotation.z = yaw === null ? 0 : yaw;
+}
+
+async function loadRobotModel(key = state.robotModel.selectedKey) {
+  if (!key) return null;
+  if (state.robotModel.loadPromise) return state.robotModel.loadPromise;
+
+  const promise = (async () => {
+    setRobotLoadProgress({
+      active: true,
+      value: 4,
+      label: "读取模型信息",
+      detail: "正在请求模型元数据",
+      level: "warn",
+      meshLoaded: 0,
+      meshTotal: 0,
+    });
+    setRobotModelStatus("loading", "正在读取模型信息");
+    const response = await fetch(`/api/robot-models/${encodeURIComponent(key)}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok || !payload.model) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+
+    const model = payload.model;
+    setRobotLoadProgress({
+      active: true,
+      value: 16,
+      label: "初始化 3D 视图",
+      detail: model.name || key,
+      level: "warn",
+    });
+    const initialized = await initializeRobotViewer();
+    if (!initialized) throw new Error("整机 3D 视图初始化失败");
+    const { THREE, URDFLoader, ColladaLoader, STLLoader } = await loadThreeLoaders();
+
+    setRobotLoadProgress({
+      active: true,
+      value: 28,
+      label: "下载 URDF",
+      detail: robotAssetName(model.urdfUrl),
+      level: "warn",
+    });
+    const urdfResponse = await fetch(model.urdfUrl, { cache: "no-store" });
+    if (!urdfResponse.ok) throw new Error(`URDF 请求失败：HTTP ${urdfResponse.status}`);
+    const urdfText = await urdfResponse.text();
+    setRobotLoadProgress({
+      active: true,
+      value: 36,
+      label: "解析 URDF",
+      detail: "Robot Viewer URDFLoader 正在读取模型",
+      level: "warn",
+    });
+    const { root, joints } = await buildRobotModelWithRobotViewerLoader(THREE, URDFLoader, ColladaLoader, STLLoader, model, urdfText);
+
+    if (state.robotModel.modelRoot) {
+      state.robotModel.displayRoot.remove(state.robotModel.modelRoot);
+    }
+    state.robotModel.displayRoot.add(root);
+    state.robotModel.modelRoot = root;
+    state.robotModel.joints = joints;
+    state.robotModel.metadata = model;
+    state.robotModel.loadedKey = key;
+    state.robotModel.hasModel = true;
+    updateRobotModelTransforms();
+    frameRobotModelInViewer(root);
+    setRobotLoadProgress({
+      active: false,
+      value: 100,
+      label: "加载完成",
+      detail: `${model.name || key} 已显示在整机视图`,
+      level: "ok",
+    });
+    setRobotModelStatus("ready", `${model.name || key} 已加载到整机视图`);
+    addLog("模型", `整机模型已加载：${model.name || key}`);
+    return model;
+  })();
+
+  state.robotModel.loadPromise = promise;
+  try {
+    return await promise;
+  } catch (error) {
+    state.robotModel.hasModel = false;
+    setRobotLoadProgress({
+      active: false,
+      label: "加载失败",
+      detail: error.message,
+      level: "danger",
+    });
+    setRobotModelStatus("error", `模型加载失败：${error.message}`);
+    addLog("模型", `模型加载失败：${error.message}`);
+    return null;
+  } finally {
+    if (state.robotModel.loadPromise === promise) state.robotModel.loadPromise = null;
+  }
+}
+
+function renderRobotResourceList() {
+  const node = $("#robotResourceList");
+  if (!node) return;
+  const robot = state.robotModel;
+  const meta = robotModelStatusMeta();
+  const urdfText = robot.hasModel ? "已加载" : robot.status === "loading" ? "加载中" : robot.models.length ? "可加载" : "待发现";
+  const urdfLevel = robot.hasModel ? "ok" : robot.status === "loading" ? "warn" : robot.models.length ? "idle" : "idle";
+  const meshText = robot.hasModel ? "已解析" : robot.status === "loading" ? "解析中" : "待加载";
+  const meshLevel = robot.hasModel ? "ok" : robot.status === "loading" ? "warn" : robot.status === "error" ? "danger" : "idle";
+  node.innerHTML = [
+    ["模型清单", meta.text, meta.level],
+    ["URDF 加载", urdfText, urdfLevel],
+    ["Mesh 解析", meshText, meshLevel],
+  ]
+    .map(
+      ([name, text, level]) => `
+        <div><span>${escapeHtml(name)}</span><strong class="status-text ${escapeHtml(level)}">${escapeHtml(text)}</strong></div>
+      `,
+    )
+    .join("");
+}
+
 function renderRobotViewStatus() {
   const summaryNode = $("#robotSummaryMetrics");
-  if (!summaryNode) return;
 
   const leftArm = armStatusText("left");
   const rightArm = armStatusText("right");
@@ -1564,40 +2262,52 @@ function renderRobotViewStatus() {
   const warnCount = liveLevels.filter((level) => level === "warn").length;
   const syncLevel = okCount === liveLevels.length ? "ok" : okCount || warnCount ? "warn" : "idle";
   const syncText = syncLevel === "ok" ? "反馈同步" : syncLevel === "warn" ? "部分反馈" : "等待反馈";
+  const robot = state.robotModel;
+  const modelMeta = robotModelStatusMeta();
+  const selectedModel = robot.models.find((model) => model.key === robot.selectedKey);
+  const modelName = robot.metadata?.name || selectedModel?.name || selectedModel?.key || "--";
 
-  setStateBadge("#robotModelBadge", "模型待接入", "idle");
+  setStateBadge("#robotModelBadge", modelMeta.text, modelMeta.level);
   setStateBadge("#robotSyncBadge", syncText, syncLevel);
+
+  const stage = $("#robotViewStage");
+  if (stage) {
+    stage.classList.toggle("is-loading", robot.status === "fetching" || robot.status === "loading");
+    stage.classList.toggle("is-model-loaded", robot.hasModel);
+  }
 
   const updates = [
     ["#robotFrameText", state.chassisState.odom ? "odom / base_link" : "base_link"],
-    ["#robotModelSourceText", "前端占位"],
+    ["#robotModelSourceText", robot.hasModel ? modelName : robot.models.length ? "可选择模型" : "等待资源"],
     ["#robotSyncAgeText", robotAgeText(maxAge)],
-    ["#robotOverlayTitle", syncText],
-    ["#robotOverlayDetail", "URDF 与 mesh 加载接口未接入"],
-    ["#robotModelDetail", state.chassisState.odom ? "底盘里程计已接入视图状态" : "等待模型资源接入"],
+    ["#robotOverlayTitle", robot.hasModel ? "模型已加载" : modelMeta.text],
+    ["#robotOverlayDetail", robot.detail || "等待模型资源接入"],
+    ["#robotModelDetail", robot.detail || "等待模型资源接入"],
   ];
   updates.forEach(([selector, text]) => {
     const node = $(selector);
     if (node) node.textContent = text;
   });
 
-  summaryNode.innerHTML = [
-    ["底盘", state.chassisState.odom ? chassisText : "--"],
-    ["速度", linearX === null ? "--" : `${linearX.toFixed(2)} / ${(linearY || 0).toFixed(2)} m/s`],
-    ["升降", Number.isFinite(actualHeight) ? `${actualHeight.toFixed(3)} m` : "--"],
-    ["左臂", leftArm.text],
-    ["右臂", rightArm.text],
-    ["延迟", robotAgeText(maxAge)],
-  ]
-    .map(([name, value]) => `<div class="metric-card"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
-    .join("");
+  if (summaryNode) {
+    summaryNode.innerHTML = [
+      ["底盘", state.chassisState.odom ? chassisText : "--"],
+      ["速度", linearX === null ? "--" : `${linearX.toFixed(2)} / ${(linearY || 0).toFixed(2)} m/s`],
+      ["升降", Number.isFinite(actualHeight) ? `${actualHeight.toFixed(3)} m` : "--"],
+      ["左臂", leftArm.text],
+      ["右臂", rightArm.text],
+      ["延迟", robotAgeText(maxAge)],
+    ]
+      .map(([name, value]) => `<div class="metric-card"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
+      .join("");
+  }
 
   const componentRows = [
     ["底盘", chassisText, chassisLevel, state.chassisState.odom ? "里程计 /odom" : state.chassisState.detail],
     ["升降轴", liftText, liftLevel, state.liftingState.ok ? "LiftMotorStatePub" : state.liftingState.detail],
     ["左臂", leftArm.text, leftArm.level, leftArm.detail],
     ["右臂", rightArm.text, rightArm.level, rightArm.detail],
-    ["模型资源", "待接入", "idle", "Ranger URDF 与 mesh 接口未配置"],
+    ["模型资源", modelMeta.text, modelMeta.level, robot.detail],
   ];
   const componentNode = $("#robotComponentList");
   if (componentNode) {
@@ -1614,6 +2324,10 @@ function renderRobotViewStatus() {
       .join("");
   }
 
+  renderRobotModelControls();
+  renderRobotResourceList();
+  renderRobotLoadProgress();
+  updateRobotModelTransforms();
   renderRobotViewFigure();
 }
 
@@ -2986,6 +3700,7 @@ function applyPiperJointPayload(side, payload) {
     feedback.ok = false;
     feedback.code = payload && payload.code ? payload.code : "ROS-R-ERROR";
     feedback.detail = payload && payload.detail ? payload.detail : `${piperArmLabels[side]}关节反馈读取失败。`;
+    feedback.names = [];
     feedback.positions = [];
     feedback.ageMs = payload && payload.ageMs !== undefined ? payload.ageMs : null;
     feedback.stale = true;
@@ -2994,10 +3709,12 @@ function applyPiperJointPayload(side, payload) {
   }
 
   const data = payload.data || {};
+  const names = Array.isArray(data.name) ? data.name.map((name) => String(name)) : [];
   const positions = Array.isArray(data.position) ? data.position : [];
   feedback.ok = positions.length > 0;
   feedback.code = feedback.ok ? payload.code || "ROS-R-OK" : "ROS-R-NODATA";
   feedback.detail = feedback.ok ? payload.detail || "" : `${piperArmLabels[side]} JointState 中没有 position 数据。`;
+  feedback.names = names;
   feedback.positions = positions;
   feedback.velocity = Array.isArray(data.velocity) ? data.velocity : [];
   feedback.effort = Array.isArray(data.effort) ? data.effort : [];
@@ -3338,6 +4055,20 @@ function loadThreeModule() {
     threeModulePromise = import(threeModuleUrl);
   }
   return threeModulePromise;
+}
+
+function loadThreeLoaders() {
+  if (!threeLoaderPromise) {
+    threeLoaderPromise = Promise.all([loadThreeModule(), import(colladaLoaderUrl), import(stlLoaderUrl), import(urdfLoaderUrl)]).then(
+      ([THREE, colladaModule, stlModule, urdfModule]) => ({
+        THREE,
+        ColladaLoader: colladaModule.ColladaLoader,
+        STLLoader: stlModule.STLLoader,
+        URDFLoader: urdfModule.default || urdfModule.URDFLoader || urdfModule,
+      }),
+    );
+  }
+  return threeLoaderPromise;
 }
 
 function updateLidarCamera() {
@@ -3751,6 +4482,34 @@ function bindEvents() {
   $("#chassisRuntimeStatus").addEventListener("click", toggleChassisRuntime);
   $("#cameraRuntimeStatus").addEventListener("click", toggleCameraRuntime);
   $("#lidarRuntimeStatus").addEventListener("click", toggleLidarRuntime);
+  $("#robotModelSelect").addEventListener("change", (event) => {
+    state.robotModel.selectedKey = event.currentTarget.value;
+    const selected = state.robotModel.models.find((model) => model.key === state.robotModel.selectedKey);
+    if (state.robotModel.loadedKey === state.robotModel.selectedKey && state.robotModel.hasModel) {
+      setRobotLoadProgress({
+        active: false,
+        value: 100,
+        label: "加载完成",
+        detail: `${selected?.name || state.robotModel.selectedKey} 已显示在整机视图`,
+        level: "ok",
+      });
+      setRobotModelStatus("ready", `${selected?.name || state.robotModel.selectedKey} 已加载到整机视图`);
+      return;
+    }
+    setRobotLoadProgress({
+      active: false,
+      value: 0,
+      label: "等待加载",
+      detail: selected ? "点击加载读取 URDF 与 mesh" : "请选择整机模型",
+      level: "idle",
+      meshLoaded: 0,
+      meshTotal: 0,
+    });
+    setRobotModelStatus("available", selected ? `已选择 ${selected.name || selected.key}，点击加载显示 URDF` : "请选择整机模型");
+  });
+  $("#robotModelLoadButton").addEventListener("click", () => {
+    loadRobotModel();
+  });
   $("#armCompareList").addEventListener("input", (event) => {
     const input = event.target.closest("[data-action-kind]");
     if (!input) return;
@@ -3981,7 +4740,9 @@ function init() {
   renderCameraFrames();
   renderLidarCloudStatus();
   renderRobotViewStatus();
+  fetchRobotModels({ silent: true });
   initializeLidarViewer();
+  initializeRobotViewer();
   addLog("系统", "Robot Station 前端原型已加载");
   addLog("ROS", "等待接入真实 ROS 状态");
   addLog("相机", "相机压缩图预览等待图像帧");

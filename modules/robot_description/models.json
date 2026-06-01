@@ -1,0 +1,24 @@
+{
+  "models": [
+    {
+      "key": "ranger_mini_v3",
+      "family": "ranger",
+      "name": "Ranger Mini v3",
+      "description": "Ranger Mini v3 base with lift, RSLiDAR placeholder, cameras, and dual Piper arms.",
+      "urdf": "urdf/ranger_mini_v3.urdf",
+      "assetRoot": "meshes/ranger_mini_v3",
+      "frames": {
+        "base": "base_link",
+        "odom": "odom",
+        "lift": "lifting_link"
+      },
+      "jointMap": {
+        "lift": "lifting_joint",
+        "leftArm": ["left/joint1", "left/joint2", "left/joint3", "left/joint4", "left/joint5", "left/joint6"],
+        "leftGripper": ["left/joint7", "left/joint8"],
+        "rightArm": ["right/joint1", "right/joint2", "right/joint3", "right/joint4", "right/joint5", "right/joint6"],
+        "rightGripper": ["right/joint7", "right/joint8"]
+      }
+    }
+  ]
+}

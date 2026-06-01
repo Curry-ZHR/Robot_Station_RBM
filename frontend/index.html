@@ -450,73 +450,31 @@
                       <h2>整机模型</h2>
                       <p id="robotModelDetail">等待模型资源接入</p>
                     </div>
-                    <span class="state-badge idle" id="robotModelBadge">模型待接入</span>
+                    <div class="robot-model-actions">
+                      <select id="robotModelSelect" aria-label="整机模型选择"></select>
+                      <button class="secondary-button" id="robotModelLoadButton" type="button">加载</button>
+                      <span class="state-badge idle" id="robotModelBadge">模型待接入</span>
+                    </div>
+                  </div>
+                  <div class="robot-load-progress" id="robotLoadProgress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                    <div class="robot-load-progress-head">
+                      <span id="robotLoadProgressText">等待加载</span>
+                      <strong id="robotLoadProgressValue">0%</strong>
+                    </div>
+                    <div class="robot-load-track" aria-hidden="true">
+                      <span id="robotLoadProgressBar"></span>
+                    </div>
+                    <small id="robotLoadProgressDetail">选择模型后点击加载</small>
                   </div>
                   <div class="robot-viewport">
                     <div class="robot-stage" id="robotViewStage" aria-label="整机状态示意">
-                      <div class="robot-floor" aria-hidden="true"></div>
-                      <div class="robot-base-figure" aria-hidden="true">
-                        <span class="robot-wheel front-left"></span>
-                        <span class="robot-wheel front-right"></span>
-                        <span class="robot-wheel rear-left"></span>
-                        <span class="robot-wheel rear-right"></span>
-                        <span class="robot-base-body"></span>
-                        <span class="robot-lift-mast"></span>
-                        <span class="robot-lift-carriage"></span>
-                        <span class="robot-arm left-arm upper"></span>
-                        <span class="robot-arm left-arm lower"></span>
-                        <span class="robot-arm right-arm upper"></span>
-                        <span class="robot-arm right-arm lower"></span>
-                      </div>
                       <div class="robot-view-overlay">
                         <strong id="robotOverlayTitle">前端视图已就绪</strong>
                         <span id="robotOverlayDetail">URDF 与 mesh 加载接口未接入</span>
                       </div>
                     </div>
                   </div>
-                  <div class="robot-viewport-footer">
-                    <span><strong id="robotFrameText">base_link</strong><small>frame</small></span>
-                    <span><strong id="robotModelSourceText">前端占位</strong><small>model</small></span>
-                    <span><strong id="robotSyncAgeText">--</strong><small>延迟</small></span>
-                  </div>
                 </article>
-
-                <div class="robot-state-stack">
-                  <article class="panel robot-state-card">
-                    <div class="panel-head">
-                      <div>
-                        <h2>关键反馈</h2>
-                        <p>底盘、升降轴、双臂状态</p>
-                      </div>
-                      <span class="state-badge idle" id="robotSyncBadge">等待反馈</span>
-                    </div>
-                    <div class="metric-grid robot-summary-grid" id="robotSummaryMetrics"></div>
-                  </article>
-
-                  <article class="panel robot-state-card">
-                    <div class="panel-head">
-                      <div>
-                        <h2>组件状态</h2>
-                        <p>运行服务与 ROS 反馈</p>
-                      </div>
-                    </div>
-                    <div class="robot-component-list" id="robotComponentList"></div>
-                  </article>
-
-                  <article class="panel robot-state-card">
-                    <div class="panel-head">
-                      <div>
-                        <h2>模型资源</h2>
-                        <p>URDF 与 mesh 接入状态</p>
-                      </div>
-                    </div>
-                    <div class="robot-resource-list">
-                      <div><span>Ranger URDF</span><strong class="status-text idle">待配置</strong></div>
-                      <div><span>Piper URDF</span><strong class="status-text ok">本地已有</strong></div>
-                      <div><span>Mesh 解析</span><strong class="status-text idle">待接入</strong></div>
-                    </div>
-                  </article>
-                </div>
               </div>
             </section>
 

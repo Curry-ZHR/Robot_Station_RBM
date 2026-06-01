@@ -22,6 +22,7 @@ from modules.control.lifting import (
 from modules.control.piper import publish_joint_targets
 from modules.drivers.can.can_activate import activate_can
 from modules.logger import get_logger, setup_logger
+from modules.robot_description import RobotModelError, get_model, list_models, resolve_model_asset
 from modules.ros_io import (
     get_camera_image_reader,
     get_lidar_point_cloud_reader,
@@ -164,6 +165,16 @@ def lidar_result_status(result):
     return 500
 
 
+def robot_model_error_status(error):
+    if error.code.endswith("UNKNOWN") or error.code.endswith("MISSING"):
+        return 404
+    if error.code.endswith("DENIED"):
+        return 403
+    if error.code.endswith("PATH"):
+        return 400
+    return 500
+
+
 class RobotStationHandler(SimpleHTTPRequestHandler):
     server_version = "RobotStationHTTP/0.1"
 
@@ -187,6 +198,49 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/control/chassis/limits":
             self.write_json(chassis_limits())
+            return
+        if parsed.path == "/api/robot-models":
+            try:
+                self.write_json(list_models())
+            except RobotModelError as exc:
+                self.write_json({"ok": False, "code": exc.code, "detail": exc.detail}, status=robot_model_error_status(exc))
+            return
+        model_key = api_tail(parsed.path, "/api/robot-models")
+        if model_key is not None:
+            if not model_key or "/" in model_key:
+                self.write_json(
+                    {
+                        "ok": False,
+                        "code": "MODEL-PATH",
+                        "detail": "Robot model path must be /api/robot-models/<key>.",
+                    },
+                    status=404,
+                )
+                return
+            result = get_model(model_key)
+            self.write_json(result, status=200 if result.get("ok") else 404)
+            return
+        asset_tail = api_tail(parsed.path, "/api/robot-model-assets")
+        if asset_tail is not None:
+            parts = [part for part in asset_tail.split("/") if part]
+            if len(parts) < 3:
+                self.write_json(
+                    {
+                        "ok": False,
+                        "code": "MODEL-ASSET-PATH",
+                        "detail": "Robot model asset path must be /api/robot-model-assets/<family>/<key>/<relative-path>.",
+                    },
+                    status=404,
+                )
+                return
+            family, key = parts[0], parts[1]
+            relative_path = "/".join(parts[2:])
+            try:
+                asset_path = resolve_model_asset(family, key, relative_path)
+            except RobotModelError as exc:
+                self.write_json({"ok": False, "code": exc.code, "detail": exc.detail}, status=robot_model_error_status(exc))
+                return
+            self.write_binary(asset_path.read_bytes(), self.guess_type(str(asset_path)))
             return
         camera_tail = api_tail(parsed.path, "/api/sensors/cameras")
         if camera_tail is not None:
@@ -447,6 +501,12 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             return "application/javascript"
         if path.endswith(".css"):
             return "text/css"
+        if path.endswith(".urdf"):
+            return "application/xml"
+        if path.endswith(".dae"):
+            return "model/vnd.collada+xml"
+        if path.endswith(".stl"):
+            return "model/stl"
         return mimetypes.guess_type(path)[0] or "application/octet-stream"
 
     def write_json(self, payload, status=200):

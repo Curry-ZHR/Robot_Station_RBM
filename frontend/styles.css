@@ -364,6 +364,10 @@ button:disabled {
   padding: 14px;
 }
 
+body[data-active-view="robot-view"] .workbench {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .content-area {
   min-width: 0;
 }
@@ -514,7 +518,7 @@ button:disabled {
 
 .robot-view-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(290px, 0.65fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   min-height: 0;
   height: clamp(560px, calc(100vh - 154px), 780px);
@@ -523,7 +527,7 @@ button:disabled {
 
 .robot-viewport-card {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
 }
@@ -532,23 +536,125 @@ button:disabled {
   padding: 10px;
 }
 
+.robot-model-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: min(100%, 360px);
+}
+
+.robot-model-actions select {
+  min-width: 150px;
+  max-width: 210px;
+  height: 32px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.robot-model-actions .secondary-button {
+  height: 32px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.robot-load-progress {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.robot-load-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.robot-load-progress-head strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.robot-load-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #d9e2ec;
+}
+
+.robot-load-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #16a34a);
+  transition: width 180ms ease;
+}
+
+.robot-load-progress small {
+  min-height: 16px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.robot-load-progress.is-error .robot-load-track span {
+  background: #dc2626;
+}
+
 .robot-viewport {
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--line);
+  border: 1px solid rgba(71, 85, 105, 0.72);
   border-radius: 8px;
-  background: #f8fafc;
+  background: #09111f;
 }
 
 .robot-stage {
   position: relative;
-  min-height: 430px;
+  min-height: clamp(430px, calc(100vh - 260px), 680px);
   height: 100%;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 48% 42%, rgba(37, 99, 235, 0.08), transparent 28%),
-    linear-gradient(135deg, #f8fafc 0%, #eef2f7 58%, #e8eef2 100%);
+  background: #09111f;
   isolation: isolate;
+}
+
+.robot-stage canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+  cursor: grab;
+  touch-action: none;
+}
+
+.robot-stage canvas:active {
+  cursor: grabbing;
+}
+
+.robot-stage.is-loading {
+  cursor: wait;
+}
+
+.robot-stage.is-model-loaded .robot-floor,
+.robot-stage.is-model-loaded .robot-base-figure {
+  display: none;
 }
 
 .robot-floor {
@@ -684,21 +790,23 @@ button:disabled {
 .robot-view-overlay {
   position: absolute;
   left: 14px;
-  top: 14px;
+  bottom: 14px;
   display: grid;
   gap: 3px;
-  max-width: min(320px, calc(100% - 28px));
-  padding: 10px 12px;
-  border: 1px solid rgba(148, 163, 184, 0.42);
+  max-width: min(420px, calc(100% - 28px));
+  padding: 7px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.86);
-  color: var(--muted);
+  background: rgba(15, 23, 42, 0.78);
+  color: #dbeafe;
   font-size: 12px;
-  backdrop-filter: blur(8px);
+  line-height: 1.4;
+  pointer-events: none;
+  z-index: 3;
 }
 
 .robot-view-overlay strong {
-  color: var(--text);
+  color: #f8fafc;
   font-size: 13px;
 }
 
@@ -1066,6 +1174,10 @@ button:disabled {
 }
 
 .event-drawer:not(.is-open) {
+  display: none;
+}
+
+body[data-active-view="robot-view"] .event-drawer {
   display: none;
 }
 
@@ -3338,6 +3450,10 @@ button:disabled {
     height: auto;
   }
 
+  .robot-view-grid {
+    align-items: start;
+  }
+
   .device-card,
   .platform-sensing-card,
   .platform-remote-card,
@@ -3592,6 +3708,16 @@ button:disabled {
     min-height: 340px;
   }
 
+  .robot-model-actions {
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .robot-model-actions select {
+    flex: 1 1 160px;
+    max-width: none;
+  }
+
   .robot-state-stack {
     grid-template-rows: auto;
   }
@@ -3643,6 +3769,15 @@ button:disabled {
 
   .robot-stage {
     min-height: 300px;
+  }
+
+  .robot-viewport-card .panel-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .robot-model-actions {
+    justify-content: flex-start;
   }
 
   .robot-component-row,
