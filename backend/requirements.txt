@@ -1,0 +1,6 @@
+# Robot Station backend Python dependencies.
+# ROS 2 (rclpy) and its message packages are provided by the sourced ROS
+# environment and are intentionally not listed here.
+
+# Remote inference WebSocket client (backend <-> remote inference machine).
+websockets>=12.0

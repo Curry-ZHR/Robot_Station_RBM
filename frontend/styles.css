@@ -1686,6 +1686,264 @@ body[data-active-view="robot-view"] .event-drawer {
   line-height: 1.6;
 }
 
+/* Remote inference page polish */
+.inference-config {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.inference-config .field-wide {
+  grid-column: 1 / -1;
+}
+
+.inference-config .field-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.inference-config .field-label em {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.inference-config input {
+  background: #ffffff;
+  border-radius: 9px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.inference-config input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+}
+
+.inference-config .limit-group {
+  display: grid;
+  gap: 8px;
+}
+
+.inference-config .limit-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.inference-config .limit-row label {
+  gap: 4px;
+}
+
+.inference-config .limit-row label span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.inference-config .toggle-row {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 2px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.inference-config .toggle-text {
+  display: grid;
+  gap: 3px;
+}
+
+.inference-config .toggle-text strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.inference-config .toggle-text small {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.inference-config .toggle-row input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  min-height: 0;
+}
+
+.toggle-switch {
+  flex: 0 0 auto;
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: #cbd5e1;
+  transition: background 0.18s ease;
+}
+
+.toggle-switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
+  transition: transform 0.18s ease;
+}
+
+.toggle-row input:checked ~ .toggle-switch {
+  background: var(--accent);
+}
+
+.toggle-row input:checked ~ .toggle-switch::after {
+  transform: translateX(18px);
+}
+
+.toggle-row input:focus-visible ~ .toggle-switch {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.22);
+}
+
+.inference-actions {
+  margin-bottom: 14px;
+}
+
+.inference-actions .secondary-button,
+.inference-actions .primary-button {
+  flex: 1 1 0;
+  min-height: 40px;
+  font-weight: 600;
+}
+
+.inference-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.inference-metrics .metric-card {
+  min-height: 72px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  background: linear-gradient(180deg, #ffffff 0%, var(--surface-2) 100%);
+}
+
+.inference-metrics .metric-card strong {
+  margin-top: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.action-mask {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  display: grid;
+  gap: 10px;
+}
+
+.action-mask .mask-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.action-mask .mask-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.action-mask .mask-row {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.action-mask .mask-row.simple {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+.action-mask .mask-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.action-mask .mask-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.action-mask .mask-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mask-chip {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.mask-chip.is-on {
+  border-color: var(--accent);
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--accent);
+}
+
+.mask-chip.is-off {
+  border-color: #e2b8b8;
+  background: #fdeaea;
+  color: var(--danger);
+}
+
+.mask-chip.is-locked {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.mask-chip.mask-global {
+  border-color: var(--line);
+  background: #f1f5f9;
+  color: var(--text);
+}
+
 .sensor-panel {
   display: none;
 }

@@ -116,6 +116,30 @@ const state = {
     publishTimer: null,
     maxJointSpeedDegS: 10,
   },
+  piperEnableBusy: false,
+  backgroundPollResumeTimer: null,
+  inference: {
+    status: "disconnected",
+    connected: false,
+    prompt: "",
+    remoteUrl: "",
+    chunkId: null,
+    chunkSteps: 0,
+    executedSteps: 0,
+    chunkTiming: null,
+    executionTiming: null,
+    loopTiming: null,
+    lastError: null,
+    looping: false,
+    busy: false,
+    chassisHardLimits: { maxLinearMps: 0.2, maxLateralMps: 0.15, maxAngularRadS: 0.5 },
+    mask: {
+      left: { enabled: true, joints: [true, true, true, true, true, true], gripper: true },
+      right: { enabled: true, joints: [true, true, true, true, true, true], gripper: true },
+      lift: true,
+      speed: true,
+    },
+  },
   liftPreview: {
     height: 0.42,
     speed: 0.08,
@@ -666,6 +690,7 @@ function setPiperRuntime(status) {
   }
   renderPiperRuntime();
   renderPiperJointFeedback();
+  renderInferenceStatus();
   renderActionLocks();
 }
 
@@ -887,20 +912,89 @@ function renderCollectionMetrics() {
     .join("");
 }
 
+const INFERENCE_STATUS_LABELS = {
+  disconnected: "未连接",
+  connected: "已连接",
+  requesting: "请求中",
+  chunk_ready: "chunk 就绪",
+  executing: "执行中",
+  stopped: "已停止",
+  error: "错误",
+};
+const INFERENCE_STATUS_LEVELS = {
+  disconnected: "idle",
+  connected: "ok",
+  requesting: "warn",
+  chunk_ready: "ok",
+  executing: "warn",
+  stopped: "idle",
+  error: "danger",
+};
+
 function renderInferenceMetrics() {
-  const freq = state.task === "inference" ? (12 + (state.inferenceTicks % 4)).toFixed(1) : "--";
-  const device = state.task === "inference" ? "GPU" : "--";
-  const latency = state.task === "inference" ? `${(78 + state.inferenceTicks * 3) % 96} ms` : "--";
-  $("#inferenceMetrics").innerHTML = [
-    ["模型", state.task === "inference" ? "已加载" : "未加载"],
-    ["设备", device],
-    ["频率", `${freq} Hz`],
-    ["延迟", latency],
+  const info = state.inference;
+  const node = $("#inferenceMetrics");
+  if (!node) return;
+  const loopTiming = info.loopTiming || {};
+  const statusText = INFERENCE_STATUS_LABELS[info.status] || info.status || "--";
+  const loopText = info.looping ? (loopTiming.seq ? `开启 #${loopTiming.seq}` : "开启") : "关闭";
+  node.innerHTML = [
+    ["连接", info.connected ? "已连接" : "未连接"],
+    ["状态", statusText],
+    ["chunk", info.chunkId ? `${info.chunkId} (${info.chunkSteps} 步)` : "无"],
+    ["已执行", `${info.executedSteps} 步`],
+    ["连续闭环", loopText],
     ["控制权", state.owner],
-    ["安全接管", "可用"],
+    ["动作通道", describeMask()],
   ]
     .map(([label, value]) => `<div class="metric-card"><span>${label}</span><strong>${value}</strong></div>`)
     .join("");
+}
+
+function applyInferenceStatus(result) {
+  if (!result || typeof result !== "object") return;
+  const info = state.inference;
+  if (typeof result.status === "string") info.status = result.status;
+  if ("connected" in result) info.connected = Boolean(result.connected);
+  if ("remoteUrl" in result) info.remoteUrl = result.remoteUrl || "";
+  if ("prompt" in result) info.prompt = result.prompt || "";
+  if ("chunkId" in result) info.chunkId = result.chunkId || null;
+  if ("chunkSteps" in result) info.chunkSteps = Number(result.chunkSteps) || 0;
+  if ("executedSteps" in result) info.executedSteps = Number(result.executedSteps) || 0;
+  if ("chunkTiming" in result) info.chunkTiming = result.chunkTiming || null;
+  if ("executionTiming" in result) info.executionTiming = result.executionTiming || null;
+  if ("lastError" in result) info.lastError = result.lastError || null;
+  renderInferenceStatus();
+}
+
+function renderInferenceStatus() {
+  const info = state.inference;
+  const level = INFERENCE_STATUS_LEVELS[info.status] || "idle";
+  setStateBadge("#inferenceBadge", INFERENCE_STATUS_LABELS[info.status] || info.status, level);
+  const summary = $("#inferenceSummary");
+  if (summary) {
+    if (info.lastError && info.status === "error") {
+      summary.textContent = `错误：${info.lastError}`;
+    } else if (!info.connected) {
+      summary.textContent = "未连接远端推理服务";
+    } else {
+      summary.textContent = `${INFERENCE_STATUS_LABELS[info.status] || info.status}${info.remoteUrl ? ` · ${info.remoteUrl}` : ""}`;
+    }
+  }
+  const connectButton = $("#inferenceConnectButton");
+  if (connectButton) connectButton.disabled = info.busy;
+  const disconnectButton = $("#inferenceDisconnectButton");
+  if (disconnectButton) disconnectButton.disabled = info.busy || !info.connected;
+  const requestButton = $("#requestChunkButton");
+  if (requestButton) requestButton.disabled = info.busy || !info.connected || info.looping;
+  const executeButton = $("#executeChunkButton");
+  if (executeButton) executeButton.disabled = info.busy || !info.chunkId || info.looping;
+  const enableButton = $("#inferenceEnablePiperButton");
+  if (enableButton) {
+    enableButton.disabled = info.busy || state.piperEnableBusy || !piperReady();
+    enableButton.textContent = state.piperEnableBusy ? "使能中" : "使能 Piper";
+  }
+  renderInferenceMetrics();
 }
 
 function renderPreflight() {
@@ -1415,6 +1509,30 @@ function scheduleDirectArmPublish() {
 
 function sleepMs(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function runBackgroundPoll(callback) {
+  if (state.inference.looping) return;
+  callback();
+}
+
+function resumeBackgroundPollsNow() {
+  if (state.inference.looping) return;
+  window.clearTimeout(state.backgroundPollResumeTimer);
+  state.backgroundPollResumeTimer = window.setTimeout(() => {
+    if (state.inference.looping) return;
+    refreshInferenceStatus();
+    fetchPiperRuntimeStatus({ silent: true });
+    fetchLiftingRuntimeStatus({ silent: true });
+    fetchChassisRuntimeStatus({ silent: true });
+    fetchCameraRuntimeStatus({ silent: true });
+    fetchCameraFrames({ silent: true });
+    fetchLidarRuntimeStatus({ silent: true });
+    fetchLidarCloudStatus({ silent: true });
+    fetchLiftingMotorState();
+    fetchChassisState({ silent: true });
+    fetchPiperJointStates();
+  }, 50);
 }
 
 async function publishPiperEnable(enabled, options = {}) {
@@ -2659,7 +2777,6 @@ function renderActionLocks() {
   });
   $("#startHomingButton").disabled = busy || !runtimeReady;
   $("#startCollectionButton").disabled = busy || !runtimeReady;
-  $("#startInferenceButton").disabled = busy || !runtimeReady;
   renderPreflight();
 }
 
@@ -3083,52 +3200,384 @@ function finishCollection(result = "完成") {
   addLog("数采", `episode_043 ${result}`);
 }
 
-async function startInference() {
-  if (state.task !== "idle") return;
+async function inferencePost(action, payload = {}) {
+  const response = await fetch(`/api/inference/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  const result = await response.json().catch(() => ({}));
+  applyInferenceStatus(result);
+  return { response, result };
+}
+
+async function refreshInferenceStatus() {
+  try {
+    const response = await fetch("/api/inference/status", { cache: "no-store" });
+    const result = await response.json();
+    applyInferenceStatus(result);
+    return { ok: true, status: response.status };
+  } catch (error) {
+    // Keep the last known state if the status poll fails.
+    return {
+      ok: false,
+      error: error.message,
+    };
+  }
+}
+
+function readInferenceExecuteParams() {
+  const steps = clamp(Math.round(Number($("#inferenceStepsInput").value) || 1), 1, 200);
+  const frequencyHz = clamp(Number($("#inferenceFrequencyInput").value) || 10, 1, 30);
+  const maxJointSpeedDegS = clamp(Number($("#inferenceJointSpeedInput").value) || 20, 0.5, 30);
+  return { steps, frequencyHz, maxJointSpeedDegS };
+}
+
+async function loadInferenceChassisLimits() {
+  try {
+    const response = await fetch("/api/control/chassis/limits", { cache: "no-store" });
+    const result = await response.json();
+    const limits = result && result.limits ? result.limits : null;
+    if (!limits) return;
+    state.inference.chassisHardLimits = {
+      maxLinearMps: Number(limits.maxLinearMps) || 0.2,
+      maxLateralMps: Number(limits.maxLateralMps) || 0.15,
+      maxAngularRadS: Number(limits.maxAngularRadS) || 0.5,
+    };
+    const vxInput = $("#inferenceMaxVxInput");
+    const vyInput = $("#inferenceMaxVyInput");
+    const wzInput = $("#inferenceMaxWzInput");
+    const hard = state.inference.chassisHardLimits;
+    if (vxInput) {
+      vxInput.max = hard.maxLinearMps;
+      if (!vxInput.value) vxInput.value = hard.maxLinearMps;
+    }
+    if (vyInput) {
+      vyInput.max = hard.maxLateralMps;
+      if (!vyInput.value) vyInput.value = hard.maxLateralMps;
+    }
+    if (wzInput) {
+      wzInput.max = hard.maxAngularRadS;
+      if (!wzInput.value) wzInput.value = hard.maxAngularRadS;
+    }
+  } catch (error) {
+    // Keep defaults if the limits endpoint is unavailable.
+  }
+}
+
+function readInferenceChassisLimits() {
+  const hard = state.inference.chassisHardLimits;
+  const pick = (selector, ceiling) => {
+    const raw = Number($(selector) && $(selector).value);
+    if (!Number.isFinite(raw) || raw <= 0) return ceiling;
+    return Math.min(raw, ceiling);
+  };
+  return {
+    maxLinearMps: pick("#inferenceMaxVxInput", hard.maxLinearMps),
+    maxLateralMps: pick("#inferenceMaxVyInput", hard.maxLateralMps),
+    maxAngularRadS: pick("#inferenceMaxWzInput", hard.maxAngularRadS),
+  };
+}
+
+function isMaskAllEnabled() {
+  const m = state.inference.mask;
+  return (
+    m.left.enabled && m.left.joints.every(Boolean) && m.left.gripper &&
+    m.right.enabled && m.right.joints.every(Boolean) && m.right.gripper &&
+    m.lift && m.speed
+  );
+}
+
+function setMaskAll(value) {
+  const m = state.inference.mask;
+  ["left", "right"].forEach((side) => {
+    m[side].enabled = value;
+    m[side].joints = m[side].joints.map(() => value);
+    m[side].gripper = value;
+  });
+  m.lift = value;
+  m.speed = value;
+}
+
+function describeMask() {
+  const m = state.inference.mask;
+  const off = [];
+  ["left", "right"].forEach((side) => {
+    const name = side === "left" ? "左臂" : "右臂";
+    if (!m[side].enabled) {
+      off.push(name);
+      return;
+    }
+    m[side].joints.forEach((on, i) => {
+      if (!on) off.push(`${name}J${i + 1}`);
+    });
+    if (!m[side].gripper) off.push(`${name}夹爪`);
+  });
+  if (!m.lift) off.push("升降台");
+  if (!m.speed) off.push("速度");
+  return off.length ? `已关闭 ${off.join("、")}` : "全部开启";
+}
+
+function renderInferenceMask() {
+  const node = $("#inferenceMaskPanel");
+  if (!node) return;
+  const mask = state.inference.mask;
+  const chip = (label, on, attrs, extra = "") =>
+    `<button type="button" class="mask-chip ${on ? "is-on" : "is-off"} ${extra}" ${attrs}>${label}</button>`;
+  const armRow = (side, name) => {
+    const m = mask[side];
+    const locked = m.enabled ? "" : "is-locked";
+    const joints = m.joints
+      .map((on, i) => chip(`J${i + 1}`, on, `data-mask="joint" data-side="${side}" data-joint="${i}"`, locked))
+      .join("");
+    const gripper = chip("夹爪", m.gripper, `data-mask="gripper" data-side="${side}"`, locked);
+    return `
+      <div class="mask-row">
+        <div class="mask-row-head">
+          <span class="mask-name">${name}</span>
+          ${chip(m.enabled ? "开" : "关", m.enabled, `data-mask="side" data-side="${side}"`)}
+        </div>
+        <div class="mask-chips">${joints}${gripper}</div>
+      </div>`;
+  };
+  const allOn = isMaskAllEnabled();
+  node.innerHTML = `
+    <div class="mask-header">
+      <span class="mask-title">动作通道（关闭=保持不动）</span>
+      <button type="button" class="mask-chip mask-global" data-mask="global">${allOn ? "全部关闭" : "全部开启"}</button>
+    </div>
+    ${armRow("left", "左臂")}
+    ${armRow("right", "右臂")}
+    <div class="mask-row simple">
+      <span class="mask-name">升降台</span>
+      ${chip(mask.lift ? "开" : "关", mask.lift, `data-mask="lift"`)}
+    </div>
+    <div class="mask-row simple">
+      <span class="mask-name">速度</span>
+      ${chip(mask.speed ? "开" : "关", mask.speed, `data-mask="speed"`)}
+    </div>`;
+}
+
+function handleMaskClick(event) {
+  const button = event.target.closest("[data-mask]");
+  if (!button) return;
+  const kind = button.dataset.mask;
+  const mask = state.inference.mask;
+  if (kind === "global") {
+    setMaskAll(!isMaskAllEnabled());
+  } else if (kind === "side") {
+    mask[button.dataset.side].enabled = !mask[button.dataset.side].enabled;
+  } else if (kind === "joint") {
+    const side = button.dataset.side;
+    if (!mask[side].enabled) return;
+    const index = Number(button.dataset.joint);
+    mask[side].joints[index] = !mask[side].joints[index];
+  } else if (kind === "gripper") {
+    const side = button.dataset.side;
+    if (!mask[side].enabled) return;
+    mask[side].gripper = !mask[side].gripper;
+  } else if (kind === "lift") {
+    mask.lift = !mask.lift;
+  } else if (kind === "speed") {
+    mask.speed = !mask.speed;
+  } else {
+    return;
+  }
+  renderInferenceMask();
+  addLog("推理", `动作通道：${describeMask()}`);
+}
+
+async function enablePiperForInference() {
   if (!piperReady()) {
-    addLog("推理", "推理未启动：Piper 控制节点未运行");
+    addLog("推理", "Piper 使能失败：控制节点未运行");
     showView("device-control");
     return;
   }
-  const ok = await confirmAction("开始推理执行", "推理会加载模型并接管机器人动作输出，运行期间保留顶部停止和低速接管入口。");
-  if (!ok) return;
-  state.inferenceTicks = 0;
+  state.piperEnableBusy = true;
+  renderInferenceStatus();
+  try {
+    await publishPiperEnable(true, { repeat: 3, intervalMs: 80 });
+    $("#enableStatus").textContent = "已使能";
+    $("#enableStatus").className = "status-pill ok";
+    addLog("推理", "Piper 已使能，可执行 chunk");
+  } catch (error) {
+    addLog("推理", `Piper 使能失败：${error.message}`);
+  } finally {
+    state.piperEnableBusy = false;
+    renderInferenceStatus();
+  }
+}
+
+async function connectInference() {
+  const url = String($("#remoteUrlInput").value || "").trim();
+  if (!url) {
+    addLog("推理", "连接失败：远端地址为空");
+    return;
+  }
+  if (!piperReady()) {
+    addLog("推理", "提示：Piper 控制节点未运行，执行前请先启动");
+  }
+  state.inference.busy = true;
+  renderInferenceStatus();
+  try {
+    const { result } = await inferencePost("connect", { url });
+    addLog("推理", result.ok ? `已连接远端：${url}` : `连接失败：${result.detail || result.code}`);
+  } catch (error) {
+    addLog("推理", `连接失败：${error.message}`);
+  } finally {
+    state.inference.busy = false;
+    await refreshInferenceStatus();
+  }
+}
+
+async function disconnectInference() {
+  state.inference.looping = false;
+  state.inference.busy = true;
+  renderInferenceStatus();
+  try {
+    const { result } = await inferencePost("disconnect");
+    addLog("推理", result.ok ? "已断开远端推理连接" : `断开失败：${result.detail || result.code}`);
+  } catch (error) {
+    addLog("推理", `断开失败：${error.message}`);
+  } finally {
+    state.inference.busy = false;
+    if (state.task === "inference") setTask("idle", "空闲", "空闲");
+    await refreshInferenceStatus();
+    resumeBackgroundPollsNow();
+  }
+}
+
+async function requestInferenceChunk(options = {}) {
+  const refreshStatus = options.refreshStatus !== false;
+  const writeLog = options.log !== false;
+  if (!state.inference.connected) {
+    addLog("推理", "请先连接远端推理服务");
+    return;
+  }
+  const prompt = String($("#promptInput").value || "").trim();
+  let result = null;
+  state.inference.busy = true;
+  renderInferenceStatus();
+  try {
+    const posted = await inferencePost("request-chunk", { prompt, chassisLimits: readInferenceChassisLimits() });
+    result = posted.result;
+    if (result.ok && writeLog) {
+      const clipNote = result.clipped ? `，${result.clipped} 个值越限已裁剪` : "";
+      addLog("推理", `收到 chunk ${result.chunkId}（${result.chunkSteps} 步）${clipNote}`);
+    } else if (!result.ok) {
+      addLog("推理", `请求 chunk 失败：${result.detail || result.code}`);
+    }
+  } catch (error) {
+    addLog("推理", `请求 chunk 失败：${error.message}`);
+  } finally {
+    state.inference.busy = false;
+    if (refreshStatus) {
+      await refreshInferenceStatus();
+    } else {
+      renderInferenceStatus();
+    }
+  }
+  return result;
+}
+
+async function executeInferenceChunk(options = {}) {
+  const refreshStatus = options.refreshStatus !== false;
+  const writeLog = options.log !== false;
+  if (!state.inference.chunkId) {
+    addLog("推理", "暂无可执行的 chunk");
+    return null;
+  }
+  const params = readInferenceExecuteParams();
+  params.mask = state.inference.mask;
+  let result = null;
+  state.inference.busy = true;
+  renderInferenceStatus();
+  try {
+    const posted = await inferencePost("execute-chunk", params);
+    result = posted.result;
+    const last = $("#lastActionOutput");
+    const executedSteps = result.executedSteps || 0;
+    if (last) last.textContent = `最近执行：${executedSteps}/${params.steps} 步 @ ${params.frequencyHz} Hz，${params.maxJointSpeedDegS} deg/s`;
+    if (writeLog || !result.ok) {
+      addLog("推理", result.ok ? `执行 ${executedSteps} 步完成` : `执行结束：${result.detail || result.code}`);
+    }
+  } catch (error) {
+    addLog("推理", `执行失败：${error.message}`);
+  } finally {
+    state.inference.busy = false;
+    if (refreshStatus) {
+      await refreshInferenceStatus();
+    } else {
+      renderInferenceStatus();
+    }
+  }
+  return result;
+}
+
+async function runInferenceLoop() {
   setTask("inference", "推理任务", "推理中");
-  setStateBadge("#inferenceBadge", "加载中", "warn");
-  setStateBadge("#stateBadge", "运行中", "warn");
-  $("#inferenceSummary").textContent = "模型加载中";
-  $("#taskSubtitle").textContent = "正在运行推理任务";
-  renderHomeFlow(["运行前检查", "加载模型", "输出动作", "人工监控"], 1, 45);
-  renderInferenceMetrics();
-  addLog("推理", `加载模型：${$("#modelSelect").value}`);
-  window.clearInterval(state.inferenceTimer);
-  state.inferenceTimer = window.setInterval(() => {
-    state.inferenceTicks += 1;
-    setStateBadge("#inferenceBadge", "已加载", "ok");
-    $("#inferenceSummary").textContent = "模型已加载，推理运行中";
-    $("#lastActionOutput").textContent = `最近动作：x=${(0.02 * state.inferenceTicks).toFixed(2)}, y=0.00, z=${(0.18 + 0.01 * (state.inferenceTicks % 3)).toFixed(2)}, gripper=${state.inferenceTicks % 2 ? "open" : "close"}`;
-    renderHomeFlow(["运行前检查", "加载模型", "输出动作", "人工监控"], 2, 72);
-    renderInferenceMetrics();
-  }, 900);
+  let loopSeq = 0;
+  while (state.inference.looping) {
+    loopSeq += 1;
+    const chunk = await requestInferenceChunk({ refreshStatus: false, log: false });
+    if (!state.inference.looping) break;
+    state.inference.loopTiming = { seq: loopSeq };
+    if (!chunk || !chunk.ok) {
+      renderInferenceStatus();
+      state.inference.looping = false;
+      const toggle = $("#inferenceLoopToggle");
+      if (toggle) toggle.checked = false;
+      break;
+    }
+    const executed = await executeInferenceChunk({ refreshStatus: false, log: false });
+    renderInferenceStatus();
+    if (!state.inference.looping) break;
+    if (!executed || !executed.ok) {
+      state.inference.looping = false;
+      const toggle = $("#inferenceLoopToggle");
+      if (toggle) toggle.checked = false;
+      break;
+    }
+    addLog("推理", `闭环 #${loopSeq} 完成：${chunk.chunkId || "chunk"}，执行 ${executed.executedSteps || 0} 步`);
+  }
+  if (state.task === "inference") setTask("idle", "空闲", "空闲");
+  renderInferenceStatus();
+  resumeBackgroundPollsNow();
 }
 
-function pauseInference() {
-  if (state.task !== "inference") return;
-  window.clearInterval(state.inferenceTimer);
-  setTask("inference-paused", "推理任务暂停", "推理暂停");
-  setStateBadge("#inferenceBadge", "暂停", "idle");
-  $("#inferenceSummary").textContent = "推理已暂停";
-  addLog("推理", "推理暂停");
+function toggleInferenceLoop(event) {
+  const enabled = Boolean(event.currentTarget.checked);
+  if (enabled && !state.inference.connected) {
+    event.currentTarget.checked = false;
+    addLog("推理", "请先连接远端推理服务再开启连续闭环");
+    return;
+  }
+  state.inference.looping = enabled;
+  renderInferenceStatus();
+  if (enabled) {
+    addLog("推理", "连续闭环已开启");
+    runInferenceLoop();
+  } else {
+    addLog("推理", "连续闭环已关闭");
+    resumeBackgroundPollsNow();
+  }
 }
 
-function stopInference() {
-  if (state.task !== "inference" && state.task !== "inference-paused") return;
-  window.clearInterval(state.inferenceTimer);
-  setTask("idle", "空闲", "空闲");
-  setStateBadge("#inferenceBadge", "停止", "idle");
-  $("#inferenceSummary").textContent = "推理已停止";
-  renderHomeFlow(["运行前检查", "加载模型", "停止输出", "任务停止"], 3, 100);
-  addLog("推理", "推理任务停止");
+async function stopInference() {
+  state.inference.looping = false;
+  const toggle = $("#inferenceLoopToggle");
+  if (toggle) toggle.checked = false;
+  try {
+    const { result } = await inferencePost("stop");
+    addLog("推理", result.ok ? "推理已停止，机器人进入安全保持" : `停止失败：${result.detail || result.code}`);
+  } catch (error) {
+    addLog("推理", `停止失败：${error.message}`);
+  } finally {
+    if (state.task === "inference") setTask("idle", "空闲", "空闲");
+    await refreshInferenceStatus();
+    resumeBackgroundPollsNow();
+  }
 }
 
 async function stopCurrentTask() {
@@ -3147,6 +3596,12 @@ function forceStopTask(reason) {
   window.clearInterval(state.inferenceTimer);
   window.clearTimeout(state.armControl.publishTimer);
   state.armControl.active = false;
+  if (state.inference.looping || state.inference.connected) {
+    state.inference.looping = false;
+    const loopToggle = $("#inferenceLoopToggle");
+    if (loopToggle) loopToggle.checked = false;
+    stopInference();
+  }
   setTask("idle", "空闲", "空闲");
   setStateBadge("#stateBadge", "停止", "idle");
   $("#taskSubtitle").textContent = "当前任务已停止";
@@ -4614,8 +5069,13 @@ function bindEvents() {
   $("#discardEpisodeButton").addEventListener("click", () => finishCollection("废弃"));
   $("#markSuccessButton").addEventListener("click", () => finishCollection("成功"));
   $("#markFailButton").addEventListener("click", () => finishCollection("失败"));
-  $("#startInferenceButton").addEventListener("click", startInference);
-  $("#pauseInferenceButton").addEventListener("click", pauseInference);
+  $("#inferenceConnectButton").addEventListener("click", connectInference);
+  $("#inferenceDisconnectButton").addEventListener("click", disconnectInference);
+  $("#inferenceEnablePiperButton").addEventListener("click", enablePiperForInference);
+  $("#requestChunkButton").addEventListener("click", requestInferenceChunk);
+  $("#executeChunkButton").addEventListener("click", executeInferenceChunk);
+  $("#inferenceLoopToggle").addEventListener("change", toggleInferenceLoop);
+  $("#inferenceMaskPanel").addEventListener("click", handleMaskClick);
   $("#stopInferenceButton").addEventListener("click", stopInference);
   $("#stopTaskButton").addEventListener("click", stopCurrentTask);
   $("#estopButton").addEventListener("click", triggerEmergencyStop);
@@ -4639,7 +5099,6 @@ function bindEvents() {
       }
       if (action === "inference") {
         showView("inference");
-        startInference();
       }
       if (action === "device-control") {
         showView("device-control");
@@ -4807,7 +5266,10 @@ function init() {
   renderAdvice();
   renderHomingSteps();
   renderCollectionMetrics();
-  renderInferenceMetrics();
+  renderInferenceStatus();
+  renderInferenceMask();
+  refreshInferenceStatus();
+  loadInferenceChassisLimits();
   renderPreflight();
   renderDeviceBaseMetrics();
   renderDeviceControls();
@@ -4843,16 +5305,16 @@ function init() {
   fetchPiperJointStates();
   syncClock();
   window.setInterval(syncClock, 1000);
-  window.setInterval(() => fetchPiperRuntimeStatus({ silent: true }), 3000);
-  window.setInterval(() => fetchLiftingRuntimeStatus({ silent: true }), 3000);
-  window.setInterval(() => fetchChassisRuntimeStatus({ silent: true }), 3000);
-  window.setInterval(() => fetchCameraRuntimeStatus({ silent: true }), 3000);
-  window.setInterval(() => fetchCameraFrames({ silent: true }), 1000);
-  window.setInterval(() => fetchLidarRuntimeStatus({ silent: true }), 3000);
-  window.setInterval(() => fetchLidarCloudStatus({ silent: true }), 1000);
-  window.setInterval(fetchLiftingMotorState, 500);
-  window.setInterval(() => fetchChassisState({ silent: true }), 500);
-  window.setInterval(fetchPiperJointStates, piperJointPollIntervalMs);
+  window.setInterval(() => runBackgroundPoll(() => fetchPiperRuntimeStatus({ silent: true })), 3000);
+  window.setInterval(() => runBackgroundPoll(() => fetchLiftingRuntimeStatus({ silent: true })), 3000);
+  window.setInterval(() => runBackgroundPoll(() => fetchChassisRuntimeStatus({ silent: true })), 3000);
+  window.setInterval(() => runBackgroundPoll(() => fetchCameraRuntimeStatus({ silent: true })), 3000);
+  window.setInterval(() => runBackgroundPoll(() => fetchCameraFrames({ silent: true })), 1000);
+  window.setInterval(() => runBackgroundPoll(() => fetchLidarRuntimeStatus({ silent: true })), 3000);
+  window.setInterval(() => runBackgroundPoll(() => fetchLidarCloudStatus({ silent: true })), 1000);
+  window.setInterval(() => runBackgroundPoll(fetchLiftingMotorState), 500);
+  window.setInterval(() => runBackgroundPoll(() => fetchChassisState({ silent: true })), 500);
+  window.setInterval(() => runBackgroundPoll(fetchPiperJointStates), piperJointPollIntervalMs);
 }
 
 init();

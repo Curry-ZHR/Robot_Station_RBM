@@ -152,6 +152,22 @@ READ_TOPICS = {
         stale_after_sec=0.8,
         description="Ranger chassis odometry published by ranger_base_node.",
     ),
+    "action_chassis": TopicReadSpec(
+        key="action_chassis",
+        name="Dataset chassis action",
+        topic="/action/chassis",
+        message_type="std_msgs/msg/String",
+        stale_after_sec=0.2,
+        description="Latest web chassis action mirrored for data collection as JSON.",
+    ),
+    "action_lifting": TopicReadSpec(
+        key="action_lifting",
+        name="Dataset lifting action",
+        topic="/action/lifting",
+        message_type="std_msgs/msg/String",
+        stale_after_sec=0.2,
+        description="Latest web lifting target mirrored for data collection as JSON.",
+    ),
 }
 
 

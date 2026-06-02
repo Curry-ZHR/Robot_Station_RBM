@@ -20,7 +20,9 @@ from modules.control.lifting import (
     zero_lifting_position,
 )
 from modules.control.piper import publish_joint_targets
+from modules.data_collection import get_action_mirror, shutdown_action_mirror, start_action_mirror
 from modules.drivers.can.can_activate import activate_can
+from modules.inference import get_inference_manager
 from modules.logger import get_logger, setup_logger
 from modules.robot_description import RobotModelError, get_model, list_models, resolve_model_asset
 from modules.ros_io import (
@@ -163,6 +165,30 @@ def lidar_result_status(result):
     if code.endswith("UNAVAILABLE"):
         return 503
     return 500
+
+
+def inference_result_status(result):
+    if result.get("ok"):
+        return 200
+    code = result.get("code", "")
+    mapping = {
+        "INFER-BUSY": 409,
+        "INFER-WS-DISCONNECTED": 409,
+        "INFER-NO-CHUNK": 409,
+        "INFER-STOPPED": 200,
+        "INFER-CHUNK-INVALID": 400,
+        "INFER-WS-URL": 400,
+        "INFER-WS-TIMEOUT": 504,
+        "INFER-WS-CONNECT": 502,
+        "INFER-WS-SEND": 502,
+        "INFER-WS-RECV": 502,
+        "INFER-WS-DEPENDENCY": 503,
+        "INFER-OBS-CAMERA": 503,
+        "INFER-OBS-JOINT": 503,
+        "INFER-OBS-LIFT": 503,
+        "INFER-MASK-NOFEEDBACK": 503,
+    }
+    return mapping.get(code, 500)
 
 
 def robot_model_error_status(error):
@@ -348,6 +374,9 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/ros/actions":
             self.write_json(get_ros_writer().list_actions())
             return
+        if parsed.path == "/api/inference/status":
+            self.write_json(get_inference_manager().status())
+            return
         if parsed.path == "/api/self-check/ros-daemon":
             result = ensure_ros_daemon()
             log_check_result(result)
@@ -393,8 +422,54 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             )
             return
         result = handler(payload)
+        if result.get("ok") and not result.get("stale"):
+            command = result.get("command")
+            if isinstance(command, dict):
+                try:
+                    get_action_mirror().set_chassis_action(command)
+                except Exception as exc:
+                    LOGGER.warning("Action mirror chassis update failed: %s", exc)
         log_action_result(f"Chassis {chassis_action}", result)
         self.write_json(result, status=ros_result_status(result))
+
+    def handle_inference(self, action):
+        manager = get_inference_manager()
+        if action == "connect":
+            payload = self.read_json_body()
+            result = manager.connect(payload.get("url") or payload.get("remoteUrl"))
+            log_action_result("Inference connect", result)
+            self.write_json(result, status=inference_result_status(result))
+            return
+        if action == "request-chunk":
+            payload = self.read_json_body()
+            result = manager.request_chunk(payload)
+            log_action_result("Inference request-chunk", result)
+            self.write_json(result, status=inference_result_status(result))
+            return
+        if action == "execute-chunk":
+            payload = self.read_json_body()
+            result = manager.execute_chunk(payload)
+            log_action_result("Inference execute-chunk", result)
+            self.write_json(result, status=inference_result_status(result))
+            return
+        if action == "stop":
+            result = manager.stop()
+            log_action_result("Inference stop", result)
+            self.write_json(result, status=inference_result_status(result))
+            return
+        if action == "disconnect":
+            result = manager.disconnect()
+            log_action_result("Inference disconnect", result)
+            self.write_json(result, status=inference_result_status(result))
+            return
+        self.write_json(
+            {
+                "ok": False,
+                "code": "INFER-ACTION",
+                "detail": f"Unsupported inference action: {action}",
+            },
+            status=400,
+        )
 
     def do_POST(self):
         parsed = urlparse(self.path)
@@ -431,6 +506,12 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 )
                 return
             result = handler(payload)
+            if lifting_action == "height" and (result.get("ok") or result.get("code") == "LIFT-C-STATE"):
+                try:
+                    request = result.get("request") or {}
+                    get_action_mirror().set_lifting_action(float(request.get("val")) / 1000.0)
+                except Exception as exc:
+                    LOGGER.warning("Action mirror lifting update failed: %s", exc)
             log_action_result(f"Lifting {lifting_action}", result)
             self.write_json(result, status=ros_result_status(result))
             return
@@ -461,6 +542,10 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             result = get_ros_writer().publish(ros_action_key, payload)
             log_action_result(f"ROS action {ros_action_key}", result)
             self.write_json(result, status=ros_result_status(result))
+            return
+        inference_action = api_tail(parsed.path, "/api/inference")
+        if inference_action is not None:
+            self.handle_inference(inference_action)
             return
         if parsed.path == "/api/actions/can/activate":
             payload = self.read_json_body()
@@ -653,6 +738,7 @@ def main():
     LOGGER.info("URL: http://%s:%s", args.host, args.port)
     if control_httpd is not None:
         LOGGER.info("Chassis control URL: http://%s:%s", args.host, args.control_port)
+    start_action_mirror()
     LOGGER.info("Press Ctrl+C to stop")
     try:
         httpd.serve_forever()
@@ -664,6 +750,8 @@ def main():
             if control_thread is not None:
                 control_thread.join(timeout=2.0)
             control_httpd.server_close()
+        get_inference_manager().disconnect()
+        shutdown_action_mirror()
         shutdown_services()
         shutdown_ros_io()
         httpd.server_close()

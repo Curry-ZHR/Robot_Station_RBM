@@ -552,11 +552,11 @@
               <div class="page-head compact">
                 <div>
                   <p class="eyebrow">推理执行</p>
-                  <h1>模型任务</h1>
+                  <h1>远程推理</h1>
                 </div>
                 <div class="button-group">
-                  <button class="primary-button" id="startInferenceButton">开始推理</button>
-                  <button class="secondary-button" id="pauseInferenceButton">暂停</button>
+                  <button class="secondary-button" id="inferenceConnectButton">连接远端</button>
+                  <button class="secondary-button" id="inferenceDisconnectButton">断开</button>
                   <button class="secondary-button" id="stopInferenceButton">停止</button>
                 </div>
               </div>
@@ -565,14 +565,29 @@
                   <div class="panel-head">
                     <div>
                       <h2>运行配置</h2>
-                      <p>开始前会检查控制权和最近自检</p>
+                      <p>前端把远端地址交给本机后端建立 WebSocket，前端不直连远端</p>
                     </div>
-                    <span class="state-badge idle" id="inferenceBadge">空闲</span>
+                    <span class="state-badge idle" id="inferenceBadge">未连接</span>
                   </div>
-                  <form class="config-form">
-                    <label>模型<select id="modelSelect"><option>policy_piper_pick_v1.onnx</option><option>policy_mobile_manipulation_v0.pt</option></select></label>
-                    <label>任务<select><option>抓取放置</option><option>桌面整理</option><option>巡检记录</option></select></label>
-                    <label>设备<select><option>GPU 优先</option><option>CPU</option></select></label>
+                  <form class="config-form inference-config" id="inferenceConfigForm" autocomplete="off">
+                    <label class="field-wide"><span class="field-label">远端地址</span><input id="remoteUrlInput" type="text" value="ws://127.0.0.1:8000/infer" placeholder="ws://127.0.0.1:8000/infer" inputmode="url"></label>
+                    <label class="field-wide"><span class="field-label">任务指令 prompt</span><input id="promptInput" type="text" placeholder="grasp the bottle"></label>
+                    <label><span class="field-label">关节速度<em>deg/s</em></span><input id="inferenceJointSpeedInput" type="number" min="0.5" max="30" step="0.5" value="20" inputmode="decimal"></label>
+                    <label><span class="field-label">发送频率<em>Hz</em></span><input id="inferenceFrequencyInput" type="number" min="1" max="30" step="1" value="10" inputmode="numeric"></label>
+                    <label class="field-wide"><span class="field-label">执行步数 N<em>每轮执行的动作步数</em></span><input id="inferenceStepsInput" type="number" min="1" max="200" step="1" value="20" inputmode="numeric"></label>
+                    <div class="field-wide limit-group">
+                      <span class="field-label">底盘速度上限<em>不超过整机硬限位，越限的 chunk 会被拒绝</em></span>
+                      <div class="limit-row">
+                        <label><span>vx (m/s)</span><input id="inferenceMaxVxInput" type="number" min="0" step="0.01" inputmode="decimal"></label>
+                        <label><span>vy (m/s)</span><input id="inferenceMaxVyInput" type="number" min="0" step="0.01" inputmode="decimal"></label>
+                        <label><span>wz (rad/s)</span><input id="inferenceMaxWzInput" type="number" min="0" step="0.01" inputmode="decimal"></label>
+                      </div>
+                    </div>
+                    <label class="toggle-row" for="inferenceLoopToggle">
+                      <span class="toggle-text"><strong>连续闭环</strong><small>自动循环：观测 → 请求 chunk → 执行 N 步</small></span>
+                      <input id="inferenceLoopToggle" type="checkbox">
+                      <i class="toggle-switch" aria-hidden="true"></i>
+                    </label>
                   </form>
                   <div class="preflight-list" id="preflightList"></div>
                 </article>
@@ -580,12 +595,18 @@
                 <article class="panel">
                   <div class="panel-head">
                     <div>
-                      <h2>模型状态</h2>
-                      <p id="inferenceSummary">未加载模型</p>
+                      <h2>推理状态</h2>
+                      <p id="inferenceSummary">未连接远端推理服务</p>
                     </div>
                     <button class="secondary-button" data-view-jump="device-control">低速接管</button>
                   </div>
-                  <div class="metric-grid" id="inferenceMetrics"></div>
+                  <div class="button-group inference-actions">
+                    <button class="secondary-button" id="inferenceEnablePiperButton">使能 Piper</button>
+                    <button class="secondary-button" id="requestChunkButton">请求 chunk</button>
+                    <button class="primary-button" id="executeChunkButton">执行 N 步</button>
+                  </div>
+                  <div class="metric-grid inference-metrics" id="inferenceMetrics"></div>
+                  <div class="action-mask" id="inferenceMaskPanel"></div>
                   <div class="action-output" id="lastActionOutput">最近动作：无</div>
                 </article>
               </div>
