@@ -105,6 +105,11 @@ def _service_timeout_sec():
     return max(8.0, configured_timeout + 5.0)
 
 
+def _callback_mode():
+    config = _load_config()
+    return int(_number(os.environ.get("LIFTING_CALLBACK_MODE", config.get("callBackMode", 0)), "callBackMode"))
+
+
 def _clamp_height_m(height_m):
     limits = _limits()
     if height_m < limits["minHeightM"] or height_m > limits["maxHeightM"]:
@@ -125,6 +130,10 @@ def _height_from_payload(payload):
     if value is marker:
         raise LiftingControlValidationError("heightM is required.")
     return _clamp_height_m(_number(value, "heightM"))
+
+
+def lifting_target_height_m(payload):
+    return _height_from_payload(payload)
 
 
 def _speed_from_payload(payload):
@@ -155,6 +164,8 @@ def _state_detail(state):
 
 def _state_ok(mode, state):
     if state == 1:
+        return True
+    if _callback_mode() == 1 and mode in (-7, -5, -4, -2, 0) and state in (-1, 0):
         return True
     if mode == -6 and state in (2, -2):
         return True
@@ -195,6 +206,7 @@ def _call_lifting_service(val, mode, action):
         state=state,
         request={"val": request.val, "mode": request.mode},
         limits=_limits(),
+        callbackMode=_callback_mode(),
         service=SERVICE_NAME,
         publishedAt=time.strftime("%H:%M:%S"),
     )

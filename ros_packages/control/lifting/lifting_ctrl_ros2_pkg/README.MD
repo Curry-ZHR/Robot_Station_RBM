@@ -70,7 +70,7 @@ int64 fps_error      //帧率错误，即电机离线计数值，发送-3的mode
     "responseTimeout":70,//应答超时时间，单位s
     "motorSpd":800,//电机最大速度设定，单位rpm
     "motorTime":0,//电机加减速时间(梯形曲线)，单位 1 为 65ms，假设设定为10,则加减速时间为650ms
-    "callBackMode":0,//回调函数模式，0为阻塞应答，1为立刻应答，其它值无效
+    "callBackMode":1,//回调函数模式，0为阻塞应答，1为立刻应答，其它值无效
     "upLimitVal":305,//电机正方向运行最大值，单位mm
     "downLimitVal":0,//电机负方向运行最小值，单位mm
     "initSpd":-800,//初始化时电机运行速度，单位rpm

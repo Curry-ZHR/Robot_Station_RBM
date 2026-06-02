@@ -9,7 +9,7 @@
     "motorSpd":500,
     "liftSpd":16,
     "motorTime":0,
-    "callBackMode":0,
+    "callBackMode":1,
     "upLimitVal":800,
     "downLimitVal":0
 }

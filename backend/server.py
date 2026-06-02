@@ -15,6 +15,7 @@ from modules.control.lifting import (
     initialize_lifting,
     jog_lifting,
     lifting_limits,
+    lifting_target_height_m,
     move_lifting_to_height,
     stop_lifting,
     zero_lifting_position,
@@ -24,6 +25,7 @@ from modules.data_collection import get_action_mirror, shutdown_action_mirror, s
 from modules.drivers.can.can_activate import activate_can
 from modules.inference import get_inference_manager
 from modules.logger import get_logger, setup_logger
+from modules.playback import load_playback_dataset, playback_result_status
 from modules.robot_description import RobotModelError, get_model, list_models, resolve_model_asset
 from modules.ros_io import (
     get_camera_image_reader,
@@ -432,6 +434,54 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         log_action_result(f"Chassis {chassis_action}", result)
         self.write_json(result, status=ros_result_status(result))
 
+    def handle_piper_joint_targets(self):
+        payload = self.read_json_body()
+        result = publish_joint_targets(payload)
+        log_action_result("Piper joint targets", result)
+        self.write_json(result, status=ros_result_status(result))
+
+    def handle_lifting_control(self, lifting_action):
+        payload = self.read_json_body()
+        handlers = {
+            "init": initialize_lifting,
+            "height": move_lifting_to_height,
+            "jog": jog_lifting,
+            "stop": stop_lifting,
+            "clear-error": clear_lifting_error,
+            "zero": zero_lifting_position,
+        }
+        handler = handlers.get(lifting_action)
+        if handler is None:
+            self.write_json(
+                {
+                    "ok": False,
+                    "code": "LIFT-C-ACTION",
+                    "detail": f"Unsupported lifting action: {lifting_action}",
+                },
+                status=400,
+            )
+            return
+        if lifting_action == "height":
+            try:
+                lift_target_height_m = lifting_target_height_m(payload)
+            except Exception as exc:
+                result = {
+                    "ok": False,
+                    "code": "LIFT-C-PAYLOAD",
+                    "detail": str(exc),
+                    "limits": lifting_limits().get("limits", {}),
+                }
+                log_action_result("Lifting height", result)
+                self.write_json(result, status=400)
+                return
+            try:
+                get_action_mirror().set_lifting_action(lift_target_height_m)
+            except Exception as exc:
+                LOGGER.warning("Action mirror lifting update failed: %s", exc)
+        result = handler(payload)
+        log_action_result(f"Lifting {lifting_action}", result)
+        self.write_json(result, status=ros_result_status(result))
+
     def handle_inference(self, action):
         manager = get_inference_manager()
         if action == "connect":
@@ -474,10 +524,7 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/control/piper/joint-targets":
-            payload = self.read_json_body()
-            result = publish_joint_targets(payload)
-            log_action_result("Piper joint targets", result)
-            self.write_json(result, status=ros_result_status(result))
+            self.handle_piper_joint_targets()
             return
         chassis_action = api_tail(parsed.path, "/api/control/chassis")
         if chassis_action is not None:
@@ -485,35 +532,7 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             return
         lifting_action = api_tail(parsed.path, "/api/control/lifting")
         if lifting_action is not None:
-            payload = self.read_json_body()
-            handlers = {
-                "init": initialize_lifting,
-                "height": move_lifting_to_height,
-                "jog": jog_lifting,
-                "stop": stop_lifting,
-                "clear-error": clear_lifting_error,
-                "zero": zero_lifting_position,
-            }
-            handler = handlers.get(lifting_action)
-            if handler is None:
-                self.write_json(
-                    {
-                        "ok": False,
-                        "code": "LIFT-C-ACTION",
-                        "detail": f"Unsupported lifting action: {lifting_action}",
-                    },
-                    status=400,
-                )
-                return
-            result = handler(payload)
-            if lifting_action == "height" and (result.get("ok") or result.get("code") == "LIFT-C-STATE"):
-                try:
-                    request = result.get("request") or {}
-                    get_action_mirror().set_lifting_action(float(request.get("val")) / 1000.0)
-                except Exception as exc:
-                    LOGGER.warning("Action mirror lifting update failed: %s", exc)
-            log_action_result(f"Lifting {lifting_action}", result)
-            self.write_json(result, status=ros_result_status(result))
+            self.handle_lifting_control(lifting_action)
             return
         service_tail = api_tail(parsed.path, "/api/runtime/services")
         if service_tail is not None:
@@ -546,6 +565,11 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         inference_action = api_tail(parsed.path, "/api/inference")
         if inference_action is not None:
             self.handle_inference(inference_action)
+            return
+        if parsed.path == "/api/playback/load":
+            payload = self.read_json_body()
+            result = load_playback_dataset(payload)
+            self.write_json(result, status=playback_result_status(result))
             return
         if parsed.path == "/api/actions/can/activate":
             payload = self.read_json_body()
@@ -711,12 +735,94 @@ class ChassisControlHandler(RobotStationHandler):
         self.handle_chassis_control(chassis_action)
 
 
+class LiftingControlHandler(RobotStationHandler):
+    """Dedicated low-latency endpoint for lifting control.
+
+    Served on its own port so lifting commands get a separate browser
+    connection pool and never queue behind the high-volume camera/LiDAR
+    long-poll requests on the main port.
+    """
+
+    server_version = "RobotStationLiftingHTTP/0.1"
+
+    def end_headers(self):
+        origin = self.headers.get("Origin") or "*"
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Vary", "Origin")
+        super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/health":
+            self.write_json({"status": "ok", "role": "lifting-control"})
+            return
+        if parsed.path == "/api/control/lifting/limits":
+            self.write_json(lifting_limits())
+            return
+        self.write_json({"error": "not_found", "path": parsed.path}, status=404)
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        lifting_action = api_tail(parsed.path, "/api/control/lifting")
+        if lifting_action is None:
+            self.write_json({"error": "not_found", "path": parsed.path}, status=404)
+            return
+        self.handle_lifting_control(lifting_action)
+
+
+class PiperControlHandler(RobotStationHandler):
+    """Dedicated low-latency endpoint for Piper arm joint-target commands.
+
+    Served on its own port so arm commands get a separate browser connection
+    pool and never queue behind the high-volume camera/LiDAR long-poll
+    requests on the main port.
+    """
+
+    server_version = "RobotStationPiperHTTP/0.1"
+
+    def end_headers(self):
+        origin = self.headers.get("Origin") or "*"
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Vary", "Origin")
+        super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/health":
+            self.write_json({"status": "ok", "role": "piper-control"})
+            return
+        self.write_json({"error": "not_found", "path": parsed.path}, status=404)
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/control/piper/joint-targets":
+            self.handle_piper_joint_targets()
+            return
+        self.write_json({"error": "not_found", "path": parsed.path}, status=404)
+
+
 def main():
     setup_logger()
     parser = argparse.ArgumentParser(description="Run Robot Station local server.")
     parser.add_argument("--host", default=os.environ.get("HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "9999")))
     parser.add_argument("--control-port", type=int, default=int(os.environ.get("CONTROL_PORT", "9998")))
+    parser.add_argument("--lifting-port", type=int, default=int(os.environ.get("LIFTING_CONTROL_PORT", "9997")))
+    parser.add_argument("--piper-port", type=int, default=int(os.environ.get("PIPER_CONTROL_PORT", "9996")))
     args = parser.parse_args()
 
     if not (FRONTEND_DIR / "index.html").exists():
@@ -733,11 +839,35 @@ def main():
             daemon=True,
         )
         control_thread.start()
+    lifting_httpd = None
+    lifting_thread = None
+    if args.lifting_port and args.lifting_port not in (args.port, args.control_port):
+        lifting_httpd = ThreadingHTTPServer((args.host, args.lifting_port), LiftingControlHandler)
+        lifting_thread = threading.Thread(
+            target=lifting_httpd.serve_forever,
+            name="lifting-control-http",
+            daemon=True,
+        )
+        lifting_thread.start()
+    piper_httpd = None
+    piper_thread = None
+    if args.piper_port and args.piper_port not in (args.port, args.control_port, args.lifting_port):
+        piper_httpd = ThreadingHTTPServer((args.host, args.piper_port), PiperControlHandler)
+        piper_thread = threading.Thread(
+            target=piper_httpd.serve_forever,
+            name="piper-control-http",
+            daemon=True,
+        )
+        piper_thread.start()
     LOGGER.info("Robot Station starting")
     LOGGER.info("Serving frontend: %s", FRONTEND_DIR)
     LOGGER.info("URL: http://%s:%s", args.host, args.port)
     if control_httpd is not None:
         LOGGER.info("Chassis control URL: http://%s:%s", args.host, args.control_port)
+    if lifting_httpd is not None:
+        LOGGER.info("Lifting control URL: http://%s:%s", args.host, args.lifting_port)
+    if piper_httpd is not None:
+        LOGGER.info("Piper control URL: http://%s:%s", args.host, args.piper_port)
     start_action_mirror()
     LOGGER.info("Press Ctrl+C to stop")
     try:
@@ -745,6 +875,16 @@ def main():
     except KeyboardInterrupt:
         LOGGER.info("Stopping Robot Station")
     finally:
+        if piper_httpd is not None:
+            piper_httpd.shutdown()
+            if piper_thread is not None:
+                piper_thread.join(timeout=2.0)
+            piper_httpd.server_close()
+        if lifting_httpd is not None:
+            lifting_httpd.shutdown()
+            if lifting_thread is not None:
+                lifting_thread.join(timeout=2.0)
+            lifting_httpd.server_close()
         if control_httpd is not None:
             control_httpd.shutdown()
             if control_thread is not None:

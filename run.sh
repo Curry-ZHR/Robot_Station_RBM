@@ -24,6 +24,11 @@ CHASSIS_SETUP="${ROOT_DIR}/ros_packages/control/chassis/install/setup.bash"
 CAMERA_SETUP="${ROOT_DIR}/ros_packages/sensors/camera/orbbec/install/setup.bash"
 LIDAR_SETUP="${ROOT_DIR}/ros_packages/sensors/lidar/install/setup.bash"
 
+disable_proxy_env() {
+  unset http_proxy https_proxy ftp_proxy all_proxy ws_proxy wss_proxy rsync_proxy no_proxy
+  unset HTTP_PROXY HTTPS_PROXY FTP_PROXY ALL_PROXY WS_PROXY WSS_PROXY RSYNC_PROXY NO_PROXY
+}
+
 source_setup() {
   local setup_file="$1"
   set +u
@@ -55,6 +60,8 @@ fi
 if [[ -f "${LIDAR_SETUP}" ]]; then
   source_setup "${LIDAR_SETUP}"
 fi
+
+disable_proxy_env
 
 cd "${ROOT_DIR}"
 exec python3 -m backend.server --host "${HOST}" --port "${PORT}" --control-port "${CONTROL_PORT}"

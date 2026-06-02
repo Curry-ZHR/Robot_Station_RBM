@@ -6,7 +6,11 @@ __pycache__/
 # Runtime output
 logs/
 data/
+output/playwright/
 .xdp_*
+
+# Local browser automation artifacts
+.playwright-cli/
 
 # ROS / colcon generated spaces
 ros_packages/**/build/

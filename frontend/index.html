@@ -23,8 +23,7 @@
           <button class="nav-item" data-view="platform-control">平台控制</button>
           <button class="nav-item" data-view="robot-view">整机视图</button>
           <button class="nav-item" data-view="sensors">传感器</button>
-          <button class="nav-item" data-view="control">中控</button>
-          <button class="nav-item" data-view="homing">归位</button>
+          <button class="nav-item" data-view="data-playback">数据回放</button>
           <button class="nav-item" data-view="collection">数采</button>
           <button class="nav-item" data-view="inference">推理</button>
           <button class="nav-item" data-view="logs">日志</button>
@@ -80,107 +79,6 @@
 
         <div class="workbench">
           <section class="content-area">
-            <section class="view" data-view-panel="control">
-              <div class="page-head">
-                <div>
-                  <p class="eyebrow">任务中控</p>
-                  <h1>机器人任务工作台</h1>
-                </div>
-                <div class="head-meta">
-                  <span>控制权：<strong id="ownerLabel">空闲</strong></span>
-                  <span>自检：<strong id="selfCheckAge">未执行</strong></span>
-                </div>
-              </div>
-
-              <div class="safety-strip">
-                <div>
-                  <span class="strip-label">安全状态</span>
-                  <strong id="safetySummary">可操作，控制界面仅本地预览</strong>
-                </div>
-                <div>
-                  <span class="strip-label">速度限制</span>
-                  <strong>机械臂 10 deg/s / 底盘 0.20 m/s</strong>
-                </div>
-                <div>
-                  <span class="strip-label">数据目录</span>
-                  <strong>./data</strong>
-                </div>
-              </div>
-
-              <div class="dashboard-grid">
-                <article class="panel flow-panel">
-                  <div class="panel-head">
-                    <div>
-                      <h2>当前任务流程</h2>
-                      <p id="taskSubtitle">等待操作员启动任务</p>
-                    </div>
-                    <span class="state-badge idle" id="stateBadge">空闲</span>
-                  </div>
-                  <div class="progress-track" aria-label="任务进度">
-                    <span id="taskProgressBar" style="width: 0%"></span>
-                  </div>
-                  <ol class="step-list" id="homeFlowSteps">
-                    <li class="is-current">等待任务</li>
-                    <li>运行前检查</li>
-                    <li>执行任务</li>
-                    <li>生成结果</li>
-                  </ol>
-                </article>
-
-                <article class="panel advice-panel">
-                  <div class="panel-head">
-                    <div>
-                      <h2>告警与建议</h2>
-                      <p>按阻塞程度排序</p>
-                    </div>
-                    <button class="small-button" data-view-jump="logs">查看日志</button>
-                  </div>
-                  <div class="advice-list" id="adviceList"></div>
-                </article>
-              </div>
-
-              <section class="health-section">
-                <div class="section-title">
-                  <h2>硬件健康矩阵</h2>
-                  <span>机械臂、底盘、传感器、存储、算力</span>
-                </div>
-                <div class="health-grid" id="healthGrid"></div>
-              </section>
-
-              <section class="quick-section">
-                <div class="section-title">
-                  <h2>快捷动作</h2>
-                  <span>互斥任务运行时会自动锁定不可用动作</span>
-                </div>
-                <div class="quick-actions">
-                  <button class="action-tile" data-action="self-check">
-                    <span>整机自检</span>
-                    <strong>检查 ROS / CAN / 传感器 / 存储</strong>
-                  </button>
-                  <button class="action-tile" data-action="homing">
-                    <span>机器人归位</span>
-                    <strong>使能、夹爪默认、回 home</strong>
-                  </button>
-                  <button class="action-tile" data-action="collection">
-                    <span>开始数采</span>
-                    <strong>创建 episode 并监控质量</strong>
-                  </button>
-                  <button class="action-tile" data-action="inference">
-                    <span>开始推理</span>
-                    <strong>加载模型并进入运行</strong>
-                  </button>
-                  <button class="action-tile" data-action="device-control">
-                    <span>打开双臂控制</span>
-                    <strong>双臂、夹爪 State / Action 低速预览</strong>
-                  </button>
-                  <button class="action-tile" data-action="platform-control">
-                    <span>打开平台控制</span>
-                    <strong>移动底座与升降轴本地预览</strong>
-                  </button>
-                </div>
-              </section>
-            </section>
-
             <section class="view is-active" data-view-panel="self-check">
               <div class="page-head compact">
                 <div>
@@ -479,26 +377,6 @@
               </div>
             </section>
 
-            <section class="view" data-view-panel="homing">
-              <div class="page-head compact">
-                <div>
-                  <p class="eyebrow">归位与准备</p>
-                  <h1>一键归位流程</h1>
-                </div>
-                <button class="primary-button" id="startHomingButton">开始归位</button>
-              </div>
-              <div class="panel">
-                <div class="panel-head">
-                  <div>
-                    <h2>步骤进度</h2>
-                    <p id="homingSummary">等待开始</p>
-                  </div>
-                  <span class="state-badge idle" id="homingBadge">空闲</span>
-                </div>
-                <ol class="timeline" id="homingSteps"></ol>
-              </div>
-            </section>
-
             <section class="view" data-view-panel="collection">
               <div class="page-head compact">
                 <div>
@@ -653,6 +531,63 @@
                   </div>
                 </article>
               </div>
+
+            </section>
+
+            <section class="view" data-view-panel="data-playback">
+              <div class="page-head compact">
+                <div>
+                  <p class="eyebrow">传感器数据</p>
+                  <h1>数据回放</h1>
+                </div>
+                <span class="state-badge idle" id="playbackSourceBadge">未使能</span>
+              </div>
+
+              <article class="panel playback-control-panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>回放控制</h2>
+                    <p id="playbackSummary">replay.parquet</p>
+                  </div>
+                  <span class="state-badge idle" id="playbackBadge">待使能</span>
+                </div>
+                <form class="config-form playback-form">
+                  <label class="field-wide"><span class="field-label">数据文件</span><input id="playbackPathInput" type="text" value="/data/robot_station/replay.parquet"></label>
+                </form>
+                <div class="progress-track playback-progress" aria-label="数据回放进度">
+                  <span id="playbackProgressBar" style="width: 0%"></span>
+                </div>
+                <div class="playback-run-row">
+                  <div class="playback-run-status">
+                    <span class="field-label">回放状态</span>
+                    <strong id="playbackExecutionStatus">机器人未使能</strong>
+                    <small id="playbackTimeLabel">00:00 / 07:12</small>
+                  </div>
+                  <div class="button-group playback-actions">
+                    <button class="secondary-button" id="playbackEnableRobotButton" type="button">机器人使能</button>
+                    <button class="primary-button" id="playbackReplayButton" type="button" disabled>数据回放</button>
+                    <button class="secondary-button" id="playbackStopButton" type="button" disabled>停止</button>
+                  </div>
+                </div>
+                <div class="metric-grid playback-file-info" id="playbackFileInfo"></div>
+              </article>
+
+              <article class="panel playback-chart-panel">
+                <div class="panel-head playback-chart-head">
+                  <div>
+                    <h2>State / Action 曲线</h2>
+                    <p id="playbackChartSummary">18 个维度 / 横轴 time(s)</p>
+                  </div>
+                  <div class="segmented playback-chart-tabs" id="playbackChartTabs" role="tablist">
+                    <button class="is-active" data-playback-chart-group="all" type="button">全部</button>
+                    <button data-playback-chart-group="left" type="button">左臂</button>
+                    <button data-playback-chart-group="right" type="button">右臂</button>
+                    <button data-playback-chart-group="platform" type="button">平台</button>
+                  </div>
+                </div>
+                <div class="playback-chart-legend" id="playbackChartLegend"></div>
+                <div class="playback-chart-grid" id="playbackChartGrid"></div>
+              </article>
             </section>
 
             <section class="view" data-view-panel="logs">

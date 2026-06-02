@@ -4,3 +4,6 @@
 
 # Remote inference WebSocket client (backend <-> remote inference machine).
 websockets>=12.0
+
+# Parquet playback reader for LeRobot-style state/action datasets.
+pyarrow>=15.0

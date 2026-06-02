@@ -7,7 +7,7 @@
     "responseTimeout":70,
     "motorSpd":800,
     "motorTime":0,
-    "callBackMode":0,
+    "callBackMode":1,
     "upLimitVal":750,
     "downLimitVal":0,
     "initSpd":-600,

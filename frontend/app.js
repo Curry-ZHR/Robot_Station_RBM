@@ -18,6 +18,7 @@ const state = {
   collectionTimer: null,
   inferenceTimer: null,
   homingTimer: null,
+  playbackTimer: null,
   collectionSeconds: 0,
   inferenceTicks: 0,
   activeLogFilter: "全部",
@@ -76,6 +77,20 @@ const state = {
     controls: null,
     animationFrame: null,
     resizeObserver: null,
+  },
+  playback: {
+    running: false,
+    elapsedSec: 0,
+    durationSec: 432,
+    path: "/data/robot_station/replay.parquet",
+    chartGroup: "all",
+    robotEnabled: false,
+    loading: false,
+    loadError: "",
+    loadedPath: "",
+    dataset: null,
+    currentFrameIndex: 0,
+    lastTickMs: null,
   },
   robotModel: {
     models: [],
@@ -344,6 +359,76 @@ const historyItems = [
   ["数采 episode_041", "失败", "昨日 17:28 / 相机丢帧"],
 ];
 
+const playbackFileDefaults = {
+  durationSec: 432,
+  rows: 21600,
+};
+
+const playbackSeriesDetails = {
+  state: { label: "State", color: "#2563eb" },
+  action: { label: "Action", color: "#d97706" },
+};
+
+const playbackSignalGroups = [
+  {
+    key: "left",
+    label: "左臂",
+    signals: [
+      { key: "left.joint1", label: "L J1", unit: "rad", precision: 4 },
+      { key: "left.joint2", label: "L J2", unit: "rad", precision: 4 },
+      { key: "left.joint3", label: "L J3", unit: "rad", precision: 4 },
+      { key: "left.joint4", label: "L J4", unit: "rad", precision: 4 },
+      { key: "left.joint5", label: "L J5", unit: "rad", precision: 4 },
+      { key: "left.joint6", label: "L J6", unit: "rad", precision: 4 },
+      { key: "left.gripper", label: "L Grip", unit: "m", base: 0.035, amp: 0.018, freq: 0.024, phase: 0.4, precision: 3 },
+    ],
+  },
+  {
+    key: "right",
+    label: "右臂",
+    signals: [
+      { key: "right.joint1", label: "R J1", unit: "rad", precision: 4 },
+      { key: "right.joint2", label: "R J2", unit: "rad", precision: 4 },
+      { key: "right.joint3", label: "R J3", unit: "rad", precision: 4 },
+      { key: "right.joint4", label: "R J4", unit: "rad", precision: 4 },
+      { key: "right.joint5", label: "R J5", unit: "rad", precision: 4 },
+      { key: "right.joint6", label: "R J6", unit: "rad", precision: 4 },
+      { key: "right.gripper", label: "R Grip", unit: "m", base: 0.032, amp: 0.016, freq: 0.024, phase: 1.6, precision: 3 },
+    ],
+  },
+  {
+    key: "platform",
+    label: "平台",
+    signals: [
+      { key: "lift.height", label: "Lift", unit: "m", base: 0.42, amp: 0.08, freq: 0.006, phase: 0.2, precision: 3 },
+      { key: "speed.vx", label: "vx", unit: "m/s", base: 0.02, amp: 0.12, freq: 0.028, phase: 0.4, precision: 2 },
+      { key: "speed.vy", label: "vy", unit: "m/s", base: 0.0, amp: 0.08, freq: 0.026, phase: 1.8, precision: 2 },
+      { key: "speed.wz", label: "wz", unit: "rad/s", base: 0.0, amp: 0.22, freq: 0.02, phase: 2.4, precision: 2 },
+    ],
+  },
+];
+
+const playbackArmValueKeys = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6", "gripper"];
+const playbackStateFieldOrder = [
+  ...playbackArmValueKeys.map((key) => `left.${key}`),
+  ...playbackArmValueKeys.map((key) => `right.${key}`),
+];
+const playbackActionFieldOrder = [
+  ...playbackStateFieldOrder,
+  "lift.height",
+  "speed.vx",
+  "speed.vy",
+  "speed.wz",
+];
+const playbackSignalLookup = playbackSignalGroups.reduce((lookup, group) => {
+  group.signals.forEach((signal) => {
+    lookup[signal.key] = signal;
+  });
+  return lookup;
+}, {});
+const playbackChartSamples = 180;
+const playbackTickMs = 100;
+
 const baseArmJointLimits = [
   { name: "J1", min: -150, max: 150 },
   { name: "J2", min: 0, max: 179.9 },
@@ -522,10 +607,15 @@ function addLog(source, message) {
 function setTask(task, owner, label) {
   state.task = task;
   state.owner = owner;
-  $("#ownerLabel").textContent = owner;
+  setText("#ownerLabel", owner);
   $("#taskStatus").textContent = `当前任务：${label}`;
   $("#drawerTask").textContent = label === "空闲" ? "当前空闲" : `当前任务：${label}`;
   renderActionLocks();
+}
+
+function setText(selector, text) {
+  const node = $(selector);
+  if (node) node.textContent = text;
 }
 
 function setStateBadge(selector, text, level) {
@@ -577,6 +667,74 @@ async function fetchChassisControl(path, payload) {
   const primaryUrl = chassisControlUrl(path);
   const init = {
     method: "POST",
+    headers: { "Content-Type": "text/plain;charset=UTF-8" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+    priority: "high",
+  };
+  try {
+    return await fetch(primaryUrl, init);
+  } catch (error) {
+    if (primaryUrl === path) {
+      throw error;
+    }
+    return fetch(path, init);
+  }
+}
+
+function liftingControlUrl(path) {
+  const configuredOrigin = String(window.ROBOT_STATION_LIFTING_CONTROL_ORIGIN || "").trim();
+  if (configuredOrigin) {
+    return `${configuredOrigin.replace(/\/+$/, "")}${path}`;
+  }
+
+  const configuredPort = String(window.ROBOT_STATION_LIFTING_CONTROL_PORT || "9997").trim();
+  if (window.location.protocol === "http:" && window.location.hostname && configuredPort && configuredPort !== window.location.port) {
+    return `${window.location.protocol}//${window.location.hostname}:${configuredPort}${path}`;
+  }
+  return path;
+}
+
+async function fetchLiftingControl(path, payload) {
+  const primaryUrl = liftingControlUrl(path);
+  const init = {
+    method: "POST",
+    // text/plain keeps this a CORS "simple request" so the browser skips the
+    // preflight round-trip; the backend parses the JSON body regardless.
+    headers: { "Content-Type": "text/plain;charset=UTF-8" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+    priority: "high",
+  };
+  try {
+    return await fetch(primaryUrl, init);
+  } catch (error) {
+    if (primaryUrl === path) {
+      throw error;
+    }
+    return fetch(path, init);
+  }
+}
+
+function piperControlUrl(path) {
+  const configuredOrigin = String(window.ROBOT_STATION_PIPER_CONTROL_ORIGIN || "").trim();
+  if (configuredOrigin) {
+    return `${configuredOrigin.replace(/\/+$/, "")}${path}`;
+  }
+
+  const configuredPort = String(window.ROBOT_STATION_PIPER_CONTROL_PORT || "9996").trim();
+  if (window.location.protocol === "http:" && window.location.hostname && configuredPort && configuredPort !== window.location.port) {
+    return `${window.location.protocol}//${window.location.hostname}:${configuredPort}${path}`;
+  }
+  return path;
+}
+
+async function fetchPiperControl(path, payload) {
+  const primaryUrl = piperControlUrl(path);
+  const init = {
+    method: "POST",
+    // text/plain keeps this a CORS "simple request" so the browser skips the
+    // preflight round-trip; the backend parses the JSON body regardless.
     headers: { "Content-Type": "text/plain;charset=UTF-8" },
     body: JSON.stringify(payload),
     cache: "no-store",
@@ -723,6 +881,9 @@ function showView(view) {
   if (view === "sensors") {
     window.setTimeout(resizeLidarViewer, 0);
   }
+  if (view === "data-playback") {
+    renderPlayback();
+  }
   if (view === "robot-view") {
     fetchRobotModels({ silent: true });
     initializeRobotViewer();
@@ -731,7 +892,9 @@ function showView(view) {
 }
 
 function renderHealth() {
-  $("#healthGrid").innerHTML = healthItems
+  const grid = $("#healthGrid");
+  if (!grid) return;
+  grid.innerHTML = healthItems
     .map(
       ([name, level, primary, percent, detail]) => `
         <article class="health-card ${level}">
@@ -861,13 +1024,16 @@ function renderAdvice() {
       `,
     )
     .join("");
-  $("#adviceList").innerHTML = html;
+  const adviceList = $("#adviceList");
+  if (adviceList) adviceList.innerHTML = html;
   $("#drawerAlerts").innerHTML = html;
   $("#alertStatus").textContent = `告警 ${state.alerts.length}`;
 }
 
 function renderHomingSteps(activeIndex = -1, failedIndex = -1) {
-  $("#homingSteps").innerHTML = homingSteps
+  const stepsNode = $("#homingSteps");
+  if (!stepsNode) return;
+  stepsNode.innerHTML = homingSteps
     .map((step, index) => {
       let cls = "";
       if (failedIndex === index) cls = "is-error";
@@ -879,13 +1045,16 @@ function renderHomingSteps(activeIndex = -1, failedIndex = -1) {
 }
 
 function renderHomeFlow(steps, activeIndex, progress) {
-  $("#homeFlowSteps").innerHTML = steps
+  const stepsNode = $("#homeFlowSteps");
+  const progressBar = $("#taskProgressBar");
+  if (!stepsNode || !progressBar) return;
+  stepsNode.innerHTML = steps
     .map((step, index) => {
       const cls = index < activeIndex ? "is-done" : index === activeIndex ? "is-current" : "";
       return `<li class="${cls}">${step}</li>`;
     })
     .join("");
-  $("#taskProgressBar").style.width = `${progress}%`;
+  progressBar.style.width = `${progress}%`;
 }
 
 function renderCollectionMetrics() {
@@ -1467,11 +1636,7 @@ async function publishArmActionsNow(options = {}) {
   renderArmComparisons();
 
   try {
-    const response = await fetch("/api/control/piper/joint-targets", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const response = await fetchPiperControl("/api/control/piper/joint-targets", payload);
     const result = await response.json();
     if (!response.ok || !result.ok) {
       throw new Error(result.detail || `HTTP ${response.status}`);
@@ -1557,11 +1722,7 @@ async function publishPiperEnable(enabled, options = {}) {
 }
 
 function requestPiperJointHold(reason = "停止") {
-  fetch("/api/control/piper/joint-targets", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ hold: true }),
-  })
+  fetchPiperControl("/api/control/piper/joint-targets", { hold: true })
     .then(async (response) => {
       const result = await response.json();
       if (!response.ok || !result.ok) {
@@ -2775,13 +2936,603 @@ function renderActionLocks() {
     const requiresPiper = action === "homing" || action === "collection" || action === "inference";
     button.disabled = busy || (requiresPiper && !runtimeReady);
   });
-  $("#startHomingButton").disabled = busy || !runtimeReady;
-  $("#startCollectionButton").disabled = busy || !runtimeReady;
+  const startHomingButton = $("#startHomingButton");
+  if (startHomingButton) startHomingButton.disabled = busy || !runtimeReady;
+  const startCollectionButton = $("#startCollectionButton");
+  if (startCollectionButton) startCollectionButton.disabled = busy || !runtimeReady;
   renderPreflight();
 }
 
 function syncClock() {
   $("#clockStatus").textContent = formatTime();
+}
+
+function formatPlaybackTime(seconds) {
+  const safe = Math.max(0, Math.round(Number(seconds) || 0));
+  const minutes = Math.floor(safe / 60);
+  const remainder = safe % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+}
+
+function playbackFileName() {
+  const path = String(state.playback.path || "").trim();
+  return path.split(/[\\/]/).filter(Boolean).pop() || "未选择文件";
+}
+
+function playbackSourceTypeFromPath(path) {
+  const match = String(path || "").toLowerCase().match(/\.([a-z0-9]+)(?:[?#].*)?$/);
+  if (!match) return "unknown";
+  if (match[1] === "h5") return "hdf5";
+  if (match[1] === "hdf5") return "hdf5";
+  if (match[1] === "parquet") return "parquet";
+  if (match[1] === "mcap") return "mcap";
+  return match[1];
+}
+
+function currentPlaybackFile() {
+  const dataset = state.playback.dataset;
+  if (dataset) {
+    return {
+      loaded: true,
+      durationSec: dataset.durationSec,
+      rows: dataset.rows,
+      name: dataset.name || playbackFileName(),
+      sourceType: dataset.sourceType || playbackSourceTypeFromPath(state.playback.path),
+      stateDim: dataset.stateDim,
+      actionDim: dataset.actionDim,
+      fps: dataset.fps,
+    };
+  }
+  return {
+    durationSec: state.playback.durationSec || playbackFileDefaults.durationSec,
+    rows: playbackFileDefaults.rows,
+    name: playbackFileName(),
+    sourceType: playbackSourceTypeFromPath(state.playback.path),
+    stateDim: 0,
+    actionDim: 0,
+    fps: 0,
+    loaded: false,
+  };
+}
+
+function playbackGroupsForCurrentView() {
+  if (state.playback.chartGroup === "all") return playbackSignalGroups;
+  return playbackSignalGroups.filter((group) => group.key === state.playback.chartGroup);
+}
+
+function finitePlaybackNumber(value) {
+  if (typeof value === "boolean") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function playbackValueFromKeys(source, keys) {
+  if (!source || typeof source !== "object") return null;
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      const value = finitePlaybackNumber(source[key]);
+      if (value !== null) return value;
+    }
+  }
+  return null;
+}
+
+function playbackArmArrayFromObject(arm) {
+  if (Array.isArray(arm)) {
+    const values = arm.slice(0, 7).map(finitePlaybackNumber);
+    return values.length === 7 && values.every((value) => value !== null) ? values : null;
+  }
+  if (!arm || typeof arm !== "object") return null;
+  const values = playbackArmValueKeys.map((key) => finitePlaybackNumber(arm[key]));
+  return values.every((value) => value !== null) ? values : null;
+}
+
+function normalizePlaybackState(raw) {
+  const source = raw?.state ?? raw?.["observation.state"] ?? raw?.observation?.state;
+  if (Array.isArray(source)) {
+    const values = source.slice(0, 14).map(finitePlaybackNumber);
+    return values.length === 14 && values.every((value) => value !== null) ? values : null;
+  }
+  if (!source || typeof source !== "object") return null;
+  const left = playbackArmArrayFromObject(source.left);
+  const right = playbackArmArrayFromObject(source.right);
+  return left && right ? [...left, ...right] : null;
+}
+
+function normalizePlaybackAction(raw) {
+  const source = raw?.action ?? raw?.target ?? raw?.command;
+  if (Array.isArray(source)) {
+    const values = source.slice(0, 18).map(finitePlaybackNumber);
+    return values.length >= 14 && values.slice(0, 14).every((value) => value !== null) ? values : null;
+  }
+  if (!source || typeof source !== "object") return null;
+
+  const left = playbackArmArrayFromObject(source.left);
+  const right = playbackArmArrayFromObject(source.right);
+  if (!left || !right) return null;
+
+  const lift = source.lift || {};
+  const speed = source.speed || source.chassis || source.base || {};
+  const platform = [
+    playbackValueFromKeys(lift, ["height", "heightM", "z"]) ?? playbackValueFromKeys(source, ["lift_height", "liftHeight", "height"]),
+    playbackValueFromKeys(speed, ["vx", "linearX", "linearx", "linear_x"]) ?? playbackValueFromKeys(source, ["vx", "linearX", "linearx", "linear_x"]),
+    playbackValueFromKeys(speed, ["vy", "linearY", "lineary", "linear_y"]) ?? playbackValueFromKeys(source, ["vy", "linearY", "lineary", "linear_y"]),
+    playbackValueFromKeys(speed, ["wz", "angularZ", "angularz", "angular_z", "yawRate"]) ??
+      playbackValueFromKeys(source, ["wz", "angularZ", "angularz", "angular_z", "yawRate"]),
+  ];
+  if (platform.some((value) => value !== null)) {
+    return [...left, ...right, ...platform];
+  }
+  return [...left, ...right];
+}
+
+function playbackSecondsFromFrame(raw, index, baseTimestamp, fps) {
+  const direct = playbackValueFromKeys(raw, ["seconds", "timeSec", "elapsedSec", "time"]);
+  if (direct !== null) return Math.max(0, direct);
+  const timestamp = playbackValueFromKeys(raw, ["timestamp", "timestampSec", "stamp"]);
+  if (timestamp !== null) {
+    if (timestamp > 100000 && baseTimestamp !== null) return Math.max(0, timestamp - baseTimestamp);
+    return Math.max(0, timestamp);
+  }
+  return index / Math.max(1, fps || 30);
+}
+
+function normalizePlaybackFrame(raw, index, baseTimestamp, fps) {
+  const stateValues = normalizePlaybackState(raw);
+  const actionValues = normalizePlaybackAction(raw);
+  if (!stateValues && !actionValues) return null;
+  const frameIndex = playbackValueFromKeys(raw, ["frame_index", "frameIndex", "index"]);
+  const timestamp = playbackValueFromKeys(raw, ["timestamp", "timestampSec", "stamp"]);
+  return {
+    seconds: playbackSecondsFromFrame(raw, index, baseTimestamp, fps),
+    frameIndex: frameIndex ?? index,
+    timestamp,
+    state: stateValues,
+    action: actionValues,
+  };
+}
+
+function playbackDisplayValue(fieldKey, value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return null;
+  return Number(value);
+}
+
+function downsamplePlaybackSeries(series, maxPoints = playbackChartSamples) {
+  if (!Array.isArray(series) || series.length <= maxPoints) return series || [];
+  return Array.from({ length: maxPoints }, (_, index) => {
+    const sourceIndex = Math.round((index * (series.length - 1)) / (maxPoints - 1));
+    return series[sourceIndex];
+  });
+}
+
+function buildPlaybackSeries(frames) {
+  const series = { state: {}, action: {} };
+  playbackStateFieldOrder.forEach((key) => {
+    series.state[key] = [];
+  });
+  playbackActionFieldOrder.forEach((key) => {
+    series.action[key] = [];
+  });
+
+  frames.forEach((frame) => {
+    playbackStateFieldOrder.forEach((key, index) => {
+      const value = playbackDisplayValue(key, frame.state?.[index]);
+      if (value !== null) series.state[key].push({ seconds: frame.seconds, value });
+    });
+    playbackActionFieldOrder.forEach((key, index) => {
+      const value = playbackDisplayValue(key, frame.action?.[index]);
+      if (value !== null) series.action[key].push({ seconds: frame.seconds, value });
+    });
+  });
+  return series;
+}
+
+function normalizePlaybackDataset(payload, path) {
+  const source = payload?.dataset || payload?.data || payload?.playback || payload;
+  if (!source || typeof source !== "object") {
+    throw new Error("回放数据为空");
+  }
+  const rawFrames = source.frames || source.samples || source.records || source.rows || [];
+  if (!Array.isArray(rawFrames) || rawFrames.length === 0) {
+    throw new Error("回放数据缺少 state/action 帧");
+  }
+  const fps = finitePlaybackNumber(source.fps) || 30;
+  const baseTimestamp =
+    rawFrames
+      .map((frame) => playbackValueFromKeys(frame, ["timestamp", "timestampSec", "stamp"]))
+      .find((value) => value !== null && value > 100000) ?? null;
+
+  const frames = rawFrames
+    .map((frame, index) => normalizePlaybackFrame(frame, index, baseTimestamp, fps))
+    .filter(Boolean)
+    .sort((a, b) => a.seconds - b.seconds);
+  if (!frames.length) {
+    throw new Error("没有可播放的 state/action 数据");
+  }
+
+  const durationFromFrames = frames.length > 1 ? frames[frames.length - 1].seconds : frames.length / Math.max(1, fps);
+  const durationSec = Math.max(0.001, finitePlaybackNumber(source.durationSec) ?? finitePlaybackNumber(source.duration_s) ?? durationFromFrames);
+  const rows = finitePlaybackNumber(source.rows) ?? finitePlaybackNumber(source.frameCount) ?? frames.length;
+  const stateDim = Math.max(0, ...frames.map((frame) => frame.state?.length || 0));
+  const actionDim = Math.max(0, ...frames.map((frame) => frame.action?.length || 0));
+
+  return {
+    path,
+    name: source.name || playbackFileName(),
+    sourceType: source.sourceType || source.format || playbackSourceTypeFromPath(path),
+    fps,
+    rows,
+    durationSec,
+    stateDim,
+    actionDim,
+    frames,
+    series: buildPlaybackSeries(frames),
+  };
+}
+
+async function loadPlaybackDataset() {
+  const path = String(state.playback.path || "").trim();
+  if (!path) throw new Error("未选择数据文件");
+  state.playback.loading = true;
+  state.playback.loadError = "";
+  renderPlayback();
+  try {
+    const response = await fetch("/api/playback/load", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        path,
+        focus: ["state", "action"],
+        includeImages: false,
+        includeRobotControl: false,
+        stateSchema: playbackStateFieldOrder,
+        actionSchema: playbackActionFieldOrder,
+      }),
+    });
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      payload = {};
+    }
+    if (!response.ok || payload?.ok === false) {
+      throw new Error(payload?.detail || payload?.error || `HTTP ${response.status}`);
+    }
+    const dataset = normalizePlaybackDataset(payload, path);
+    state.playback.dataset = dataset;
+    state.playback.loadedPath = path;
+    state.playback.durationSec = dataset.durationSec;
+    state.playback.elapsedSec = 0;
+    state.playback.currentFrameIndex = 0;
+    addLog("数采", `数据回放已加载：${dataset.name} / ${dataset.sourceType} / state ${dataset.stateDim} / action ${dataset.actionDim}`);
+    return dataset;
+  } catch (error) {
+    state.playback.dataset = null;
+    state.playback.loadedPath = "";
+    state.playback.loadError = error.message;
+    addLog("数采", `数据回放加载失败：${error.message}`);
+    return null;
+  } finally {
+    state.playback.loading = false;
+    renderPlayback();
+  }
+}
+
+async function ensurePlaybackDataset() {
+  const path = String(state.playback.path || "").trim();
+  if (state.playback.dataset && state.playback.loadedPath === path) return state.playback.dataset;
+  return loadPlaybackDataset();
+}
+
+function formatPlaybackValue(signal, value) {
+  if (!Number.isFinite(Number(value))) return "--";
+  const precision = signal.precision ?? (Math.abs(value) < 1 ? 2 : 1);
+  return `${Number(value).toFixed(precision)} ${signal.unit}`;
+}
+
+function playbackSignalSeries(signal, file, series) {
+  const values = state.playback.dataset?.series?.[series]?.[signal.key] || [];
+  return downsamplePlaybackSeries(values);
+}
+
+function playbackSignalKinds(signal) {
+  if (!state.playback.dataset) return [];
+  return ["action", "state"].filter((kind) => (state.playback.dataset.series?.[kind]?.[signal.key] || []).length > 0);
+}
+
+function playbackAvailableKinds() {
+  if (!state.playback.dataset) return ["state", "action"];
+  return ["state", "action"].filter((kind) =>
+    Object.values(state.playback.dataset.series?.[kind] || {}).some((series) => series.length > 0),
+  );
+}
+
+function playbackSeriesRange(seriesList) {
+  const values = seriesList.flatMap((series) => series.map((point) => point.value).filter((value) => Number.isFinite(value)));
+  if (!values.length) return { min: -1, max: 1 };
+  let min = Math.min(...values);
+  let max = Math.max(...values);
+  const magnitude = Math.max(Math.abs(min), Math.abs(max), 1);
+  if (Math.abs(max - min) < 1e-6) {
+    const padding = Math.max(magnitude * 0.002, 0.001);
+    min -= padding;
+    max += padding;
+    return { min, max };
+  }
+  const padding = Math.max((max - min) * 0.12, magnitude * 0.001);
+  return { min: min - padding, max: max + padding };
+}
+
+function playbackSvgPath(series, range, file) {
+  const width = 320;
+  const height = 150;
+  const padLeft = 54;
+  const padRight = 14;
+  const padTop = 14;
+  const padBottom = 32;
+  const duration = Math.max(1, file.durationSec);
+  const innerWidth = width - padLeft - padRight;
+  const innerHeight = height - padTop - padBottom;
+  return series
+    .map((point, index) => {
+      const x = padLeft + (point.seconds / duration) * innerWidth;
+      const span = Math.max(1e-9, range.max - range.min);
+      const y = padTop + (1 - (point.value - range.min) / span) * innerHeight;
+      return `${index === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" ");
+}
+
+function renderPlaybackLegend() {
+  const legend = $("#playbackChartLegend");
+  if (!legend) return;
+  legend.innerHTML = playbackAvailableKinds()
+    .map((kind) => playbackSeriesDetails[kind])
+    .filter(Boolean)
+    .map((detail) => `<span class="is-on"><i style="background:${detail.color}"></i>${detail.label}</span>`)
+    .join("");
+}
+
+function playbackEmptyCard(title, detail) {
+  return `
+    <article class="playback-signal-card">
+      <div class="signal-head">
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(detail)}</span>
+      </div>
+    </article>
+  `;
+}
+
+function renderPlaybackCharts() {
+  const grid = $("#playbackChartGrid");
+  if (!grid) return;
+
+  const file = currentPlaybackFile();
+  const groups = playbackGroupsForCurrentView();
+  const signalCount = groups.reduce((total, group) => {
+    if (!file.loaded) return total + group.signals.length;
+    return total + group.signals.filter((signal) => playbackSignalKinds(signal).length > 0).length;
+  }, 0);
+
+  setText(
+    "#playbackChartSummary",
+    file.loaded
+      ? `${signalCount} 个维度 / state ${file.stateDim} / action ${file.actionDim} / 横轴 time(s)`
+      : "等待加载 state/action 数据",
+  );
+  const tabs = $("#playbackChartTabs");
+  if (tabs) {
+    tabs.querySelectorAll("[data-playback-chart-group]").forEach((button) => {
+      button.classList.toggle("is-active", button.dataset.playbackChartGroup === state.playback.chartGroup);
+    });
+  }
+  renderPlaybackLegend();
+
+  if (state.playback.loading) {
+    grid.innerHTML = playbackEmptyCard("正在读取 state/action", `${playbackFileName()} / ${file.sourceType}`);
+    return;
+  }
+  if (!file.loaded) {
+    const detail = state.playback.loadError || "支持 .parquet / .hdf5 / .mcap；暂不读取图像，暂不下发机器人控制。";
+    grid.innerHTML = playbackEmptyCard("等待 state/action 数据", detail);
+    return;
+  }
+
+  grid.innerHTML = groups
+    .map((group) => {
+      const charts = group.signals
+        .filter((signal) => playbackSignalKinds(signal).length > 0)
+        .map((signal) => {
+          const seriesByKind = playbackSignalKinds(signal).map((kind) => ({
+            kind,
+            series: playbackSignalSeries(signal, file, kind),
+          }));
+          const range = playbackSeriesRange(seriesByKind.map((item) => item.series));
+          const currentX = 54 + (clamp(state.playback.elapsedSec, 0, file.durationSec) / Math.max(1, file.durationSec)) * 252;
+          const paths = seriesByKind
+            .map((item) => {
+              const detail = playbackSeriesDetails[item.kind];
+              return `<path class="playback-line playback-line-${item.kind}" d="${playbackSvgPath(item.series, range, file)}" style="--line-color:${detail.color}"></path>`;
+            })
+            .join("");
+          const yMax = formatPlaybackValue(signal, range.max);
+          const yMin = formatPlaybackValue(signal, range.min);
+
+          return `
+            <article class="playback-signal-card">
+              <div class="signal-head">
+                <strong>${escapeHtml(signal.label)}</strong>
+                <span>${escapeHtml(signal.key)} / ${escapeHtml(signal.unit)}</span>
+              </div>
+              <svg class="playback-sparkline" viewBox="0 0 320 150" role="img" aria-label="${escapeHtml(signal.key)} state action time chart">
+                <line class="playback-axis" x1="54" y1="118" x2="306" y2="118"></line>
+                <line class="playback-axis" x1="54" y1="14" x2="54" y2="118"></line>
+                <line class="playback-grid-line" x1="54" y1="66" x2="306" y2="66"></line>
+                <text class="playback-tick" x="48" y="18" text-anchor="end">${escapeHtml(yMax)}</text>
+                <text class="playback-tick" x="48" y="121" text-anchor="end">${escapeHtml(yMin)}</text>
+                <text class="playback-tick" x="54" y="138">0s</text>
+                <text class="playback-tick" x="306" y="138" text-anchor="end">${Math.round(file.durationSec)}s</text>
+                <text class="playback-axis-label" x="188" y="146" text-anchor="middle">time(s)</text>
+                ${paths}
+                <line class="playback-cursor" x1="${currentX.toFixed(1)}" y1="14" x2="${currentX.toFixed(1)}" y2="118"></line>
+              </svg>
+            </article>
+          `;
+        })
+        .join("");
+      if (!charts) {
+        return `
+          <section class="playback-signal-group">
+            <h3>${escapeHtml(group.label)}</h3>
+            <div class="playback-signal-list">${playbackEmptyCard("当前分组无数据", "该文件没有这个分组的 state/action 字段。")}</div>
+          </section>
+        `;
+      }
+      return `
+        <section class="playback-signal-group">
+          <h3>${escapeHtml(group.label)}</h3>
+          <div class="playback-signal-list">${charts}</div>
+        </section>
+      `;
+    })
+    .join("");
+}
+
+function renderPlaybackExecution() {
+  const enableButton = $("#playbackEnableRobotButton");
+  const replayButton = $("#playbackReplayButton");
+  const stopButton = $("#playbackStopButton");
+
+  if (enableButton) enableButton.textContent = state.playback.robotEnabled ? "关闭使能" : "机器人使能";
+  if (replayButton) replayButton.disabled = !state.playback.robotEnabled || state.playback.running || state.playback.loading || !String(state.playback.path || "").trim();
+  if (stopButton) stopButton.disabled = !state.playback.running;
+
+  const status = state.playback.loading
+    ? "数据加载中"
+    : state.playback.running
+    ? "数据回放中"
+    : state.playback.robotEnabled
+      ? "机器人已使能"
+      : "机器人未使能";
+  setText("#playbackExecutionStatus", status);
+  setStateBadge(
+    "#playbackSourceBadge",
+    state.playback.loading ? "加载中" : state.playback.running ? "回放中" : state.playback.robotEnabled ? "已使能" : "未使能",
+    state.playback.loading || state.playback.running ? "warn" : state.playback.robotEnabled ? "ok" : "idle",
+  );
+}
+
+function setPlaybackRunning(running) {
+  state.playback.running = running;
+  window.clearInterval(state.playbackTimer);
+  if (running) {
+    state.playback.lastTickMs = performance.now();
+    state.playbackTimer = window.setInterval(() => {
+      const file = currentPlaybackFile();
+      const now = performance.now();
+      const deltaSec = Math.max(0, (now - (state.playback.lastTickMs || now)) / 1000);
+      state.playback.lastTickMs = now;
+      state.playback.elapsedSec = Math.min(file.durationSec, state.playback.elapsedSec + deltaSec);
+      if (state.playback.elapsedSec >= file.durationSec) {
+        setPlaybackRunning(false);
+        addLog("数采", `数据回放完成：${file.name}`);
+      }
+      renderPlayback();
+    }, playbackTickMs);
+  } else {
+    state.playback.lastTickMs = null;
+  }
+  renderPlayback();
+}
+
+function playbackCurrentFrame(seconds) {
+  const frames = state.playback.dataset?.frames || [];
+  if (!frames.length) return null;
+  let low = 0;
+  let high = frames.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (frames[mid].seconds <= seconds) low = mid;
+    else high = mid - 1;
+  }
+  state.playback.currentFrameIndex = low;
+  return frames[low];
+}
+
+function renderPlayback() {
+  const file = currentPlaybackFile();
+  state.playback.durationSec = file.durationSec;
+  state.playback.elapsedSec = clamp(state.playback.elapsedSec, 0, file.durationSec);
+  const frame = playbackCurrentFrame(state.playback.elapsedSec);
+
+  const progress = $("#playbackProgressBar");
+  if (progress) {
+    progress.style.width = `${(state.playback.elapsedSec / Math.max(1, file.durationSec)) * 100}%`;
+  }
+
+  setText("#playbackSummary", file.name);
+  setText("#playbackTimeLabel", `${formatPlaybackTime(state.playback.elapsedSec)} / ${formatPlaybackTime(file.durationSec)}`);
+  setStateBadge("#playbackBadge", state.playback.running ? "回放中" : state.playback.robotEnabled ? "已使能" : "待使能", state.playback.running ? "warn" : state.playback.robotEnabled ? "ok" : "idle");
+
+  const fileInfo = $("#playbackFileInfo");
+  if (fileInfo) {
+    fileInfo.innerHTML = [
+      ["数据文件", file.name],
+      ["格式", file.sourceType || "unknown"],
+      ["时长", formatPlaybackTime(file.durationSec)],
+      ["时间", `${formatPlaybackTime(state.playback.elapsedSec)} / ${formatPlaybackTime(file.durationSec)}`],
+      ["数据点", `${file.rows}`],
+      ["State", file.loaded ? `${file.stateDim} 维` : "--"],
+      ["Action", file.loaded ? `${file.actionDim} 维` : "--"],
+      ["当前帧", frame ? `${frame.frameIndex}` : "--"],
+      ["状态", state.playback.loadError ? state.playback.loadError : file.loaded ? "已加载 state/action" : "等待加载"],
+    ]
+      .map(([label, value]) => `<div class="metric-card"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`)
+      .join("");
+  }
+
+  renderPlaybackExecution();
+  renderPlaybackCharts();
+}
+
+async function togglePlaybackRobotEnable() {
+  if (!state.playback.robotEnabled) {
+    state.playback.robotEnabled = true;
+    addLog("数采", "数据回放使能已打开");
+  } else {
+    state.playback.robotEnabled = false;
+    setPlaybackRunning(false);
+    addLog("数采", "数据回放使能已关闭");
+  }
+  renderPlayback();
+}
+
+async function startPlaybackRun() {
+  if (!state.playback.robotEnabled) {
+    addLog("数采", "数据回放未启动：机器人未使能");
+    renderPlayback();
+    return;
+  }
+  if (!String(state.playback.path || "").trim()) {
+    addLog("数采", "数据回放未启动：未选择数据文件");
+    return;
+  }
+  const dataset = await ensurePlaybackDataset();
+  if (!dataset) {
+    renderPlayback();
+    return;
+  }
+  const file = currentPlaybackFile();
+  state.playback.elapsedSec = 0;
+  addLog("数采", `数据回放开始：${file.name}`);
+  setPlaybackRunning(true);
+}
+
+function stopPlaybackRun() {
+  const file = currentPlaybackFile();
+  setPlaybackRunning(false);
+  addLog("数采", `数据回放停止：${file.name}`);
 }
 
 function escapeHtml(value) {
@@ -3127,8 +3878,8 @@ async function startHoming() {
   setTask("homing", "归位流程", "归位中");
   setStateBadge("#homingBadge", "运行中", "warn");
   setStateBadge("#stateBadge", "运行中", "warn");
-  $("#taskSubtitle").textContent = "正在执行归位准备";
-  $("#homingSummary").textContent = "归位流程正在执行";
+  setText("#taskSubtitle", "正在执行归位准备");
+  setText("#homingSummary", "归位流程正在执行");
   renderHomeFlow(homingSteps, 0, 8);
   addLog("机械臂", "归位流程启动");
 
@@ -3146,8 +3897,8 @@ async function startHoming() {
       setTask("idle", "空闲", "空闲");
       setStateBadge("#homingBadge", "完成", "ok");
       setStateBadge("#stateBadge", "完成", "ok");
-      $("#taskSubtitle").textContent = "最近任务：归位完成";
-      $("#homingSummary").textContent = "归位完成，机器人处于准备状态";
+      setText("#taskSubtitle", "最近任务：归位完成");
+      setText("#homingSummary", "归位完成，机器人处于准备状态");
       $("#enableStatus").textContent = "已使能";
       $("#enableStatus").className = "status-pill ok";
       addLog("系统", "归位流程完成");
@@ -3169,7 +3920,7 @@ async function startCollection() {
   setStateBadge("#collectionBadge", "采集中", "warn");
   setStateBadge("#stateBadge", "运行中", "warn");
   $("#collectionSummary").textContent = "episode_043 正在采集";
-  $("#taskSubtitle").textContent = "正在采集 episode_043";
+  setText("#taskSubtitle", "正在采集 episode_043");
   renderHomeFlow(["创建 episode", "记录传感器", "监控质量", "等待结束"], 1, 35);
   renderCollectionMetrics();
   addLog("数采", "开始采集 episode_043");
@@ -3604,7 +4355,7 @@ function forceStopTask(reason) {
   }
   setTask("idle", "空闲", "空闲");
   setStateBadge("#stateBadge", "停止", "idle");
-  $("#taskSubtitle").textContent = "当前任务已停止";
+  setText("#taskSubtitle", "当前任务已停止");
   requestPiperJointHold("停止输出");
   addLog("系统", reason);
   renderArmComparisons();
@@ -4175,11 +4926,7 @@ async function requestLiftingControl(action, payload = {}, options = {}) {
     return null;
   }
   try {
-    const response = await fetch(`/api/control/lifting/${action}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const response = await fetchLiftingControl(`/api/control/lifting/${action}`, payload);
     const result = await response.json();
     if (!response.ok || !result.ok) {
       throw new Error(result.detail || `HTTP ${response.status}`);
@@ -5062,7 +5809,8 @@ function bindEvents() {
   $("#armControlToggleButton").addEventListener("click", toggleArmDirectControl);
   $("#armHomeButton").addEventListener("click", zeroAllArmActions);
   $("#jointSpeedInput").addEventListener("input", (event) => updateJointSpeedFromInput(event.currentTarget));
-  $("#startHomingButton").addEventListener("click", startHoming);
+  const startHomingButton = $("#startHomingButton");
+  if (startHomingButton) startHomingButton.addEventListener("click", startHoming);
   $("#startCollectionButton").addEventListener("click", startCollection);
   $("#pauseCollectionButton").addEventListener("click", pauseCollection);
   $("#finishCollectionButton").addEventListener("click", () => finishCollection("完成"));
@@ -5077,6 +5825,33 @@ function bindEvents() {
   $("#inferenceLoopToggle").addEventListener("change", toggleInferenceLoop);
   $("#inferenceMaskPanel").addEventListener("click", handleMaskClick);
   $("#stopInferenceButton").addEventListener("click", stopInference);
+  const playbackPathInput = $("#playbackPathInput");
+  if (playbackPathInput) {
+    playbackPathInput.addEventListener("input", (event) => {
+      state.playback.path = String(event.currentTarget.value || "").trim();
+      state.playback.elapsedSec = 0;
+      state.playback.dataset = null;
+      state.playback.loadedPath = "";
+      state.playback.loadError = "";
+      setPlaybackRunning(false);
+      renderPlayback();
+    });
+  }
+  const playbackChartTabs = $("#playbackChartTabs");
+  if (playbackChartTabs) {
+    playbackChartTabs.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-playback-chart-group]");
+      if (!button) return;
+      state.playback.chartGroup = button.dataset.playbackChartGroup || "all";
+      renderPlayback();
+    });
+  }
+  const playbackEnableRobotButton = $("#playbackEnableRobotButton");
+  if (playbackEnableRobotButton) playbackEnableRobotButton.addEventListener("click", togglePlaybackRobotEnable);
+  const playbackReplayButton = $("#playbackReplayButton");
+  if (playbackReplayButton) playbackReplayButton.addEventListener("click", startPlaybackRun);
+  const playbackStopButton = $("#playbackStopButton");
+  if (playbackStopButton) playbackStopButton.addEventListener("click", stopPlaybackRun);
   $("#stopTaskButton").addEventListener("click", stopCurrentTask);
   $("#estopButton").addEventListener("click", triggerEmergencyStop);
   $("#alertStatus").addEventListener("mouseenter", (event) => showAlertTooltip(event.currentTarget));
@@ -5283,6 +6058,7 @@ function init() {
   renderActionLocks();
   renderCameraFrames();
   renderLidarCloudStatus();
+  renderPlayback();
   renderRobotViewStatus();
   fetchRobotModels({ silent: true });
   initializeLidarViewer();
