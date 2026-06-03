@@ -945,6 +945,22 @@ body[data-active-view="robot-view"] .workbench {
   white-space: nowrap;
 }
 
+.keyboard-listen-button {
+  appearance: none;
+  background: #ffffff;
+  font: inherit;
+  font-weight: 800;
+}
+
+.keyboard-listen-button.state-badge.ok {
+  background: #ecfdf5;
+}
+
+.keyboard-listen-button:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.42);
+  outline-offset: 2px;
+}
+
 .progress-track {
   height: 8px;
   overflow: hidden;
@@ -3163,6 +3179,12 @@ body[data-active-view="robot-view"] .event-drawer {
 .platform-remote-card .drive-pad button[data-device-drive="backward"] {
   border-radius: 0 0 10px 10px;
   border-top-width: 0;
+}
+
+.platform-remote-card [data-device-drive].is-active {
+  border-color: #0f766e;
+  background: #ccfbf1;
+  color: #0f3f3a;
 }
 
 .inline-status {

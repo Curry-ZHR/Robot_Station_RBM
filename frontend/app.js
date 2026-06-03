@@ -80,6 +80,8 @@ const state = {
   },
   playback: {
     running: false,
+    status: "idle",
+    busy: false,
     elapsedSec: 0,
     durationSec: 432,
     path: "/data/robot_station/replay.parquet",
@@ -91,6 +93,7 @@ const state = {
     dataset: null,
     currentFrameIndex: 0,
     lastTickMs: null,
+    lastError: "",
   },
   robotModel: {
     models: [],
@@ -166,6 +169,9 @@ const state = {
     driveTimer: null,
     stopTimers: [],
     activeDrive: null,
+    keyboardListening: false,
+    keyboardKeys: [],
+    keyboardActiveKey: null,
     busy: false,
     commandSequence: Date.now(),
     command: {
@@ -427,6 +433,7 @@ const playbackSignalLookup = playbackSignalGroups.reduce((lookup, group) => {
   return lookup;
 }, {});
 const playbackChartSamples = 180;
+const playbackMinYAxisTickStep = 0.1;
 const playbackTickMs = 100;
 
 const baseArmJointLimits = [
@@ -483,6 +490,14 @@ const deviceBaseControlItems = [
   { key: "lateral", label: "横向速度", value: 0, min: 0, max: 1, step: 0.01, unit: "", commandMax: 0.15, commandUnit: "m/s", commandDigits: 3 },
   { key: "angular", label: "旋转速度", value: 0, min: 0, max: 1, step: 0.01, unit: "", commandMax: 0.5, commandUnit: "rad/s", commandDigits: 3 },
 ];
+const chassisKeyboardDriveMap = {
+  w: { action: "forward", label: "W 前进" },
+  s: { action: "backward", label: "S 后退" },
+  a: { action: "strafe-left", label: "A 左移" },
+  d: { action: "strafe-right", label: "D 右移" },
+  q: { action: "left", label: "Q 左旋" },
+  e: { action: "right", label: "E 右旋" },
+};
 const CHASSIS_DRIVE_REPEAT_MS = 100;
 const CHASSIS_STOP_REPEAT_COUNT = 3;
 const CHASSIS_STOP_REPEAT_MS = 25;
@@ -860,6 +875,9 @@ function setLiftingRuntime(status) {
 
 function setChassisRuntime(status) {
   state.chassisRuntime.status = chassisRuntimeLabels[status] ? status : "unknown";
+  if (!chassisReady() && state.chassisControl.keyboardListening) {
+    stopChassisKeyboardControl("Chassis 服务未运行，键盘监听停止", { deactivate: true });
+  }
   renderChassisRuntime();
   renderDeviceBaseMetrics();
 }
@@ -875,6 +893,9 @@ function setLidarRuntime(status) {
 }
 
 function showView(view) {
+  if (view !== "platform-control" && state.chassisControl.keyboardListening) {
+    stopChassisKeyboardControl("离开平台控制，键盘监听停止", { deactivate: true });
+  }
   document.body.dataset.activeView = view;
   $$(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === view));
   $$(".view").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.viewPanel === view));
@@ -1843,6 +1864,7 @@ function renderDeviceBaseMetrics() {
   $$("[data-device-drive]").forEach((button) => {
     button.disabled = !chassisReady() && button.dataset.deviceDrive !== "stop";
   });
+  renderChassisKeyboardControl();
   node.innerHTML = [
     ["指令", `${command.linearX.toFixed(2)} / ${command.linearY.toFixed(2)} m/s`],
     ["旋转", `${command.angularZ.toFixed(2)} ${angular.commandUnit}`],
@@ -3001,7 +3023,7 @@ function playbackGroupsForCurrentView() {
 }
 
 function finitePlaybackNumber(value) {
-  if (typeof value === "boolean") return null;
+  if (value === null || value === undefined || typeof value === "boolean") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
 }
@@ -3071,10 +3093,10 @@ function playbackSecondsFromFrame(raw, index, baseTimestamp, fps) {
   if (direct !== null) return Math.max(0, direct);
   const timestamp = playbackValueFromKeys(raw, ["timestamp", "timestampSec", "stamp"]);
   if (timestamp !== null) {
-    if (timestamp > 100000 && baseTimestamp !== null) return Math.max(0, timestamp - baseTimestamp);
+    if (baseTimestamp !== null) return Math.max(0, timestamp - baseTimestamp);
     return Math.max(0, timestamp);
   }
-  return index / Math.max(1, fps || 30);
+  throw new Error(`回放数据第 ${index} 帧缺少时间戳`);
 }
 
 function normalizePlaybackFrame(raw, index, baseTimestamp, fps) {
@@ -3140,7 +3162,7 @@ function normalizePlaybackDataset(payload, path) {
   const baseTimestamp =
     rawFrames
       .map((frame) => playbackValueFromKeys(frame, ["timestamp", "timestampSec", "stamp"]))
-      .find((value) => value !== null && value > 100000) ?? null;
+      .find((value) => value !== null) ?? null;
 
   const frames = rawFrames
     .map((frame, index) => normalizePlaybackFrame(frame, index, baseTimestamp, fps))
@@ -3224,10 +3246,10 @@ async function ensurePlaybackDataset() {
   return loadPlaybackDataset();
 }
 
-function formatPlaybackValue(signal, value) {
+function formatPlaybackAxisValue(signal, value) {
   if (!Number.isFinite(Number(value))) return "--";
-  const precision = signal.precision ?? (Math.abs(value) < 1 ? 2 : 1);
-  return `${Number(value).toFixed(precision)} ${signal.unit}`;
+  const rounded = Math.abs(value) < 1e-9 ? 0 : Number(value);
+  return `${rounded.toFixed(1)} ${signal.unit}`;
 }
 
 function playbackSignalSeries(signal, file, series) {
@@ -3247,20 +3269,55 @@ function playbackAvailableKinds() {
   );
 }
 
+function playbackNiceYAxisTickStep(span) {
+  const rawStep = Math.max(Number(span) || 0, playbackMinYAxisTickStep * 2) / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+  const normalized = rawStep / magnitude;
+  let multiplier = 10;
+  if (normalized <= 1) multiplier = 1;
+  else if (normalized <= 2) multiplier = 2;
+  else if (normalized <= 5) multiplier = 5;
+  return Math.max(playbackMinYAxisTickStep, multiplier * magnitude);
+}
+
 function playbackSeriesRange(seriesList) {
   const values = seriesList.flatMap((series) => series.map((point) => point.value).filter((value) => Number.isFinite(value)));
-  if (!values.length) return { min: -1, max: 1 };
+  if (!values.length) return { min: -1, max: 1, ticks: [-1, 0, 1] };
   let min = Math.min(...values);
   let max = Math.max(...values);
-  const magnitude = Math.max(Math.abs(min), Math.abs(max), 1);
-  if (Math.abs(max - min) < 1e-6) {
-    const padding = Math.max(magnitude * 0.002, 0.001);
-    min -= padding;
-    max += padding;
-    return { min, max };
+  if (Math.abs(max - min) < 1e-9) {
+    min -= playbackMinYAxisTickStep / 2;
+    max += playbackMinYAxisTickStep / 2;
   }
-  const padding = Math.max((max - min) * 0.12, magnitude * 0.001);
-  return { min: min - padding, max: max + padding };
+
+  const paddedMin = min - (max - min) * 0.12;
+  const paddedMax = max + (max - min) * 0.12;
+  const tickStep = playbackNiceYAxisTickStep(paddedMax - paddedMin);
+  let axisMin = Math.floor(paddedMin / tickStep) * tickStep;
+  let axisMax = Math.ceil(paddedMax / tickStep) * tickStep;
+
+  if (min >= 0 && axisMin < 0) axisMin = 0;
+  if (max <= 0 && axisMax > 0) axisMax = 0;
+  if (axisMin > 0 && axisMin < tickStep) axisMin = 0;
+  if (axisMax < 0 && axisMax > -tickStep) axisMax = 0;
+
+  if (axisMax - axisMin < tickStep) {
+    if (axisMin === 0) axisMax = tickStep;
+    else if (axisMax === 0) axisMin = -tickStep;
+    else {
+      const center = (axisMin + axisMax) / 2;
+      axisMin = Math.floor((center - tickStep / 2) / tickStep) * tickStep;
+      axisMax = Math.ceil((center + tickStep / 2) / tickStep) * tickStep;
+    }
+  }
+
+  const tickCount = Math.round((axisMax - axisMin) / tickStep);
+  const ticks = Array.from({ length: tickCount + 1 }, (_, index) => Number((axisMin + index * tickStep).toFixed(10)));
+  return {
+    min: Number(axisMin.toFixed(10)),
+    max: Number(axisMax.toFixed(10)),
+    ticks,
+  };
 }
 
 function playbackSvgPath(series, range, file) {
@@ -3281,6 +3338,14 @@ function playbackSvgPath(series, range, file) {
       return `${index === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
     })
     .join(" ");
+}
+
+function playbackSvgY(value, range) {
+  const padTop = 14;
+  const padBottom = 32;
+  const innerHeight = 150 - padTop - padBottom;
+  const span = Math.max(1e-9, range.max - range.min);
+  return padTop + (1 - (value - range.min) / span) * innerHeight;
 }
 
 function renderPlaybackLegend() {
@@ -3350,14 +3415,18 @@ function renderPlaybackCharts() {
           }));
           const range = playbackSeriesRange(seriesByKind.map((item) => item.series));
           const currentX = 54 + (clamp(state.playback.elapsedSec, 0, file.durationSec) / Math.max(1, file.durationSec)) * 252;
+          const yTicks = range.ticks.map((tick) => {
+            const y = playbackSvgY(tick, range);
+            return `
+                <line class="playback-grid-line" x1="54" y1="${y.toFixed(1)}" x2="306" y2="${y.toFixed(1)}"></line>
+                <text class="playback-tick" x="48" y="${(y + 3).toFixed(1)}" text-anchor="end">${escapeHtml(formatPlaybackAxisValue(signal, tick))}</text>`;
+          }).join("");
           const paths = seriesByKind
             .map((item) => {
               const detail = playbackSeriesDetails[item.kind];
               return `<path class="playback-line playback-line-${item.kind}" d="${playbackSvgPath(item.series, range, file)}" style="--line-color:${detail.color}"></path>`;
             })
             .join("");
-          const yMax = formatPlaybackValue(signal, range.max);
-          const yMin = formatPlaybackValue(signal, range.min);
 
           return `
             <article class="playback-signal-card">
@@ -3368,9 +3437,7 @@ function renderPlaybackCharts() {
               <svg class="playback-sparkline" viewBox="0 0 320 150" role="img" aria-label="${escapeHtml(signal.key)} state action time chart">
                 <line class="playback-axis" x1="54" y1="118" x2="306" y2="118"></line>
                 <line class="playback-axis" x1="54" y1="14" x2="54" y2="118"></line>
-                <line class="playback-grid-line" x1="54" y1="66" x2="306" y2="66"></line>
-                <text class="playback-tick" x="48" y="18" text-anchor="end">${escapeHtml(yMax)}</text>
-                <text class="playback-tick" x="48" y="121" text-anchor="end">${escapeHtml(yMin)}</text>
+                ${yTicks}
                 <text class="playback-tick" x="54" y="138">0s</text>
                 <text class="playback-tick" x="306" y="138" text-anchor="end">${Math.round(file.durationSec)}s</text>
                 <text class="playback-axis-label" x="188" y="146" text-anchor="middle">time(s)</text>
@@ -3399,19 +3466,88 @@ function renderPlaybackCharts() {
     .join("");
 }
 
+async function requestPlaybackAction(action, payload = {}) {
+  const response = await fetch(`/api/playback/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  let result = {};
+  try {
+    result = await response.json();
+  } catch (error) {
+    result = {};
+  }
+  if (!response.ok || result.ok === false) {
+    throw new Error(result.detail || result.error || `HTTP ${response.status}`);
+  }
+  return result;
+}
+
+function applyPlaybackStatus(payload) {
+  if (!payload || payload.ok === false) return;
+  state.playback.status = payload.status || state.playback.status || "idle";
+  state.playback.running = Boolean(payload.running);
+  state.playback.robotEnabled = Boolean(payload.robotEnabled);
+  if (Number.isFinite(Number(payload.elapsedSec))) {
+    state.playback.elapsedSec = Math.max(0, Number(payload.elapsedSec));
+  }
+  if (Number.isFinite(Number(payload.durationSec)) && Number(payload.durationSec) > 0) {
+    state.playback.durationSec = Number(payload.durationSec);
+  }
+  if (payload.currentFrameIndex !== null && payload.currentFrameIndex !== undefined) {
+    state.playback.currentFrameIndex = Number(payload.currentFrameIndex) || 0;
+  }
+  state.playback.lastError = payload.lastError || "";
+}
+
+function setPlaybackStatusPolling(active) {
+  window.clearInterval(state.playbackTimer);
+  state.playbackTimer = null;
+  if (!active) return;
+  state.playbackTimer = window.setInterval(() => {
+    refreshPlaybackStatus({ silent: true });
+  }, playbackTickMs * 3);
+}
+
+async function refreshPlaybackStatus(options = {}) {
+  try {
+    const response = await fetch("/api/playback/status", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    applyPlaybackStatus(payload);
+    if (!state.playback.running) {
+      setPlaybackStatusPolling(false);
+    }
+    renderPlayback();
+    return payload;
+  } catch (error) {
+    if (!options.silent) addLog("数采", `数据回放状态同步失败：${error.message}`);
+    return null;
+  }
+}
+
 function renderPlaybackExecution() {
   const enableButton = $("#playbackEnableRobotButton");
   const replayButton = $("#playbackReplayButton");
   const stopButton = $("#playbackStopButton");
 
-  if (enableButton) enableButton.textContent = state.playback.robotEnabled ? "关闭使能" : "机器人使能";
-  if (replayButton) replayButton.disabled = !state.playback.robotEnabled || state.playback.running || state.playback.loading || !String(state.playback.path || "").trim();
-  if (stopButton) stopButton.disabled = !state.playback.running;
+  if (enableButton) enableButton.textContent = state.playback.robotEnabled ? "取消回放使能" : "机器人使能";
+  if (enableButton) enableButton.disabled = state.playback.busy;
+  if (replayButton) replayButton.disabled = !state.playback.robotEnabled || state.playback.running || state.playback.loading || state.playback.busy || !String(state.playback.path || "").trim();
+  if (stopButton) stopButton.disabled = !state.playback.running || state.playback.busy;
 
   const status = state.playback.loading
     ? "数据加载中"
+    : state.playback.busy
+    ? "指令处理中"
     : state.playback.running
     ? "数据回放中"
+    : state.playback.lastError
+    ? state.playback.lastError
     : state.playback.robotEnabled
       ? "机器人已使能"
       : "机器人未使能";
@@ -3425,24 +3561,8 @@ function renderPlaybackExecution() {
 
 function setPlaybackRunning(running) {
   state.playback.running = running;
-  window.clearInterval(state.playbackTimer);
-  if (running) {
-    state.playback.lastTickMs = performance.now();
-    state.playbackTimer = window.setInterval(() => {
-      const file = currentPlaybackFile();
-      const now = performance.now();
-      const deltaSec = Math.max(0, (now - (state.playback.lastTickMs || now)) / 1000);
-      state.playback.lastTickMs = now;
-      state.playback.elapsedSec = Math.min(file.durationSec, state.playback.elapsedSec + deltaSec);
-      if (state.playback.elapsedSec >= file.durationSec) {
-        setPlaybackRunning(false);
-        addLog("数采", `数据回放完成：${file.name}`);
-      }
-      renderPlayback();
-    }, playbackTickMs);
-  } else {
-    state.playback.lastTickMs = null;
-  }
+  setPlaybackStatusPolling(running);
+  state.playback.lastTickMs = null;
   renderPlayback();
 }
 
@@ -3497,15 +3617,32 @@ function renderPlayback() {
 }
 
 async function togglePlaybackRobotEnable() {
-  if (!state.playback.robotEnabled) {
-    state.playback.robotEnabled = true;
-    addLog("数采", "数据回放使能已打开");
-  } else {
-    state.playback.robotEnabled = false;
-    setPlaybackRunning(false);
-    addLog("数采", "数据回放使能已关闭");
-  }
+  if (state.playback.busy) return;
+  const enabled = !state.playback.robotEnabled;
+  state.playback.busy = true;
+  state.playback.lastError = "";
   renderPlayback();
+  try {
+    if (!enabled && state.playback.running) {
+      await requestPlaybackAction("stop");
+      setPlaybackRunning(false);
+    }
+    const result = await requestPlaybackAction("enable", { enabled, repeat: 3, intervalMs: 80 });
+    state.playback.robotEnabled = Boolean(result.robotEnabled);
+    state.playback.status = enabled ? "idle" : "stopped";
+    if (enabled && $("#enableStatus")) {
+      $("#enableStatus").textContent = enabled ? "已使能" : "未使能";
+      $("#enableStatus").className = enabled ? "status-pill ok" : "status-pill idle";
+    }
+    addLog("数采", enabled ? "数据回放 Piper 使能已打开" : "数据回放已取消，Piper 保持使能");
+    await refreshPlaybackStatus({ silent: true });
+  } catch (error) {
+    state.playback.lastError = error.message;
+    addLog("数采", `数据回放使能切换失败：${error.message}`);
+  } finally {
+    state.playback.busy = false;
+    renderPlayback();
+  }
 }
 
 async function startPlaybackRun() {
@@ -3518,21 +3655,54 @@ async function startPlaybackRun() {
     addLog("数采", "数据回放未启动：未选择数据文件");
     return;
   }
+  if (state.playback.busy) return;
+  state.playback.busy = true;
+  state.playback.lastError = "";
+  renderPlayback();
   const dataset = await ensurePlaybackDataset();
   if (!dataset) {
+    state.playback.busy = false;
     renderPlayback();
     return;
   }
   const file = currentPlaybackFile();
-  state.playback.elapsedSec = 0;
-  addLog("数采", `数据回放开始：${file.name}`);
-  setPlaybackRunning(true);
+  try {
+    const result = await requestPlaybackAction("start", {
+      path: state.playback.path,
+      maxJointSpeedDegS: state.armControl.maxJointSpeedDegS,
+    });
+    state.playback.elapsedSec = 0;
+    state.playback.durationSec = Number(result.durationSec) || file.durationSec;
+    state.playback.status = "running";
+    addLog("数采", `数据回放开始：${file.name}`);
+    setPlaybackRunning(true);
+    await refreshPlaybackStatus({ silent: true });
+  } catch (error) {
+    state.playback.lastError = error.message;
+    addLog("数采", `数据回放启动失败：${error.message}`);
+  } finally {
+    state.playback.busy = false;
+    renderPlayback();
+  }
 }
 
-function stopPlaybackRun() {
+async function stopPlaybackRun() {
+  if (state.playback.busy) return;
   const file = currentPlaybackFile();
-  setPlaybackRunning(false);
-  addLog("数采", `数据回放停止：${file.name}`);
+  state.playback.busy = true;
+  renderPlayback();
+  try {
+    await requestPlaybackAction("stop");
+    setPlaybackRunning(false);
+    await refreshPlaybackStatus({ silent: true });
+    addLog("数采", `数据回放停止：${file.name}`);
+  } catch (error) {
+    state.playback.lastError = error.message;
+    addLog("数采", `数据回放停止失败：${error.message}`);
+  } finally {
+    state.playback.busy = false;
+    renderPlayback();
+  }
 }
 
 function escapeHtml(value) {
@@ -4817,6 +4987,134 @@ function chassisCommandForDrive(action) {
   return { linearX: 0, linearY: 0, angularZ: 0 };
 }
 
+function renderChassisKeyboardControl() {
+  const button = $("#chassisKeyboardButton");
+  const listening = state.chassisControl.keyboardListening;
+  const activeKey = state.chassisControl.keyboardActiveKey;
+  if (button) {
+    const ready = chassisReady();
+    button.className = `keyboard-listen-button state-badge ${listening ? "ok" : "idle"}`;
+    button.textContent = listening ? "监听中" : "键盘监听";
+    button.disabled = !ready;
+    button.title = ready
+      ? listening
+        ? "正在监听 W/S/A/D 和 Q/E，点击关闭"
+        : "点击后监听 W/S/A/D 和 Q/E"
+      : "Chassis 服务未启动，无法监听键盘";
+    button.setAttribute("aria-pressed", listening ? "true" : "false");
+    button.setAttribute("aria-label", listening ? `键盘监听已开启${activeKey ? `，当前 ${activeKey.toUpperCase()}` : ""}` : "开启键盘监听");
+  }
+  $$("[data-device-drive]").forEach((driveButton) => {
+    driveButton.classList.toggle("is-active", state.chassisControl.activeDrive === driveButton.dataset.deviceDrive);
+  });
+}
+
+function clearChassisKeyboardKeys() {
+  state.chassisControl.keyboardKeys = [];
+  state.chassisControl.keyboardActiveKey = null;
+}
+
+function stopChassisKeyboardControl(source = "键盘监听关闭", options = {}) {
+  const hadActiveDrive = Boolean(state.chassisControl.activeDrive);
+  clearChassisKeyboardKeys();
+  if (options.deactivate) state.chassisControl.keyboardListening = false;
+  if (hadActiveDrive) {
+    stopChassisDrive(source);
+  } else {
+    renderChassisKeyboardControl();
+  }
+  if (options.log !== false) addLog("底盘", source);
+}
+
+function setChassisKeyboardListening(listening) {
+  if (listening) {
+    if (!chassisReady()) {
+      addLog("底盘", "Chassis 服务未启动，键盘监听未开启");
+      renderChassisKeyboardControl();
+      return;
+    }
+    state.chassisControl.keyboardListening = true;
+    clearChassisKeyboardKeys();
+    renderChassisKeyboardControl();
+    $("#chassisKeyboardButton")?.focus();
+    addLog("底盘", "键盘监听已开启");
+    return;
+  }
+  stopChassisKeyboardControl("键盘监听关闭", { deactivate: true });
+}
+
+function toggleChassisKeyboardListening() {
+  setChassisKeyboardListening(!state.chassisControl.keyboardListening);
+}
+
+function keyboardEventTargetIsEditable(target) {
+  if (!(target instanceof Element)) return false;
+  if (target.closest("#chassisKeyboardButton")) return false;
+  const input = target.closest("input");
+  if (input) {
+    const type = String(input.getAttribute("type") || "text").toLowerCase();
+    return !["range", "button", "checkbox", "radio", "submit", "reset"].includes(type);
+  }
+  return Boolean(target.closest("textarea, select, [contenteditable='true']"));
+}
+
+function canHandleChassisKeyboardEvent(event) {
+  return (
+    state.chassisControl.keyboardListening &&
+    document.body.dataset.activeView === "platform-control" &&
+    !event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !keyboardEventTargetIsEditable(event.target)
+  );
+}
+
+function handleChassisKeyboardKeyDown(event) {
+  if (!state.chassisControl.keyboardListening) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    stopChassisKeyboardControl("键盘监听关闭", { deactivate: true });
+    return;
+  }
+  if (!canHandleChassisKeyboardEvent(event)) return;
+  const key = String(event.key || "").toLowerCase();
+  const mapping = chassisKeyboardDriveMap[key];
+  if (!mapping) return;
+  event.preventDefault();
+  if (!chassisReady()) {
+    stopChassisKeyboardControl("Chassis 服务未运行，键盘监听停止", { deactivate: true });
+    return;
+  }
+  const pressedKeys = state.chassisControl.keyboardKeys;
+  if (pressedKeys.includes(key)) return;
+  pressedKeys.push(key);
+  state.chassisControl.keyboardActiveKey = key;
+  startChassisDrive(mapping.action, mapping.label);
+  renderChassisKeyboardControl();
+}
+
+function handleChassisKeyboardKeyUp(event) {
+  if (!canHandleChassisKeyboardEvent(event)) return;
+  const key = String(event.key || "").toLowerCase();
+  if (!chassisKeyboardDriveMap[key]) return;
+  event.preventDefault();
+  state.chassisControl.keyboardKeys = state.chassisControl.keyboardKeys.filter((pressedKey) => pressedKey !== key);
+  if (state.chassisControl.keyboardActiveKey !== key) {
+    renderChassisKeyboardControl();
+    return;
+  }
+  const nextKey = [...state.chassisControl.keyboardKeys].reverse().find((pressedKey) => chassisKeyboardDriveMap[pressedKey]);
+  if (nextKey) {
+    const mapping = chassisKeyboardDriveMap[nextKey];
+    state.chassisControl.keyboardActiveKey = nextKey;
+    startChassisDrive(mapping.action, mapping.label);
+  } else {
+    state.chassisControl.keyboardActiveKey = null;
+    stopChassisDrive("键盘松开停止");
+  }
+  renderChassisKeyboardControl();
+}
+
 function nextChassisCommandSequence() {
   state.chassisControl.commandSequence += 1;
   return state.chassisControl.commandSequence;
@@ -4895,6 +5193,7 @@ function startChassisDrive(action, label) {
   }
   state.chassisControl.activeDrive = action;
   addLog("底盘", `点动开始：${label}`);
+  renderChassisKeyboardControl();
   requestChassisVelocity(chassisCommandForDrive(action), { source: `点动${label}`, quiet: true });
   state.chassisControl.driveTimer = window.setInterval(() => {
     if (!state.chassisControl.activeDrive) return;
@@ -4912,6 +5211,7 @@ function stopChassisDrive(source = "松开停止") {
   if (hadActiveDrive || source === "底盘停止" || source === "关闭 Chassis") {
     requestChassisStop(source);
   }
+  renderChassisKeyboardControl();
 }
 
 async function requestLiftingControl(action, payload = {}, options = {}) {
@@ -5763,6 +6063,14 @@ function bindEvents() {
   $("#piperRuntimeStatus").addEventListener("click", togglePiperRuntime);
   $("#liftingRuntimeStatus").addEventListener("click", toggleLiftingRuntime);
   $("#chassisRuntimeStatus").addEventListener("click", toggleChassisRuntime);
+  $("#chassisKeyboardButton").addEventListener("click", toggleChassisKeyboardListening);
+  document.addEventListener("keydown", handleChassisKeyboardKeyDown);
+  document.addEventListener("keyup", handleChassisKeyboardKeyUp);
+  window.addEventListener("blur", () => {
+    if (state.chassisControl.keyboardListening) {
+      stopChassisKeyboardControl("窗口失焦，键盘监听停止", { deactivate: true });
+    }
+  });
   $("#cameraRuntimeStatus").addEventListener("click", toggleCameraRuntime);
   $("#lidarRuntimeStatus").addEventListener("click", toggleLidarRuntime);
   $("#robotModelSelect").addEventListener("change", (event) => {
@@ -5828,11 +6136,16 @@ function bindEvents() {
   const playbackPathInput = $("#playbackPathInput");
   if (playbackPathInput) {
     playbackPathInput.addEventListener("input", (event) => {
+      const wasRunning = state.playback.running;
       state.playback.path = String(event.currentTarget.value || "").trim();
       state.playback.elapsedSec = 0;
       state.playback.dataset = null;
       state.playback.loadedPath = "";
       state.playback.loadError = "";
+      state.playback.lastError = "";
+      if (wasRunning) {
+        requestPlaybackAction("stop").catch((error) => addLog("数采", `数据回放路径变更停止失败：${error.message}`));
+      }
       setPlaybackRunning(false);
       renderPlayback();
     });
@@ -6059,6 +6372,7 @@ function init() {
   renderCameraFrames();
   renderLidarCloudStatus();
   renderPlayback();
+  refreshPlaybackStatus({ silent: true });
   renderRobotViewStatus();
   fetchRobotModels({ silent: true });
   initializeLidarViewer();

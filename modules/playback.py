@@ -34,6 +34,8 @@ MCAP_STATE_LEFT = "/puppet/joint_left"
 MCAP_STATE_RIGHT = "/puppet/joint_right"
 MCAP_ACTION_LEFT = "/master/joint_left"
 MCAP_ACTION_RIGHT = "/master/joint_right"
+MCAP_CHASSIS_CMD = "/cmd_vel"
+MCAP_LIFT_STATE = "/LiftMotorStatePub"
 MCAP_JOINT_TOPICS = {
     MCAP_STATE_LEFT,
     MCAP_STATE_RIGHT,
@@ -61,7 +63,7 @@ def playback_result_status(result: dict[str, Any]) -> int:
     code = result.get("code", "")
     if code == "PLAYBACK-NOTFOUND":
         return 404
-    if code in {"PLAYBACK-PATH", "PLAYBACK-UNSUPPORTED", "PLAYBACK-NODATA"}:
+    if code in {"PLAYBACK-PATH", "PLAYBACK-UNSUPPORTED", "PLAYBACK-NODATA", "PLAYBACK-TIMESTAMP"}:
         return 400
     if code == "PLAYBACK-DEPENDENCY":
         return 503
@@ -146,8 +148,9 @@ def read_hdf5_playback(path: Path) -> dict[str, Any]:
         raise PlaybackLoadError("PLAYBACK-NODATA", "HDF5 file has no readable state/action rows.", status=400)
 
     timestamp_values = vector_series(timestamps, row_count, width=1)
-    base_timestamp = first_finite([row[0] for row in timestamp_values])
-    fps = fps_from_timestamps([row[0] for row in timestamp_values]) or DEFAULT_FPS
+    timestamp_series = require_timestamps([row[0] for row in timestamp_values], "HDF5")
+    base_timestamp = timestamp_series[0]
+    fps = fps_from_timestamps(timestamp_series) or DEFAULT_FPS
 
     frames = []
     for index in range(row_count):
@@ -158,7 +161,7 @@ def read_hdf5_playback(path: Path) -> dict[str, Any]:
             + [lift_height_m_at(lift, index)]
             + vector_at(chassis, index, 3, fill=0.0)
         )
-        timestamp = timestamp_values[index][0]
+        timestamp = timestamp_series[index]
         seconds = seconds_from_timestamp(timestamp, base_timestamp, index, fps)
         frames.append(
             {
@@ -191,6 +194,8 @@ def read_parquet_playback(path: Path) -> dict[str, Any]:
     frame_column = first_existing(column_names, PARQUET_FRAME_COLUMNS)
     if not state_column and not action_column:
         raise PlaybackLoadError("PLAYBACK-NODATA", "Parquet file has no state/action columns.", status=400)
+    if not timestamp_column:
+        raise PlaybackLoadError("PLAYBACK-TIMESTAMP", "Parquet playback requires a timestamp column.", status=400)
 
     columns = [column for column in [state_column, action_column, timestamp_column, frame_column] if column]
     table = parquet_file.read(columns=columns)
@@ -198,8 +203,8 @@ def read_parquet_playback(path: Path) -> dict[str, Any]:
     if not rows:
         raise PlaybackLoadError("PLAYBACK-NODATA", "Parquet file has no rows.", status=400)
 
-    timestamps = [number_or_none(row.get(timestamp_column)) if timestamp_column else None for row in rows]
-    base_timestamp = first_finite(timestamps)
+    timestamps = require_timestamps([number_or_none(row.get(timestamp_column)) for row in rows], "Parquet")
+    base_timestamp = timestamps[0]
     fps = fps_from_timestamps(timestamps) or DEFAULT_FPS
     frames = []
     for index, row in enumerate(rows):
@@ -226,6 +231,7 @@ def read_parquet_playback(path: Path) -> dict[str, Any]:
 def read_mcap_playback(path: Path) -> dict[str, Any]:
     try:
         import rosbag2_py
+        from geometry_msgs.msg import Twist
         from rclpy.serialization import deserialize_message
         from sensor_msgs.msg import JointState
     except ImportError as exc:
@@ -235,19 +241,47 @@ def read_mcap_playback(path: Path) -> dict[str, Any]:
             status=503,
         ) from exc
 
-    samples = {topic: [] for topic in MCAP_JOINT_TOPICS}
+    try:
+        from lifting_msg_pkg.msg import LiftMotorMsg
+    except ImportError:
+        LiftMotorMsg = None
+
+    mcap_topics = set(MCAP_JOINT_TOPICS)
+    mcap_topics.add(MCAP_CHASSIS_CMD)
+    if LiftMotorMsg is not None:
+        mcap_topics.add(MCAP_LIFT_STATE)
+    samples = {topic: [] for topic in mcap_topics}
     reader = rosbag2_py.SequentialReader()
     reader.open(
         rosbag2_py.StorageOptions(uri=str(mcap_rosbag_uri(path)), storage_id="mcap"),
         rosbag2_py.ConverterOptions(input_serialization_format="cdr", output_serialization_format="cdr"),
     )
-    reader.set_filter(rosbag2_py.StorageFilter(topics=sorted(MCAP_JOINT_TOPICS)))
+    reader.set_filter(rosbag2_py.StorageFilter(topics=sorted(mcap_topics)))
     while reader.has_next():
         topic, data, timestamp_ns = reader.read_next()
         if topic not in samples:
             continue
-        message = deserialize_message(data, JointState)
-        samples[topic].append((float(timestamp_ns) / 1_000_000_000.0, vector_from_values(message.position, ARM_DIM)))
+        timestamp = float(timestamp_ns) / 1_000_000_000.0
+        if topic in MCAP_JOINT_TOPICS:
+            message = deserialize_message(data, JointState)
+            samples[topic].append((timestamp, vector_from_values(message.position, ARM_DIM)))
+        elif topic == MCAP_CHASSIS_CMD:
+            message = deserialize_message(data, Twist)
+            samples[topic].append(
+                (
+                    timestamp,
+                    [
+                        number_or_none(message.linear.x),
+                        number_or_none(message.linear.y),
+                        number_or_none(message.angular.z),
+                    ],
+                )
+            )
+        elif topic == MCAP_LIFT_STATE and LiftMotorMsg is not None:
+            message = deserialize_message(data, LiftMotorMsg)
+            height_m = lift_height_m_from_mcap_message(message)
+            if height_m is not None:
+                samples[topic].append((timestamp, [height_m]))
 
     state_left = samples[MCAP_STATE_LEFT]
     state_right = samples[MCAP_STATE_RIGHT]
@@ -262,6 +296,8 @@ def read_mcap_playback(path: Path) -> dict[str, Any]:
     right_times, right_values = split_samples(state_right)
     action_left_times, action_left_values = split_samples(action_left)
     action_right_times, action_right_values = split_samples(action_right)
+    chassis_times, chassis_values = split_samples(samples.get(MCAP_CHASSIS_CMD, []))
+    lift_times, lift_values = split_samples(samples.get(MCAP_LIFT_STATE, []))
 
     frames = []
     for index, (timestamp, left_state) in enumerate(state_left):
@@ -270,13 +306,22 @@ def read_mcap_playback(path: Path) -> dict[str, Any]:
         right_action = latest_value_at(action_right_times, action_right_values, timestamp)
         if right_state is None or left_action is None or right_action is None:
             continue
+        lift_sample = latest_value_at(lift_times, lift_values, timestamp) if lift_times else None
+        chassis_sample = latest_value_at(chassis_times, chassis_values, timestamp) if chassis_times else None
+        platform_action = [
+            lift_sample[0] if lift_sample and lift_sample[0] is not None else None,
+            *(chassis_sample if chassis_sample else [None, None, None]),
+        ]
+        action = left_action + right_action
+        if any(value is not None for value in platform_action):
+            action += platform_action
         frames.append(
             {
                 "seconds": max(0.0, timestamp - base_timestamp),
                 "timestamp": timestamp,
                 "frameIndex": index,
                 "state": left_state + right_state,
-                "action": left_action + right_action + [0.0, 0.0, 0.0, 0.0],
+                "action": action,
             }
         )
 
@@ -287,6 +332,8 @@ def read_mcap_playback(path: Path) -> dict[str, Any]:
 
 def playback_dataset(path: Path, source_type: str, frames: list[dict[str, Any]], fps: float, rows: int) -> dict[str, Any]:
     duration_sec = frames[-1]["seconds"] if len(frames) > 1 else len(frames) / max(1.0, fps)
+    state_dim = max([len(frame.get("state") or []) for frame in frames], default=STATE_DIM)
+    action_dim = max([len(frame.get("action") or []) for frame in frames], default=ACTION_DIM)
     return {
         "name": path.name,
         "path": str(path),
@@ -294,8 +341,8 @@ def playback_dataset(path: Path, source_type: str, frames: list[dict[str, Any]],
         "fps": fps,
         "rows": rows,
         "durationSec": max(0.001, duration_sec),
-        "stateDim": STATE_DIM,
-        "actionDim": ACTION_DIM,
+        "stateDim": state_dim,
+        "actionDim": action_dim,
         "frames": frames,
     }
 
@@ -359,6 +406,19 @@ def lift_height_m_at(values: Any, index: int) -> float:
     return scalar_at(values, index, default=0.0) / 1000.0
 
 
+def lift_height_m_from_mcap_message(message: Any) -> float | None:
+    for attr in ("back_height", "heightM", "height_m", "targetHeightM", "target_height", "height"):
+        if not hasattr(message, attr):
+            continue
+        value = number_or_none(getattr(message, attr))
+        if value is None:
+            continue
+        if attr in {"heightM", "height_m", "targetHeightM"} or abs(value) <= 5.0:
+            return float(value)
+        return float(value) / 1000.0
+    return None
+
+
 def normalize_state_vector(values: Any) -> list[float] | None:
     vector = vector_from_values(values, STATE_DIM, fill=None)
     if len(vector) < STATE_DIM or any(value is None for value in vector[:STATE_DIM]):
@@ -390,6 +450,21 @@ def first_finite(values: list[float | None]) -> float | None:
     return None
 
 
+def require_timestamps(values: list[float | None], source_label: str) -> list[float]:
+    if not values:
+        raise PlaybackLoadError("PLAYBACK-TIMESTAMP", f"{source_label} playback requires timestamps.", status=400)
+    timestamps = []
+    for index, value in enumerate(values):
+        if value is None or not math.isfinite(float(value)):
+            raise PlaybackLoadError(
+                "PLAYBACK-TIMESTAMP",
+                f"{source_label} playback frame {index} is missing a valid timestamp.",
+                status=400,
+            )
+        timestamps.append(float(value))
+    return timestamps
+
+
 def fps_from_timestamps(timestamps: list[float | None]) -> float | None:
     clean = [float(value) for value in timestamps if value is not None and math.isfinite(float(value))]
     if len(clean) < 2:
@@ -406,10 +481,10 @@ def fps_from_timestamps(timestamps: list[float | None]) -> float | None:
 
 def seconds_from_timestamp(timestamp: float | None, base_timestamp: float | None, index: int, fps: float) -> float:
     if timestamp is not None:
-        if base_timestamp is not None and timestamp > 100000:
+        if base_timestamp is not None:
             return max(0.0, float(timestamp) - float(base_timestamp))
         return max(0.0, float(timestamp))
-    return float(index) / max(1.0, fps)
+    raise PlaybackLoadError("PLAYBACK-TIMESTAMP", f"Playback frame {index} is missing a valid timestamp.", status=400)
 
 
 def first_existing(names: set[str], candidates: tuple[str, ...]) -> str | None:

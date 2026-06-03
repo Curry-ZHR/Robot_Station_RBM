@@ -26,6 +26,7 @@ from modules.drivers.can.can_activate import activate_can
 from modules.inference import get_inference_manager
 from modules.logger import get_logger, setup_logger
 from modules.playback import load_playback_dataset, playback_result_status
+from modules.playback_manager import get_playback_manager
 from modules.robot_description import RobotModelError, get_model, list_models, resolve_model_asset
 from modules.ros_io import (
     get_camera_image_reader,
@@ -189,6 +190,26 @@ def inference_result_status(result):
         "INFER-OBS-JOINT": 503,
         "INFER-OBS-LIFT": 503,
         "INFER-MASK-NOFEEDBACK": 503,
+    }
+    return mapping.get(code, 500)
+
+
+def playback_control_status(result):
+    if result.get("ok"):
+        return 200
+    code = result.get("code", "")
+    mapping = {
+        "PLAYBACK-BUSY": 409,
+        "PLAYBACK-DISABLED": 409,
+        "PLAYBACK-PATH": 400,
+        "PLAYBACK-PAYLOAD": 400,
+        "PLAYBACK-ACTION": 400,
+        "PLAYBACK-NODATA": 400,
+        "PLAYBACK-TIMESTAMP": 400,
+        "PLAYBACK-UNSUPPORTED": 400,
+        "PLAYBACK-NOTFOUND": 404,
+        "PLAYBACK-DEPENDENCY": 503,
+        "PLAYBACK-PIPER-ENABLE": 503,
     }
     return mapping.get(code, 500)
 
@@ -379,6 +400,9 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/inference/status":
             self.write_json(get_inference_manager().status())
             return
+        if parsed.path == "/api/playback/status":
+            self.write_json(get_playback_manager().status())
+            return
         if parsed.path == "/api/self-check/ros-daemon":
             result = ensure_ros_daemon()
             log_check_result(result)
@@ -521,6 +545,34 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             status=400,
         )
 
+    def handle_playback(self, action):
+        manager = get_playback_manager()
+        if action == "enable":
+            payload = self.read_json_body()
+            result = manager.enable_piper(payload)
+            log_action_result("Playback Piper enable", result)
+            self.write_json(result, status=playback_control_status(result))
+            return
+        if action == "start":
+            payload = self.read_json_body()
+            result = manager.start(payload)
+            log_action_result("Playback start", result)
+            self.write_json(result, status=playback_control_status(result))
+            return
+        if action == "stop":
+            result = manager.stop()
+            log_action_result("Playback stop", result)
+            self.write_json(result, status=playback_control_status(result))
+            return
+        self.write_json(
+            {
+                "ok": False,
+                "code": "PLAYBACK-ACTION",
+                "detail": f"Unsupported playback action: {action}",
+            },
+            status=400,
+        )
+
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/control/piper/joint-targets":
@@ -570,6 +622,10 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             payload = self.read_json_body()
             result = load_playback_dataset(payload)
             self.write_json(result, status=playback_result_status(result))
+            return
+        playback_action = api_tail(parsed.path, "/api/playback")
+        if playback_action is not None:
+            self.handle_playback(playback_action)
             return
         if parsed.path == "/api/actions/can/activate":
             payload = self.read_json_body()
