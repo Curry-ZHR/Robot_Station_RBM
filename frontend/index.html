@@ -7,6 +7,42 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <div class="auth-overlay" id="authOverlay" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+      <form class="auth-dialog" id="authLoginForm" autocomplete="off">
+        <div class="auth-head">
+          <span class="brand-mark">RS</span>
+          <div>
+            <p class="eyebrow">Operator Login</p>
+            <h1 id="authTitle">登录 Robot Station</h1>
+          </div>
+        </div>
+        <label>
+          <span>用户</span>
+          <select id="authUsernameInput">
+            <option value="zhuzl">zhuzl</option>
+            <option value="caizj">caizj</option>
+            <option value="xiangpc">xiangpc</option>
+            <option value="liuyc">liuyc</option>
+            <option value="liuxy">liuxy</option>
+            <option value="wusr">wusr</option>
+          </select>
+        </label>
+        <label>
+          <span>密码</span>
+          <input id="authPasswordInput" type="password" placeholder="请输入密码">
+        </label>
+        <p class="auth-message" id="authMessage">请先登录后再控制机器人。</p>
+        <div class="auth-conflict" id="authConflictPanel" hidden>
+          <strong id="authConflictTitle">已有用户在线</strong>
+          <p id="authConflictDetail"></p>
+          <div class="button-group">
+            <button class="secondary-button" id="authPauseButton" type="button">暂停登录</button>
+            <button class="primary-button danger" id="authForceButton" type="button">强制登录</button>
+          </div>
+        </div>
+        <button class="primary-button" id="authLoginButton" type="submit">登录</button>
+      </form>
+    </div>
     <div class="app-shell">
       <aside class="sidebar" aria-label="主导航">
         <div class="brand">
@@ -65,12 +101,14 @@
             <span class="status-pill ok" id="estopStatus">急停释放</span>
             <span class="status-pill idle" id="enableStatus">未使能</span>
             <span class="status-pill ok" id="networkStatus">本机访问</span>
+            <span class="status-pill idle" id="authStatus">未登录</span>
             <span class="status-pill task" id="taskStatus">当前任务：空闲</span>
             <span class="status-pill danger" id="alertStatus">告警 2</span>
             <span class="status-pill clock" id="clockStatus">--:--:--</span>
           </div>
 
           <div class="top-actions">
+            <button class="icon-button" id="authLogoutButton" title="退出登录">退出</button>
             <button class="icon-button danger" id="estopButton" title="急停">急停</button>
             <button class="icon-button stop" id="stopTaskButton" title="停止当前任务">停止任务</button>
             <button class="icon-button" id="drawerToggle" title="展开或收起事件抽屉">事件</button>
@@ -561,6 +599,7 @@
                 </div>
                 <form class="config-form playback-form">
                   <label class="field-wide"><span class="field-label">数据文件</span><input id="playbackPathInput" type="text" value="/data/robot_station/replay.parquet"></label>
+                  <label><span class="field-label">关节速度<em>deg/s</em></span><input id="playbackJointSpeedInput" type="number" min="0.5" max="30" step="0.5" value="20" inputmode="decimal"></label>
                 </form>
                 <div class="progress-track playback-progress" aria-label="数据回放进度">
                   <span id="playbackProgressBar" style="width: 0%"></span>

@@ -13,6 +13,7 @@ def _handler(path, payload):
     handler = object.__new__(server.RobotStationHandler)
     handler.path = path
     handler.read_json_body = lambda: payload
+    handler.require_operator = lambda: True
     return handler
 
 

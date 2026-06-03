@@ -26,6 +26,16 @@ const state = {
   canActivation: {
     busy: false,
   },
+  auth: {
+    authenticated: false,
+    user: "",
+    active: null,
+    users: ["zhuzl", "caizj", "xiangpc", "liuyc", "liuxy", "wusr"],
+    busy: false,
+    conflict: null,
+    message: "请先登录后再控制机器人。",
+    messageLevel: "idle",
+  },
   piperRuntime: {
     status: "stopped",
   },
@@ -94,6 +104,7 @@ const state = {
     currentFrameIndex: 0,
     lastTickMs: null,
     lastError: "",
+    maxJointSpeedDegS: 20,
   },
   robotModel: {
     models: [],
@@ -604,6 +615,24 @@ const chassisMotionModeLabels = {
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
+const nativeFetch = window.fetch.bind(window);
+
+window.fetch = async (input, init = {}) => {
+  const options = { ...init, credentials: init.credentials || "include" };
+  const response = await nativeFetch(input, options);
+  if (response.status === 401 && !isAuthApiRequest(input)) {
+    const result = await response.clone().json().catch(() => null);
+    if (result && typeof result.code === "string" && result.code.startsWith("AUTH-")) {
+      applyAuthStatus(result, { fromFetch: true });
+    }
+  }
+  return response;
+};
+
+function isAuthApiRequest(input) {
+  const url = typeof input === "string" ? input : String(input && input.url ? input.url : "");
+  return url.includes("/api/auth/");
+}
 
 function formatTime(date = new Date()) {
   return date.toLocaleTimeString("zh-CN", { hour12: false });
@@ -638,6 +667,169 @@ function setStateBadge(selector, text, level) {
   if (!node) return;
   node.textContent = text;
   node.className = `state-badge ${level}`;
+}
+
+function authActiveUserLabel(active = state.auth.active) {
+  if (!active || !active.user) return "无";
+  return active.client ? `${active.user} @ ${active.client}` : active.user;
+}
+
+function setAuthMessage(message, level = "idle") {
+  state.auth.message = message;
+  state.auth.messageLevel = level;
+}
+
+function lockFrontendForAuth(reason) {
+  window.clearInterval(state.homingTimer);
+  window.clearInterval(state.collectionTimer);
+  window.clearInterval(state.inferenceTimer);
+  window.clearTimeout(state.armControl.publishTimer);
+  state.armControl.active = false;
+  state.inference.looping = false;
+  const loopToggle = $("#inferenceLoopToggle");
+  if (loopToggle) loopToggle.checked = false;
+  if (state.task !== "idle") setTask("idle", "空闲", "空闲");
+  renderArmComparisons();
+  renderInferenceStatus();
+  addLog("登录", reason);
+}
+
+function populateAuthUsers(users) {
+  if (Array.isArray(users) && users.length) {
+    state.auth.users = users;
+  }
+  const select = $("#authUsernameInput");
+  if (!select) return;
+  const current = select.value || state.auth.user || state.auth.users[0] || "";
+  select.innerHTML = state.auth.users.map((user) => `<option value="${escapeHtml(user)}">${escapeHtml(user)}</option>`).join("");
+  if (state.auth.users.includes(current)) {
+    select.value = current;
+  }
+}
+
+function renderAuth() {
+  populateAuthUsers();
+  document.body.classList.toggle("auth-locked", !state.auth.authenticated);
+  const overlay = $("#authOverlay");
+  if (overlay) overlay.hidden = state.auth.authenticated;
+
+  const status = $("#authStatus");
+  if (status) {
+    status.textContent = state.auth.authenticated ? `操作者：${state.auth.user}` : `等待登录：${authActiveUserLabel()}`;
+    status.className = state.auth.authenticated ? "status-pill ok" : "status-pill warn";
+  }
+
+  const logoutButton = $("#authLogoutButton");
+  if (logoutButton) logoutButton.disabled = !state.auth.authenticated || state.auth.busy;
+
+  const loginButton = $("#authLoginButton");
+  if (loginButton) loginButton.disabled = state.auth.busy;
+
+  const message = $("#authMessage");
+  if (message) {
+    message.textContent = state.auth.message;
+    message.className = `auth-message ${state.auth.messageLevel === "error" ? "is-error" : ""}`;
+  }
+
+  const conflictPanel = $("#authConflictPanel");
+  if (conflictPanel) conflictPanel.hidden = !state.auth.conflict;
+  const conflictDetail = $("#authConflictDetail");
+  if (conflictDetail && state.auth.conflict) {
+    conflictDetail.textContent = `${authActiveUserLabel(state.auth.conflict)} 正在控制。可以暂停登录，或强制接管并让当前输出进入安全保持。`;
+  }
+
+  renderActionLocks();
+}
+
+function applyAuthStatus(result, options = {}) {
+  if (!result || typeof result !== "object") return;
+  populateAuthUsers(result.users);
+  state.auth.active = result.active || null;
+  state.auth.authenticated = Boolean(result.authenticated);
+  state.auth.user = result.authenticated ? (result.user || "") : "";
+  if (result.authenticated) {
+    state.auth.conflict = null;
+    setAuthMessage(`已登录：${state.auth.user}`, "idle");
+  } else if (result.code === "AUTH-CONFLICT") {
+    state.auth.conflict = result.active || null;
+    setAuthMessage("已有操作者在线，请选择暂停登录或强制登录。", "error");
+  } else if (result.code === "AUTH-REVOKED") {
+    state.auth.conflict = null;
+    setAuthMessage("当前登录已被其他用户接管，请重新登录。", "error");
+    if (!options.silent) lockFrontendForAuth("当前登录已被强制接管，本地控制已暂停");
+  } else {
+    state.auth.conflict = null;
+    setAuthMessage(result.detail || "请先登录后再控制机器人。", result.code === "AUTH-INVALID" ? "error" : "idle");
+  }
+  renderAuth();
+}
+
+async function refreshAuthStatus(options = {}) {
+  try {
+    const response = await fetch("/api/auth/status", { cache: "no-store" });
+    const result = await response.json().catch(() => ({}));
+    applyAuthStatus(result, { silent: options.silent });
+    return result;
+  } catch (error) {
+    if (!options.silent) {
+      setAuthMessage(`登录状态检查失败：${error.message}`, "error");
+      renderAuth();
+    }
+    return null;
+  }
+}
+
+async function submitAuthLogin(force = false) {
+  const username = String($("#authUsernameInput")?.value || "").trim();
+  const password = String($("#authPasswordInput")?.value || "");
+  if (!username || !password) {
+    setAuthMessage("请输入用户名和密码。", "error");
+    renderAuth();
+    return;
+  }
+  state.auth.busy = true;
+  state.auth.conflict = force ? state.auth.conflict : null;
+  setAuthMessage(force ? "正在强制接管..." : "正在登录...", "idle");
+  renderAuth();
+  try {
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password, force }),
+      cache: "no-store",
+    });
+    const result = await response.json().catch(() => ({}));
+    applyAuthStatus(result);
+    if (result.ok) {
+      addLog("登录", result.code === "AUTH-FORCED" ? `${username} 已强制接管控制权` : `${username} 已登录`);
+    }
+  } catch (error) {
+    setAuthMessage(`登录失败：${error.message}`, "error");
+    renderAuth();
+  } finally {
+    state.auth.busy = false;
+    renderAuth();
+  }
+}
+
+async function logoutAuth() {
+  if (!state.auth.authenticated) {
+    renderAuth();
+    return;
+  }
+  state.auth.busy = true;
+  renderAuth();
+  try {
+    const response = await fetch("/api/auth/logout", { method: "POST", cache: "no-store" });
+    const result = await response.json().catch(() => ({}));
+    applyAuthStatus(result);
+    addLog("登录", "已退出登录，机器人输出已请求安全保持");
+  } catch (error) {
+    addLog("登录", `退出登录失败：${error.message}`);
+  } finally {
+    state.auth.busy = false;
+    renderAuth();
+  }
 }
 
 function clamp(value, min, max) {
@@ -775,9 +967,9 @@ function speedRiskColor(value) {
   return `rgb(${Math.round(245 - 25 * mix)}, ${Math.round(158 - 120 * mix)}, ${Math.round(11 + 27 * mix)})`;
 }
 
-function normalizeJointSpeedDegS(value) {
+function normalizeJointSpeedDegS(value, fallback = state.armControl.maxJointSpeedDegS) {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return state.armControl.maxJointSpeedDegS;
+  if (!Number.isFinite(parsed)) return fallback;
   const stepped = Math.round(parsed / PIPER_JOINT_SPEED_STEP) * PIPER_JOINT_SPEED_STEP;
   return clamp(stepped, PIPER_JOINT_SPEED_MIN, PIPER_JOINT_SPEED_MAX);
 }
@@ -1159,6 +1351,7 @@ function applyInferenceStatus(result) {
 
 function renderInferenceStatus() {
   const info = state.inference;
+  const locked = !state.auth.authenticated;
   const level = INFERENCE_STATUS_LEVELS[info.status] || "idle";
   setStateBadge("#inferenceBadge", INFERENCE_STATUS_LABELS[info.status] || info.status, level);
   const summary = $("#inferenceSummary");
@@ -1172,16 +1365,16 @@ function renderInferenceStatus() {
     }
   }
   const connectButton = $("#inferenceConnectButton");
-  if (connectButton) connectButton.disabled = info.busy;
+  if (connectButton) connectButton.disabled = locked || info.busy;
   const disconnectButton = $("#inferenceDisconnectButton");
-  if (disconnectButton) disconnectButton.disabled = info.busy || !info.connected;
+  if (disconnectButton) disconnectButton.disabled = locked || info.busy || !info.connected;
   const requestButton = $("#requestChunkButton");
-  if (requestButton) requestButton.disabled = info.busy || !info.connected || info.looping;
+  if (requestButton) requestButton.disabled = locked || info.busy || !info.connected || info.looping;
   const executeButton = $("#executeChunkButton");
-  if (executeButton) executeButton.disabled = info.busy || !info.chunkId || info.looping;
+  if (executeButton) executeButton.disabled = locked || info.busy || !info.chunkId || info.looping;
   const enableButton = $("#inferenceEnablePiperButton");
   if (enableButton) {
-    enableButton.disabled = info.busy || state.piperEnableBusy || !piperReady();
+    enableButton.disabled = locked || info.busy || state.piperEnableBusy || !piperReady();
     enableButton.textContent = state.piperEnableBusy ? "使能中" : "使能 Piper";
   }
   renderInferenceMetrics();
@@ -1572,6 +1765,19 @@ function updateJointSpeedFromInput(input, options = {}) {
   if (options.publish !== false && state.armControl.active) {
     scheduleDirectArmPublish();
   }
+  return speed;
+}
+
+function renderPlaybackJointSpeedInput() {
+  const input = $("#playbackJointSpeedInput");
+  if (!input || document.activeElement === input) return;
+  input.value = formatNumber(state.playback.maxJointSpeedDegS, 1);
+}
+
+function updatePlaybackJointSpeedFromInput(input) {
+  const speed = normalizeJointSpeedDegS(input.value, state.playback.maxJointSpeedDegS);
+  state.playback.maxJointSpeedDegS = speed;
+  input.value = formatNumber(speed, 1);
   return speed;
 }
 
@@ -2952,16 +3158,17 @@ function renderLogFilters() {
 
 function renderActionLocks() {
   const busy = state.task !== "idle";
+  const locked = !state.auth.authenticated;
   const runtimeReady = piperReady();
   $$("[data-action]").forEach((button) => {
     const action = button.dataset.action;
     const requiresPiper = action === "homing" || action === "collection" || action === "inference";
-    button.disabled = busy || (requiresPiper && !runtimeReady);
+    button.disabled = locked || busy || (requiresPiper && !runtimeReady);
   });
   const startHomingButton = $("#startHomingButton");
-  if (startHomingButton) startHomingButton.disabled = busy || !runtimeReady;
+  if (startHomingButton) startHomingButton.disabled = locked || busy || !runtimeReady;
   const startCollectionButton = $("#startCollectionButton");
-  if (startCollectionButton) startCollectionButton.disabled = busy || !runtimeReady;
+  if (startCollectionButton) startCollectionButton.disabled = locked || busy || !runtimeReady;
   renderPreflight();
 }
 
@@ -3534,11 +3741,13 @@ function renderPlaybackExecution() {
   const enableButton = $("#playbackEnableRobotButton");
   const replayButton = $("#playbackReplayButton");
   const stopButton = $("#playbackStopButton");
+  const speedInput = $("#playbackJointSpeedInput");
 
   if (enableButton) enableButton.textContent = state.playback.robotEnabled ? "取消回放使能" : "机器人使能";
   if (enableButton) enableButton.disabled = state.playback.busy;
   if (replayButton) replayButton.disabled = !state.playback.robotEnabled || state.playback.running || state.playback.loading || state.playback.busy || !String(state.playback.path || "").trim();
   if (stopButton) stopButton.disabled = !state.playback.running || state.playback.busy;
+  if (speedInput) speedInput.disabled = state.playback.running || state.playback.busy;
 
   const status = state.playback.loading
     ? "数据加载中"
@@ -3606,6 +3815,7 @@ function renderPlayback() {
       ["State", file.loaded ? `${file.stateDim} 维` : "--"],
       ["Action", file.loaded ? `${file.actionDim} 维` : "--"],
       ["当前帧", frame ? `${frame.frameIndex}` : "--"],
+      ["关节速度", `${formatNumber(state.playback.maxJointSpeedDegS, 1)} deg/s`],
       ["状态", state.playback.loadError ? state.playback.loadError : file.loaded ? "已加载 state/action" : "等待加载"],
     ]
       .map(([label, value]) => `<div class="metric-card"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`)
@@ -3613,6 +3823,7 @@ function renderPlayback() {
   }
 
   renderPlaybackExecution();
+  renderPlaybackJointSpeedInput();
   renderPlaybackCharts();
 }
 
@@ -3656,6 +3867,8 @@ async function startPlaybackRun() {
     return;
   }
   if (state.playback.busy) return;
+  const playbackSpeedInput = $("#playbackJointSpeedInput");
+  const maxJointSpeedDegS = playbackSpeedInput ? updatePlaybackJointSpeedFromInput(playbackSpeedInput) : state.playback.maxJointSpeedDegS;
   state.playback.busy = true;
   state.playback.lastError = "";
   renderPlayback();
@@ -3669,12 +3882,12 @@ async function startPlaybackRun() {
   try {
     const result = await requestPlaybackAction("start", {
       path: state.playback.path,
-      maxJointSpeedDegS: state.armControl.maxJointSpeedDegS,
+      maxJointSpeedDegS,
     });
     state.playback.elapsedSec = 0;
     state.playback.durationSec = Number(result.durationSec) || file.durationSec;
     state.playback.status = "running";
-    addLog("数采", `数据回放开始：${file.name}`);
+    addLog("数采", `数据回放开始：${file.name} / ${formatNumber(maxJointSpeedDegS, 1)} deg/s`);
     setPlaybackRunning(true);
     await refreshPlaybackStatus({ silent: true });
   } catch (error) {
@@ -6031,6 +6244,19 @@ function renderLidarCloudStatus() {
 }
 
 function bindEvents() {
+  $("#authLoginForm").addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitAuthLogin(false);
+  });
+  $("#authForceButton").addEventListener("click", () => submitAuthLogin(true));
+  $("#authPauseButton").addEventListener("click", () => {
+    const active = authActiveUserLabel(state.auth.conflict);
+    state.auth.conflict = null;
+    setAuthMessage(`已暂停登录，等待 ${active} 退出。`, "idle");
+    renderAuth();
+  });
+  $("#authLogoutButton").addEventListener("click", logoutAuth);
+
   $$(".nav-item").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
   $$("[data-view-jump]").forEach((button) => button.addEventListener("click", () => showView(button.dataset.viewJump)));
 
@@ -6147,6 +6373,13 @@ function bindEvents() {
         requestPlaybackAction("stop").catch((error) => addLog("数采", `数据回放路径变更停止失败：${error.message}`));
       }
       setPlaybackRunning(false);
+      renderPlayback();
+    });
+  }
+  const playbackJointSpeedInput = $("#playbackJointSpeedInput");
+  if (playbackJointSpeedInput) {
+    playbackJointSpeedInput.addEventListener("input", (event) => {
+      updatePlaybackJointSpeedFromInput(event.currentTarget);
       renderPlayback();
     });
   }
@@ -6349,6 +6582,7 @@ function init() {
   const activePanel = $(".view.is-active");
   document.body.dataset.activeView = activePanel ? activePanel.dataset.viewPanel : "self-check";
   bindEvents();
+  renderAuth();
   renderHealth();
   renderSelfCheck();
   renderAdvice();
@@ -6357,6 +6591,7 @@ function init() {
   renderInferenceStatus();
   renderInferenceMask();
   refreshInferenceStatus();
+  refreshAuthStatus({ silent: true });
   loadInferenceChassisLimits();
   renderPreflight();
   renderDeviceBaseMetrics();
@@ -6395,6 +6630,7 @@ function init() {
   fetchPiperJointStates();
   syncClock();
   window.setInterval(syncClock, 1000);
+  window.setInterval(() => refreshAuthStatus({ silent: true }), 5000);
   window.setInterval(() => runBackgroundPoll(() => fetchPiperRuntimeStatus({ silent: true })), 3000);
   window.setInterval(() => runBackgroundPoll(() => fetchLiftingRuntimeStatus({ silent: true })), 3000);
   window.setInterval(() => runBackgroundPoll(() => fetchChassisRuntimeStatus({ silent: true })), 3000);

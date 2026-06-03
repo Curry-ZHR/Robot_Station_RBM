@@ -5,10 +5,12 @@ import mimetypes
 import os
 import threading
 import time
+from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from modules.auth import get_auth_manager
 from modules.control.chassis import chassis_limits, publish_chassis_velocity, stop_chassis
 from modules.control.lifting import (
     clear_lifting_error,
@@ -45,6 +47,7 @@ from modules.self_check.ros_check.ros_daemon import ensure_ros_daemon
 ROOT_DIR = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = ROOT_DIR / "frontend"
 LOGGER = get_logger()
+AUTH_COOKIE = "robot_station_session"
 
 
 def log_check_result(result):
@@ -194,6 +197,18 @@ def inference_result_status(result):
     return mapping.get(code, 500)
 
 
+def auth_result_status(result):
+    if result.get("ok"):
+        return 200
+    mapping = {
+        "AUTH-CONFLICT": 409,
+        "AUTH-INVALID": 401,
+        "AUTH-REQUIRED": 401,
+        "AUTH-REVOKED": 401,
+    }
+    return mapping.get(result.get("code", ""), 401)
+
+
 def playback_control_status(result):
     if result.get("ok"):
         return 200
@@ -224,6 +239,43 @@ def robot_model_error_status(error):
     return 500
 
 
+def release_operator_outputs(reason):
+    """Stop running tasks and hold motion outputs during operator handoff.
+
+    This deliberately does not publish Piper enable=false. Disabling torque can
+    make the arms drop; handoff only asks existing controllers to hold/stop.
+    """
+
+    LOGGER.warning("Operator session handoff: %s", reason)
+    results = {}
+    try:
+        results["inference"] = get_inference_manager().disconnect()
+    except Exception as exc:
+        results["inference"] = {"ok": False, "detail": str(exc)}
+        LOGGER.error("Inference handoff stop failed: %s", exc)
+    try:
+        results["playback"] = get_playback_manager().stop(reason=reason)
+    except Exception as exc:
+        results["playback"] = {"ok": False, "detail": str(exc)}
+        LOGGER.error("Playback handoff stop failed: %s", exc)
+    try:
+        results["piperHold"] = publish_joint_targets({"hold": True})
+    except Exception as exc:
+        results["piperHold"] = {"ok": False, "detail": str(exc)}
+        LOGGER.error("Piper handoff hold failed: %s", exc)
+    try:
+        results["chassisStop"] = stop_chassis({})
+    except Exception as exc:
+        results["chassisStop"] = {"ok": False, "detail": str(exc)}
+        LOGGER.error("Chassis handoff stop failed: %s", exc)
+    try:
+        results["liftingStop"] = stop_lifting({})
+    except Exception as exc:
+        results["liftingStop"] = {"ok": False, "detail": str(exc)}
+        LOGGER.error("Lifting handoff stop failed: %s", exc)
+    return results
+
+
 class RobotStationHandler(SimpleHTTPRequestHandler):
     server_version = "RobotStationHTTP/0.1"
 
@@ -237,10 +289,84 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
+    def auth_token(self):
+        cookie_header = self.headers.get("Cookie", "")
+        if not cookie_header:
+            return None
+        cookie = SimpleCookie()
+        try:
+            cookie.load(cookie_header)
+        except Exception:
+            return None
+        morsel = cookie.get(AUTH_COOKIE)
+        return morsel.value if morsel is not None else None
+
+    def auth_cookie_header(self, token=None, max_age=None):
+        parts = [f"{AUTH_COOKIE}={token or ''}", "Path=/", "SameSite=Lax", "HttpOnly"]
+        if max_age is not None:
+            parts.append(f"Max-Age={int(max_age)}")
+        return "; ".join(parts)
+
+    def require_operator(self):
+        ok, result = get_auth_manager().require_operator(self.auth_token())
+        if not ok:
+            self.write_json(result, status=auth_result_status(result))
+            return False
+        return True
+
+    def handle_auth_get(self, action):
+        if action in ("", "status", "heartbeat"):
+            result = get_auth_manager().status(self.auth_token())
+            self.write_json(result, status=auth_result_status(result) if not result.get("authenticated") else 200)
+            return
+        self.write_json({"ok": False, "code": "AUTH-ACTION", "detail": f"Unsupported auth action: {action}"}, status=404)
+
+    def handle_auth_post(self, action):
+        if action in ("status", "heartbeat"):
+            result = get_auth_manager().status(self.auth_token())
+            self.write_json(result, status=auth_result_status(result) if not result.get("authenticated") else 200)
+            return
+
+        if action == "login":
+            payload = self.read_json_body()
+            client = self.client_address[0] if self.client_address else ""
+            result, token = get_auth_manager().login(
+                payload.get("username"),
+                payload.get("password"),
+                force=bool(payload.get("force")),
+                client=client,
+            )
+            if result.get("ok") and result.get("code") == "AUTH-FORCED":
+                result["handoff"] = release_operator_outputs(f"forced login by {result.get('user')}")
+            headers = {}
+            if token:
+                max_age = max(3600, int(result.get("timeoutSec") or 0))
+                headers["Set-Cookie"] = self.auth_cookie_header(token, max_age=max_age)
+            self.write_json(result, status=auth_result_status(result), headers=headers)
+            return
+
+        if action == "logout":
+            status = get_auth_manager().status(self.auth_token(), touch=False)
+            result = get_auth_manager().logout(self.auth_token())
+            if status.get("authenticated"):
+                result["handoff"] = release_operator_outputs(f"logout by {status.get('user')}")
+            self.write_json(
+                result,
+                status=auth_result_status(result),
+                headers={"Set-Cookie": self.auth_cookie_header("", max_age=0)},
+            )
+            return
+
+        self.write_json({"ok": False, "code": "AUTH-ACTION", "detail": f"Unsupported auth action: {action}"}, status=404)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
             self.write_json({"status": "ok"})
+            return
+        auth_action = api_tail(parsed.path, "/api/auth")
+        if auth_action is not None:
+            self.handle_auth_get(auth_action)
             return
         if parsed.path == "/api/control/lifting/limits":
             self.write_json(lifting_limits())
@@ -575,6 +701,12 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        auth_action = api_tail(parsed.path, "/api/auth")
+        if auth_action is not None:
+            self.handle_auth_post(auth_action)
+            return
+        if parsed.path.startswith("/api/") and not self.require_operator():
+            return
         if parsed.path == "/api/control/piper/joint-targets":
             self.handle_piper_joint_targets()
             return
@@ -674,11 +806,13 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             return "model/stl"
         return mimetypes.guess_type(path)[0] or "application/octet-stream"
 
-    def write_json(self, payload, status=200):
+    def write_json(self, payload, status=200, headers=None):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -762,6 +896,7 @@ class ChassisControlHandler(RobotStationHandler):
     def end_headers(self):
         origin = self.headers.get("Origin") or "*"
         self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Max-Age", "600")
@@ -784,6 +919,8 @@ class ChassisControlHandler(RobotStationHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/") and not self.require_operator():
+            return
         chassis_action = api_tail(parsed.path, "/api/control/chassis")
         if chassis_action is None:
             self.write_json({"error": "not_found", "path": parsed.path}, status=404)
@@ -804,6 +941,7 @@ class LiftingControlHandler(RobotStationHandler):
     def end_headers(self):
         origin = self.headers.get("Origin") or "*"
         self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Max-Age", "600")
@@ -826,6 +964,8 @@ class LiftingControlHandler(RobotStationHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/") and not self.require_operator():
+            return
         lifting_action = api_tail(parsed.path, "/api/control/lifting")
         if lifting_action is None:
             self.write_json({"error": "not_found", "path": parsed.path}, status=404)
@@ -846,6 +986,7 @@ class PiperControlHandler(RobotStationHandler):
     def end_headers(self):
         origin = self.headers.get("Origin") or "*"
         self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Max-Age", "600")
@@ -865,6 +1006,8 @@ class PiperControlHandler(RobotStationHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path.startswith("/api/") and not self.require_operator():
+            return
         if parsed.path == "/api/control/piper/joint-targets":
             self.handle_piper_joint_targets()
             return

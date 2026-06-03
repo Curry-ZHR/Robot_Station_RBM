@@ -9,6 +9,9 @@ data/
 output/playwright/
 .xdp_*
 
+# Local operator credentials
+config/users.txt
+
 # Local browser automation artifacts
 .playwright-cli/
 

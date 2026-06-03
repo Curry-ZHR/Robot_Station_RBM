@@ -1,0 +1,8 @@
+# username:password
+# Copy this file to config/users.txt and replace the placeholder passwords.
+zhuzl:change-me
+caizj:change-me
+xiangpc:change-me
+liuyc:change-me
+liuxy:change-me
+wusr:change-me
