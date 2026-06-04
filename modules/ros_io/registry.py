@@ -160,6 +160,14 @@ READ_TOPICS = {
         stale_after_sec=0.2,
         description="Latest web chassis action mirrored for data collection as JSON.",
     ),
+    "action_chassis_smoothed": TopicReadSpec(
+        key="action_chassis_smoothed",
+        name="Dataset smoothed chassis action",
+        topic="/action/chassis_smoothed",
+        message_type="std_msgs/msg/String",
+        stale_after_sec=0.2,
+        description="Smoothed chassis action published by the chassis velocity smoother as JSON.",
+    ),
     "action_lifting": TopicReadSpec(
         key="action_lifting",
         name="Dataset lifting action",

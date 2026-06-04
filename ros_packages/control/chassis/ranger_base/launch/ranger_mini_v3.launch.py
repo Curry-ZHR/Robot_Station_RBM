@@ -7,6 +7,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.substitutions import LaunchConfiguration, Command
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -30,6 +31,70 @@ def generate_launch_description():
                                                  description='Simulation control loop update rate')
     robot_model_arg = DeclareLaunchArgument('robot_model', default_value='ranger_mini_v3',
                                            description='robot motion model')
+    chassis_smoother_publish_rate_hz_arg = DeclareLaunchArgument(
+        'chassis_smoother_publish_rate_hz',
+        default_value='50',
+        description='Chassis velocity smoother publish rate in Hz'
+    )
+    chassis_smoother_linear_accel_mps2_arg = DeclareLaunchArgument(
+        'chassis_smoother_linear_accel_mps2',
+        default_value='0.25',
+        description='Maximum chassis linear acceleration in m/s^2'
+    )
+    chassis_smoother_linear_decel_mps2_arg = DeclareLaunchArgument(
+        'chassis_smoother_linear_decel_mps2',
+        default_value='0.60',
+        description='Maximum chassis linear deceleration in m/s^2'
+    )
+    chassis_smoother_angular_accel_rad_s2_arg = DeclareLaunchArgument(
+        'chassis_smoother_angular_accel_rad_s2',
+        default_value='0.80',
+        description='Maximum chassis angular acceleration in rad/s^2'
+    )
+    chassis_smoother_angular_decel_rad_s2_arg = DeclareLaunchArgument(
+        'chassis_smoother_angular_decel_rad_s2',
+        default_value='1.50',
+        description='Maximum chassis angular deceleration in rad/s^2'
+    )
+    chassis_smoother_watchdog_timeout_sec_arg = DeclareLaunchArgument(
+        'chassis_smoother_watchdog_timeout_sec',
+        default_value='0.25',
+        description='Seconds without target velocity before smoothing toward zero'
+    )
+    chassis_smoother_linear_deadband_mps_arg = DeclareLaunchArgument(
+        'chassis_smoother_linear_deadband_mps',
+        default_value='0.005',
+        description='Linear velocity deadband in m/s'
+    )
+    chassis_smoother_angular_deadband_rad_s_arg = DeclareLaunchArgument(
+        'chassis_smoother_angular_deadband_rad_s',
+        default_value='0.01',
+        description='Angular velocity deadband in rad/s'
+    )
+    chassis_smoothed_action_topic_arg = DeclareLaunchArgument(
+        'chassis_smoothed_action_topic',
+        default_value='/action/chassis_smoothed',
+        description='Dataset action topic for smoothed chassis velocity JSON'
+    )
+    chassis_velocity_smoother_node = launch_ros.actions.Node(
+        package='ranger_base',
+        executable='chassis_velocity_smoother_node',
+        name='chassis_velocity_smoother',
+        output='screen',
+        parameters=[{
+            'target_topic': '/cmd_vel',
+            'output_topic': '/cmd_vel_smoothed',
+            'smoothed_action_topic': launch.substitutions.LaunchConfiguration('chassis_smoothed_action_topic'),
+            'publish_rate_hz': ParameterValue(LaunchConfiguration('chassis_smoother_publish_rate_hz'), value_type=float),
+            'linear_accel_mps2': ParameterValue(LaunchConfiguration('chassis_smoother_linear_accel_mps2'), value_type=float),
+            'linear_decel_mps2': ParameterValue(LaunchConfiguration('chassis_smoother_linear_decel_mps2'), value_type=float),
+            'angular_accel_rad_s2': ParameterValue(LaunchConfiguration('chassis_smoother_angular_accel_rad_s2'), value_type=float),
+            'angular_decel_rad_s2': ParameterValue(LaunchConfiguration('chassis_smoother_angular_decel_rad_s2'), value_type=float),
+            'watchdog_timeout_sec': ParameterValue(LaunchConfiguration('chassis_smoother_watchdog_timeout_sec'), value_type=float),
+            'linear_deadband_mps': ParameterValue(LaunchConfiguration('chassis_smoother_linear_deadband_mps'), value_type=float),
+            'angular_deadband_rad_s': ParameterValue(LaunchConfiguration('chassis_smoother_angular_deadband_rad_s'), value_type=float),
+        }],
+    )
     ranger_base_node = launch_ros.actions.Node(
         package='ranger_base',
         executable='ranger_base_node',
@@ -45,7 +110,10 @@ def generate_launch_description():
                 'publish_odom_tf': launch.substitutions.LaunchConfiguration('publish_odom_tf'),
                 'update_rate': launch.substitutions.LaunchConfiguration('update_rate'),
                 'robot_model': launch.substitutions.LaunchConfiguration('robot_model'),
-        }])
+        }],
+        remappings=[
+            ('/cmd_vel', '/cmd_vel_smoothed'),
+        ])
 
     return LaunchDescription([
         use_sim_time_arg,
@@ -57,5 +125,15 @@ def generate_launch_description():
         publish_odom_tf_arg,
         update_rate_arg,
         robot_model_arg,
+        chassis_smoother_publish_rate_hz_arg,
+        chassis_smoother_linear_accel_mps2_arg,
+        chassis_smoother_linear_decel_mps2_arg,
+        chassis_smoother_angular_accel_rad_s2_arg,
+        chassis_smoother_angular_decel_rad_s2_arg,
+        chassis_smoother_watchdog_timeout_sec_arg,
+        chassis_smoother_linear_deadband_mps_arg,
+        chassis_smoother_angular_deadband_rad_s_arg,
+        chassis_smoothed_action_topic_arg,
+        chassis_velocity_smoother_node,
         ranger_base_node
     ])

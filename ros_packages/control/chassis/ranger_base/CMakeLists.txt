@@ -51,7 +51,14 @@ add_executable(ranger_base_node
 target_link_libraries(ranger_base_node ugv_sdk)
 ament_target_dependencies(ranger_base_node ${DEPENDENCIES})
 
-install(TARGETS ranger_base_node
+add_executable(chassis_velocity_smoother_node
+    src/chassis_velocity_smoother_node.cpp)
+
+ament_target_dependencies(chassis_velocity_smoother_node ${DEPENDENCIES})
+
+install(TARGETS
+  ranger_base_node
+  chassis_velocity_smoother_node
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch

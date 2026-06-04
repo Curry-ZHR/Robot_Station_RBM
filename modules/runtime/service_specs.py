@@ -57,6 +57,15 @@ def default_service_specs():
     chassis_robot_model = os.environ.get("CHASSIS_ROBOT_MODEL", "ranger_mini_v3")
     chassis_update_rate = os.environ.get("CHASSIS_UPDATE_RATE", "50")
     chassis_publish_odom_tf = os.environ.get("CHASSIS_PUBLISH_ODOM_TF", "false")
+    chassis_smoother_publish_rate_hz = os.environ.get("CHASSIS_SMOOTHER_PUBLISH_RATE_HZ", "50")
+    chassis_smoother_linear_accel_mps2 = os.environ.get("CHASSIS_SMOOTHER_LINEAR_ACCEL_MPS2", "0.25")
+    chassis_smoother_linear_decel_mps2 = os.environ.get("CHASSIS_SMOOTHER_LINEAR_DECEL_MPS2", "0.60")
+    chassis_smoother_angular_accel_rad_s2 = os.environ.get("CHASSIS_SMOOTHER_ANGULAR_ACCEL_RAD_S2", "0.80")
+    chassis_smoother_angular_decel_rad_s2 = os.environ.get("CHASSIS_SMOOTHER_ANGULAR_DECEL_RAD_S2", "1.50")
+    chassis_smoother_watchdog_timeout_sec = os.environ.get("CHASSIS_SMOOTHER_WATCHDOG_TIMEOUT_SEC", "0.25")
+    chassis_smoother_linear_deadband_mps = os.environ.get("CHASSIS_SMOOTHER_LINEAR_DEADBAND_MPS", "0.005")
+    chassis_smoother_angular_deadband_rad_s = os.environ.get("CHASSIS_SMOOTHER_ANGULAR_DEADBAND_RAD_S", "0.01")
+    chassis_smoothed_action_topic = os.environ.get("CHASSIS_SMOOTHED_ACTION_TOPIC", "/action/chassis_smoothed")
     return {
         "piper": ManagedServiceSpec(
             key="piper",
@@ -127,6 +136,15 @@ def default_service_specs():
                 f"robot_model:={chassis_robot_model}",
                 f"update_rate:={chassis_update_rate}",
                 f"publish_odom_tf:={chassis_publish_odom_tf}",
+                f"chassis_smoother_publish_rate_hz:={chassis_smoother_publish_rate_hz}",
+                f"chassis_smoother_linear_accel_mps2:={chassis_smoother_linear_accel_mps2}",
+                f"chassis_smoother_linear_decel_mps2:={chassis_smoother_linear_decel_mps2}",
+                f"chassis_smoother_angular_accel_rad_s2:={chassis_smoother_angular_accel_rad_s2}",
+                f"chassis_smoother_angular_decel_rad_s2:={chassis_smoother_angular_decel_rad_s2}",
+                f"chassis_smoother_watchdog_timeout_sec:={chassis_smoother_watchdog_timeout_sec}",
+                f"chassis_smoother_linear_deadband_mps:={chassis_smoother_linear_deadband_mps}",
+                f"chassis_smoother_angular_deadband_rad_s:={chassis_smoother_angular_deadband_rad_s}",
+                f"chassis_smoothed_action_topic:={chassis_smoothed_action_topic}",
             ),
             setup_scripts=(
                 f"/opt/ros/{ros_distro}/setup.bash",
@@ -134,6 +152,7 @@ def default_service_specs():
             ),
             cleanup_process_patterns=(
                 "ranger_base_node",
+                "chassis_velocity_smoother_node",
                 "ros2 launch ranger_base",
                 "ranger_mini_v3.launch.py",
                 "ranger_mini_v2.launch.py",
