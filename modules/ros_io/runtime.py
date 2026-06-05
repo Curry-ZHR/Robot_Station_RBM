@@ -12,8 +12,13 @@ class RosRuntimeError(RuntimeError):
 
 
 class RosRuntime:
-    def __init__(self, node_name="robot_station_bridge"):
+    _context_lock = threading.RLock()
+    _managed_context = False
+    _active_managed_runtimes = 0
+
+    def __init__(self, node_name="robot_station_bridge", num_threads=2):
         self.node_name = node_name
+        self.num_threads = max(1, int(num_threads))
         self._lock = threading.RLock()
         self._rclpy = None
         self._executor = None
@@ -44,12 +49,16 @@ class RosRuntime:
                 return
 
             rclpy = self._import_rclpy()
-            if not rclpy.ok():
-                rclpy.init(args=None)
-                self._owns_context = True
+            with RosRuntime._context_lock:
+                if not rclpy.ok():
+                    rclpy.init(args=None)
+                    RosRuntime._managed_context = True
+                if RosRuntime._managed_context:
+                    RosRuntime._active_managed_runtimes += 1
+                    self._owns_context = True
 
             self._node = rclpy.create_node(self.node_name)
-            self._executor = self._executor_class(num_threads=2)
+            self._executor = self._executor_class(num_threads=self.num_threads)
             self._executor.add_node(self._node)
             self._thread = threading.Thread(
                 target=self._spin,
@@ -57,7 +66,7 @@ class RosRuntime:
                 daemon=True,
             )
             self._thread.start()
-            LOGGER.info("ROS runtime started with node %s", self.node_name)
+            LOGGER.info("ROS runtime started with node %s using %d executor thread(s)", self.node_name, self.num_threads)
 
     def _spin(self):
         try:
@@ -137,11 +146,21 @@ class RosRuntime:
                     self._node.destroy_node()
                 except Exception:
                     LOGGER.exception("Failed to destroy ROS bridge node")
-            if self._rclpy is not None and self._owns_context and self._rclpy.ok():
-                try:
-                    self._rclpy.shutdown()
-                except Exception:
-                    LOGGER.exception("Failed to shut down rclpy")
+            if self._rclpy is not None and self._owns_context:
+                with RosRuntime._context_lock:
+                    RosRuntime._active_managed_runtimes = max(0, RosRuntime._active_managed_runtimes - 1)
+                    should_shutdown = (
+                        RosRuntime._active_managed_runtimes == 0
+                        and RosRuntime._managed_context
+                        and self._rclpy.ok()
+                    )
+                    if should_shutdown:
+                        try:
+                            self._rclpy.shutdown()
+                            RosRuntime._managed_context = False
+                        except Exception:
+                            LOGGER.exception("Failed to shut down rclpy")
+                self._owns_context = False
 
             self._executor = None
             self._node = None

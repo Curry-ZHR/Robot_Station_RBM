@@ -189,11 +189,9 @@ def default_service_specs():
             name="RoboSense LiDAR ROS",
             command=(
                 "ros2",
-                "run",
+                "launch",
                 "rslidar_sdk",
-                "rslidar_sdk_node",
-                "--ros-args",
-                "-p",
+                "filtered_start.py",
                 f"config_path:={lidar_config}",
             ),
             setup_scripts=(
@@ -202,7 +200,9 @@ def default_service_specs():
             ),
             cleanup_process_patterns=(
                 "rslidar_sdk_node",
-                "ros2 run rslidar_sdk",
+                "rslidar_self_filter_node",
+                "ros2 launch rslidar_sdk",
+                "filtered_start.py",
             ),
             cwd=str(lidar_ws),
             shutdown_timeout_sec=8.0,

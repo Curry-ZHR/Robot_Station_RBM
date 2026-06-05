@@ -445,6 +445,13 @@
     <child link="lidar_link"/>
     <axis xyz="0 0 0"/>
   </joint>
+  <link name="rslidar"/>
+  <joint name="rslidar_frame_joint" type="fixed">
+    <origin rpy="0 0 0" xyz="0 0 0"/>
+    <parent link="lidar_link"/>
+    <child link="rslidar"/>
+    <axis xyz="0 0 0"/>
+  </joint>
   <link name="lifting_link">
     <inertial>
       <origin rpy="0 0 0" xyz="0.071327 0.00032985 0.10599"/>

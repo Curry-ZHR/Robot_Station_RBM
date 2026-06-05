@@ -14,8 +14,9 @@ lidar:
       start_angle: 0               #Start angle of point cloud
       end_angle: 360               #End angle of point cloud 
       wait_for_difop: true
-      min_distance: 0.2            #Minimum distance of point cloud
-      max_distance: 200            #Maximum distance of point cloud
+      min_distance: 0              #0/0 disables user distance clipping for the raw topic
+      max_distance: 0              #The SDK still keeps the LiDAR decoder validity range
+      dense_points: false          #Keep invalid raw returns as NaN placeholders
       use_lidar_clock: false       #True--Use the lidar clock as the message timestamp
                                    #False-- Use the system clock as the timestamp
       pcap_path: /home/robosense/lidar.pcap #The path of pcap file
@@ -23,5 +24,14 @@ lidar:
       ros_frame_id: rslidar                           #Frame id of packet message and point cloud message
       ros_recv_packet_topic: /rslidar_packets          #Topic used to receive lidar packets from ROS
       ros_send_packet_topic: /rslidar_packets          #Topic used to send lidar packets through ROS
-      ros_send_point_cloud_topic: /rslidar_points      #Topic used to send point cloud through ROS
+      ros_send_point_cloud_topic: /rslidar_points_raw  #Unfiltered point cloud topic
 
+self_filter:
+  enabled: true
+  input_topic: /rslidar_points_raw
+  output_topic: /rslidar_points
+  drop_nonfinite: true
+  boxes:
+    - name: rear_body
+      min: [-0.5, -0.35, -1]
+      max: [0, 0.35, 2]

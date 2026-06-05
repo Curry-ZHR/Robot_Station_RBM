@@ -49,6 +49,7 @@ const state = {
     status: "stopped",
   },
   cameraFrames: {
+    previewEnabled: false,
     feeds: [],
     error: "",
     updatedAt: null,
@@ -61,6 +62,7 @@ const state = {
     status: "stopped",
   },
   lidarCloud: {
+    previewEnabled: false,
     clouds: [],
     error: "",
     sequence: null,
@@ -84,6 +86,7 @@ const state = {
     geometry: null,
     material: null,
     points: null,
+    pointRadius: 0.014,
     controls: null,
     animationFrame: null,
     resizeObserver: null,
@@ -134,6 +137,20 @@ const state = {
     modelRoot: null,
     displayRoot: null,
     joints: {},
+    colliders: [],
+    meshCache: new Map(),
+    lidarOverlay: {
+      enabled: false,
+      points: null,
+      geometry: null,
+      material: null,
+      frameObject: null,
+      lastFrameId: "",
+      sequence: null,
+      activeRequest: false,
+      frameTimer: null,
+      error: "",
+    },
     poseSyncEnabled: false,
     controls: null,
     animationFrame: null,
@@ -225,6 +242,8 @@ const state = {
     ageMs: null,
     stale: true,
     receivedAt: null,
+    lastOkAt: null,
+    polling: false,
   },
   piperActions: {
     left: {
@@ -250,6 +269,7 @@ const state = {
       ageMs: null,
       stale: true,
       receivedAt: null,
+      lastOkAt: null,
     },
     right: {
       ok: false,
@@ -260,8 +280,10 @@ const state = {
       ageMs: null,
       stale: true,
       receivedAt: null,
+      lastOkAt: null,
     },
   },
+  piperJointPolling: false,
 };
 
 const healthItems = [
@@ -470,7 +492,7 @@ const piperJointTopicKeys = {
   right: "piper_right_joint_state_double",
 };
 
-const piperJointPollIntervalMs = 50;
+const piperJointPollIntervalMs = 100;
 const piperJointReadWaitSec = 0.04;
 
 const piperEnableActionKey = "piper_enable_all";
@@ -512,6 +534,10 @@ const chassisKeyboardDriveMap = {
 const CHASSIS_DRIVE_REPEAT_MS = 100;
 const CHASSIS_STOP_REPEAT_COUNT = 3;
 const CHASSIS_STOP_REPEAT_MS = 25;
+const feedbackLatencyThresholdsMs = {
+  okMax: 100,
+  warnMax: 300,
+};
 
 const liftPreviewLimits = {
   min: 0.05,
@@ -577,9 +603,15 @@ const cameraFeedLayout = [
 ];
 const cameraFrameIntervalMs = 180;
 const cameraFrameStaggerMs = 70;
-const lidarCloudKey = "rslidar_points";
+const lidarViewerCloudKey = "rslidar_points";
+const robotLidarCloudKey = "rslidar_points_raw";
 const lidarFrameIntervalMs = 120;
+const lidarFrameWaitSec = 0.15;
 const lidarMaxPoints = 60000;
+const lidarPointRadiusMin = 0.006;
+const lidarPointRadiusMax = 0.035;
+const lidarPointRadiusStep = 0.001;
+const lidarPointRadiusDefault = 0.014;
 const threeModuleUrl = "./vendor/three.module.min.js";
 const colladaLoaderUrl = "./vendor/ColladaLoader.js";
 const stlLoaderUrl = "./vendor/STLLoader.js";
@@ -1407,9 +1439,55 @@ function allActionsReady() {
   return actionReady("left") && actionReady("right");
 }
 
+function feedbackAgeMs(feedback) {
+  const parsed = Number(feedback && feedback.ageMs);
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : null;
+}
+
+function feedbackLatencyLevelFromAge(ageMs) {
+  const parsed = Number(ageMs);
+  if (!Number.isFinite(parsed)) return "idle";
+  if (parsed <= feedbackLatencyThresholdsMs.okMax) return "ok";
+  if (parsed <= feedbackLatencyThresholdsMs.warnMax) return "warn";
+  return "danger";
+}
+
+function feedbackLatencyText(ageMs) {
+  const parsed = Number(ageMs);
+  if (!Number.isFinite(parsed)) return "--";
+  if (parsed < 1000) return `${Math.max(0, Math.round(parsed))} ms`;
+  return `${(parsed / 1000).toFixed(1)} s`;
+}
+
+function feedbackLatencyMeta(feedback, options = {}) {
+  const ready = options.ready !== false;
+  const stoppedText = options.stoppedText || "未启动";
+  const waitingText = options.waitingText || "等待反馈";
+  if (!ready) {
+    return { level: "idle", text: stoppedText, detail: "无反馈", inlineText: stoppedText, ageMs: null };
+  }
+  if (!feedback || !feedback.ok) {
+    if (feedback && feedback.code === "ROS-R-WAITING") {
+      return { level: "idle", text: waitingText, detail: "无数据", inlineText: waitingText, ageMs: null };
+    }
+    if (feedback && feedback.code === "ROS-R-NODATA") {
+      return { level: "warn", text: "无反馈", detail: "无数据", inlineText: "无反馈", ageMs: null };
+    }
+    return { level: "danger", text: "异常", detail: "不可用", inlineText: "反馈异常", ageMs: null };
+  }
+  const ageMs = feedbackAgeMs(feedback);
+  if (ageMs === null) {
+    const level = feedback.stale ? "warn" : "ok";
+    return { level, text: "已接收", detail: "无延迟数据", inlineText: "已接收", ageMs: null };
+  }
+  const level = feedbackLatencyLevelFromAge(ageMs);
+  const detail = feedbackLatencyText(ageMs);
+  return { level, text: "延迟", detail, inlineText: `延迟 ${detail}`, ageMs };
+}
+
 function feedbackLevel(feedback) {
-  if (feedback.ok && feedback.stale) return "warn";
-  if (feedback.ok) return "ok";
+  if (!feedback) return "idle";
+  if (feedback && feedback.ok) return feedbackLatencyMeta(feedback).level;
   if (feedback.code === "ROS-R-WAITING") return "idle";
   if (feedback.code === "ROS-R-NODATA") return "warn";
   return "danger";
@@ -1419,11 +1497,7 @@ function armStatusText(side) {
   const feedback = state.piperJoints[side];
   if (!feedback) return { level: "idle", text: "等待反馈", detail: "无数据" };
   if (feedback.ok) {
-    return {
-      level: feedback.stale ? "warn" : "ok",
-      text: feedback.stale ? "反馈延迟" : "在线",
-      detail: feedback.ageMs === null ? "已接收" : `${feedback.ageMs} ms`,
-    };
+    return feedbackLatencyMeta(feedback);
   }
   if (!piperReady()) {
     return { level: "idle", text: "未启动", detail: "等待 Piper" };
@@ -1442,8 +1516,13 @@ function renderArmCompareBadge() {
   const statuses = sides.map((side) => armStatusText(side));
   const onlineCount = statuses.filter((status) => status.level === "ok").length;
   const warnCount = statuses.filter((status) => status.level === "warn").length;
+  const dangerCount = statuses.filter((status) => status.level === "danger").length;
   if (onlineCount === sides.length) {
     setStateBadge("#armCompareBadge", "双臂在线", "ok");
+    return;
+  }
+  if (dangerCount > 0) {
+    setStateBadge("#armCompareBadge", dangerCount === sides.length ? "反馈超时" : "部分超时", "danger");
     return;
   }
   if (onlineCount > 0 || warnCount > 0) {
@@ -1918,9 +1997,9 @@ function resumeBackgroundPollsNow() {
     fetchLiftingRuntimeStatus({ silent: true });
     fetchChassisRuntimeStatus({ silent: true });
     fetchCameraRuntimeStatus({ silent: true });
-    fetchCameraFrames({ silent: true });
+    if (state.cameraFrames.previewEnabled) fetchCameraFrames({ silent: true });
     fetchLidarRuntimeStatus({ silent: true });
-    fetchLidarCloudStatus({ silent: true });
+    if (state.lidarCloud.previewEnabled) fetchLidarCloudStatus({ silent: true });
     fetchLiftingMotorState();
     fetchChassisState({ silent: true });
     fetchPiperJointStates();
@@ -2024,11 +2103,18 @@ function chassisMotionModeText(mode) {
 }
 
 function chassisFeedbackLevel() {
-  if (state.chassisState.ok && state.chassisState.stale) return "warn";
-  if (state.chassisState.ok) return "ok";
+  if (state.chassisState.ok) return feedbackLatencyMeta(state.chassisState, { ready: chassisReady() }).level;
   if (state.chassisState.code === "ROS-R-WAITING") return "idle";
   if (state.chassisState.code === "ROS-R-NODATA") return "warn";
   return chassisReady() ? "danger" : "idle";
+}
+
+function chassisFeedbackMeta() {
+  return feedbackLatencyMeta(state.chassisState, {
+    ready: chassisReady(),
+    stoppedText: "未启动",
+    waitingText: "等待",
+  });
 }
 
 function renderDeviceBaseMetrics() {
@@ -2049,22 +2135,14 @@ function renderDeviceBaseMetrics() {
   const bmsVoltage = Number(battery.voltage);
   const voltage = Number.isFinite(bmsVoltage) ? bmsVoltage : systemVoltage;
   const motionMode = system.motion_mode !== undefined ? system.motion_mode : state.chassisState.motion?.motion_mode;
-  const feedbackText = state.chassisState.ok
-    ? state.chassisState.stale
-      ? "延迟"
-      : "在线"
-    : chassisReady()
-      ? "等待"
-      : "未启动";
-  const feedbackLevel = chassisFeedbackLevel();
+  const feedbackMeta = chassisFeedbackMeta();
+  const feedbackLevel = feedbackMeta.level;
   const odomText = state.chassisState.odom
-    ? state.chassisState.stale
-      ? "延迟"
-      : "在线"
+    ? feedbackMeta.inlineText
     : "未接入";
   const serviceExternal = state.chassisRuntime.status === "external";
-  const serviceText = serviceExternal ? "外部运行" : chassisReady() ? feedbackText : "未启动";
-  const serviceLevel = serviceExternal ? "warn" : chassisReady() ? feedbackLevel : "idle";
+  const serviceText = serviceExternal ? "外部运行" : chassisReady() ? "运行中" : "未启动";
+  const serviceLevel = serviceExternal ? "warn" : chassisReady() ? "ok" : "idle";
   setStatusText("#baseControlText", serviceText, serviceLevel);
   setStatusText("#baseOdomText", odomText, state.chassisState.odom ? feedbackLevel : "idle");
   $$("[data-device-drive]").forEach((button) => {
@@ -2100,11 +2178,18 @@ function setStatusText(selector, text, level) {
 }
 
 function liftingFeedbackLevel() {
-  if (state.liftingState.ok && state.liftingState.stale) return "warn";
-  if (state.liftingState.ok) return "ok";
+  if (state.liftingState.ok) return feedbackLatencyMeta(state.liftingState, { ready: liftingReady() }).level;
   if (state.liftingState.code === "ROS-R-WAITING") return "idle";
   if (state.liftingState.code === "ROS-R-NODATA") return "warn";
   return liftingReady() ? "danger" : "idle";
+}
+
+function liftingFeedbackMeta() {
+  return feedbackLatencyMeta(state.liftingState, {
+    ready: liftingReady(),
+    stoppedText: "未启动",
+    waitingText: "等待",
+  });
 }
 
 function robotAgeText(ageMs) {
@@ -2197,10 +2282,11 @@ function robotFeedbackSyncMeta() {
   const liveLevels = [armStatusText("left").level, armStatusText("right").level, chassisFeedbackLevel(), liftingFeedbackLevel()];
   const okCount = liveLevels.filter((level) => level === "ok").length;
   const warnCount = liveLevels.filter((level) => level === "warn").length;
-  const level = okCount === liveLevels.length ? "ok" : okCount || warnCount ? "warn" : "idle";
+  const dangerCount = liveLevels.filter((level) => level === "danger").length;
+  const level = dangerCount ? "danger" : okCount === liveLevels.length ? "ok" : okCount || warnCount ? "warn" : "idle";
   return {
     level,
-    text: level === "ok" ? "反馈同步" : level === "warn" ? "部分反馈" : "等待反馈",
+    text: level === "ok" ? "反馈同步" : level === "warn" ? "部分反馈" : level === "danger" ? "反馈超时" : "等待反馈",
   };
 }
 
@@ -2234,6 +2320,178 @@ function renderRobotPoseSyncButton() {
   button.title = meta.title;
   button.classList.toggle("is-active", meta.active);
   button.setAttribute("aria-pressed", meta.active ? "true" : "false");
+}
+
+function robotLidarFrameName() {
+  const frames = state.robotModel.metadata?.frames || {};
+  return frames.lidar || "rslidar";
+}
+
+function normalizedFrameName(value) {
+  return String(value || "").replace(/^\/+/, "");
+}
+
+function robotLidarFrameMatches(frameName = state.robotModel.lidarOverlay.lastFrameId || "") {
+  const frameId = normalizedFrameName(frameName);
+  if (!frameId) return true;
+  const target = normalizedFrameName(robotLidarFrameName());
+  return frameId === target || (frameId === "rslidar" && target === "lidar_link") || (frameId === "lidar_link" && target === "rslidar");
+}
+
+function robotLidarButtonMeta() {
+  const robot = state.robotModel;
+  const overlay = robot.lidarOverlay;
+  const busy = robot.status === "fetching" || robot.status === "loading";
+  if (!robot.hasModel) {
+    return {
+      text: busy ? "加载中" : "LiDAR",
+      title: busy ? "整机模型加载中" : "点击后先加载整机模型，再显示 LiDAR 点云",
+      disabled: busy || !robot.selectedKey,
+      active: false,
+      level: busy ? "warn" : "idle",
+    };
+  }
+  if (busy) {
+    return { text: "LiDAR", title: "整机模型加载中", disabled: true, active: overlay.enabled, level: "warn" };
+  }
+  if (overlay.enabled && overlay.error) {
+    return {
+      text: "LiDAR 无数据",
+      title: overlay.error,
+      disabled: false,
+      active: true,
+      level: "warn",
+    };
+  }
+  if (overlay.enabled && overlay.lastFrameId && !robotLidarFrameMatches()) {
+    return {
+      text: "Frame 不匹配",
+      title: `点云 frame=${overlay.lastFrameId || "--"}，模型 frame=${robotLidarFrameName()}`,
+      disabled: false,
+      active: true,
+      level: "warn",
+    };
+  }
+  if (overlay.enabled) {
+    return {
+      text: overlay.lastFrameId ? "LiDAR 显示中" : "等待 LiDAR",
+      title: `点云挂载到 ${robotLidarFrameName()}`,
+      disabled: false,
+      active: true,
+      level: overlay.lastFrameId ? "ok" : "warn",
+    };
+  }
+  return { text: "LiDAR", title: "在整机视图显示点云", disabled: false, active: false, level: "idle" };
+}
+
+function renderRobotLidarButton() {
+  const button = $("#robotLidarToggleButton");
+  if (!button) return;
+  const meta = robotLidarButtonMeta();
+  button.disabled = meta.disabled;
+  button.textContent = meta.text;
+  button.title = meta.title;
+  button.classList.toggle("is-active", meta.active);
+  button.classList.toggle("is-warn", meta.level === "warn");
+  button.classList.toggle("is-danger", meta.level === "danger");
+  button.setAttribute("aria-pressed", meta.active ? "true" : "false");
+}
+
+function findRobotFrameObject(frameName) {
+  const robot = state.robotModel;
+  if (!robot.modelRoot || !frameName) return null;
+  const link = robot.modelRoot.links?.[frameName];
+  if (link) return link;
+  const exact = robot.modelRoot.getObjectByName(frameName);
+  if (exact) return exact;
+  let found = null;
+  robot.modelRoot.traverse((object) => {
+    if (!found && (object.name === frameName || object.userData?.name === frameName || object.userData?.urdfName === frameName)) {
+      found = object;
+    }
+  });
+  return found;
+}
+
+function ensureRobotLidarOverlay() {
+  const robot = state.robotModel;
+  const overlay = robot.lidarOverlay;
+  if (!robot.hasModel || !robot.three || !robot.modelRoot) {
+    overlay.error = "请先加载整机模型";
+    renderRobotLidarButton();
+    return false;
+  }
+
+  const frameName = robotLidarFrameName();
+  const frameObject = findRobotFrameObject(frameName) || findRobotFrameObject("rslidar") || findRobotFrameObject("lidar_link");
+  if (!frameObject) {
+    overlay.error = `URDF 中未找到 LiDAR frame: ${frameName}`;
+    renderRobotLidarButton();
+    return false;
+  }
+
+  if (!overlay.points) {
+    const THREE = robot.three;
+    overlay.geometry = new THREE.BufferGeometry();
+    overlay.material = new THREE.PointsMaterial({
+      size: lidarPointRadiusToMaterialSize(state.lidarCloud.pointRadius),
+      map: createLidarPointTexture(THREE),
+      vertexColors: true,
+      sizeAttenuation: true,
+      transparent: true,
+      alphaTest: 0.12,
+      opacity: 0.92,
+      depthWrite: false,
+    });
+    overlay.points = new THREE.Points(overlay.geometry, overlay.material);
+    overlay.points.name = "robot_lidar_point_cloud";
+    overlay.points.frustumCulled = false;
+  }
+
+  if (overlay.points.parent !== frameObject) {
+    frameObject.add(overlay.points);
+  }
+  overlay.frameObject = frameObject;
+  overlay.error = "";
+  overlay.points.visible = overlay.enabled;
+  renderRobotLidarButton();
+  return true;
+}
+
+async function setRobotLidarOverlayEnabled(enabled) {
+  const overlay = state.robotModel.lidarOverlay;
+  overlay.enabled = Boolean(enabled);
+  overlay.error = "";
+  renderRobotLidarButton();
+  if (overlay.enabled) {
+    if (!state.robotModel.hasModel) {
+      addLog("模型", "正在加载整机模型以显示 LiDAR 点云");
+      const model = await loadRobotModel();
+      if (!model) {
+        overlay.enabled = false;
+        overlay.error = "整机模型加载失败";
+        renderRobotLidarButton();
+        return false;
+      }
+    }
+    if (!ensureRobotLidarOverlay()) {
+      overlay.enabled = false;
+      renderRobotLidarButton();
+      return false;
+    }
+    requestRobotLidarFrame();
+    addLog("模型", `整机 LiDAR 点云已显示：${robotLidarFrameName()}`);
+  } else {
+    if (overlay.points) overlay.points.visible = false;
+    window.clearTimeout(overlay.frameTimer);
+    addLog("模型", "整机 LiDAR 点云已隐藏");
+  }
+  renderRobotViewStatus();
+  return overlay.enabled;
+}
+
+function toggleRobotLidarOverlay() {
+  setRobotLidarOverlayEnabled(!state.robotModel.lidarOverlay.enabled);
 }
 
 function robotMeshProgressValue() {
@@ -2310,6 +2568,7 @@ function renderRobotModelControls() {
     button.textContent = robot.status === "loading" ? "加载中" : "加载";
   }
   renderRobotPoseSyncButton();
+  renderRobotLidarButton();
 }
 
 async function fetchRobotModels(options = {}) {
@@ -2368,12 +2627,31 @@ function resizeRobotViewer() {
   robot.renderer.setSize(width, height, false);
 }
 
+function viewerDragMode(event) {
+  return event.shiftKey || event.button === 1 || event.button === 2 ? "pan" : "rotate";
+}
+
+function panViewerTarget(camera, controls, surface, dx, dy) {
+  if (!camera || !controls?.target || !surface) return;
+  const rect = surface.getBoundingClientRect();
+  const height = Math.max(rect.height, 1);
+  const fovRad = ((Number(camera.fov) || 58) * Math.PI) / 180;
+  const panScale = (2 * controls.distance * Math.tan(fovRad / 2)) / height;
+  camera.updateMatrixWorld();
+  const right = camera.position.clone().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+  const up = camera.position.clone().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+  controls.target.addScaledVector(right, -dx * panScale);
+  controls.target.addScaledVector(up, dy * panScale);
+}
+
 function bindRobotViewerControls(surface) {
   const controls = state.robotModel.controls;
   if (!surface || !controls) return;
 
   surface.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
     controls.dragging = true;
+    controls.dragMode = viewerDragMode(event);
     controls.lastX = event.clientX;
     controls.lastY = event.clientY;
     surface.setPointerCapture(event.pointerId);
@@ -2385,19 +2663,25 @@ function bindRobotViewerControls(surface) {
     const dy = event.clientY - controls.lastY;
     controls.lastX = event.clientX;
     controls.lastY = event.clientY;
-    controls.yaw -= dx * 0.006;
-    controls.pitch = clamp(controls.pitch + dy * 0.006, -1.1, 1.25);
+    if (controls.dragMode === "pan") {
+      panViewerTarget(state.robotModel.camera, controls, surface, dx, dy);
+    } else {
+      controls.yaw -= dx * 0.006;
+      controls.pitch = clamp(controls.pitch + dy * 0.006, -1.1, 1.25);
+    }
     updateRobotCamera();
   });
 
   const release = (event) => {
     controls.dragging = false;
+    controls.dragMode = "rotate";
     if (surface.hasPointerCapture(event.pointerId)) {
       surface.releasePointerCapture(event.pointerId);
     }
   };
   surface.addEventListener("pointerup", release);
   surface.addEventListener("pointercancel", release);
+  surface.addEventListener("contextmenu", (event) => event.preventDefault());
   surface.addEventListener(
     "wheel",
     (event) => {
@@ -2462,6 +2746,7 @@ async function initializeRobotViewer() {
         distance: 7.2,
         target: new THREE.Vector3(0, 0, 0),
         dragging: false,
+        dragMode: "rotate",
         lastX: 0,
         lastY: 0,
       };
@@ -2498,8 +2783,8 @@ function parseRobotUrdfXml(urdfText) {
   return documentXml;
 }
 
-function countRobotVisualMeshes(documentXml) {
-  return Array.from(documentXml.querySelectorAll("link > visual > geometry > mesh")).length;
+function countRobotMeshReferences(documentXml) {
+  return Array.from(documentXml.querySelectorAll("link > visual > geometry > mesh, link > collision > geometry > mesh")).length;
 }
 
 function robotAssetUrl(path) {
@@ -2521,9 +2806,57 @@ function loadWithThreeLoader(loader, url, onProgress) {
   });
 }
 
+function cloneRobotMeshObject(object) {
+  return object.clone(true);
+}
+
+function cachedRobotMeshLoad(loaders, url, extension, onProgress) {
+  const cacheKey = `${extension}:${url}`;
+  const cache = state.robotModel.meshCache;
+  let entry = cache.get(cacheKey);
+  if (!entry) {
+    entry = { promise: null };
+    entry.promise = (async () => {
+      if (extension === "dae") {
+        const collada = await loadWithThreeLoader(loaders.colladaLoader, url, onProgress);
+        return collada.scene;
+      }
+      if (extension === "stl") {
+        const geometry = await loadWithThreeLoader(loaders.stlLoader, url, onProgress);
+        return new loaders.THREE.Mesh(geometry, new loaders.THREE.MeshPhongMaterial());
+      }
+      throw new Error(`不支持的 mesh 格式：${robotAssetName(url)}`);
+    })()
+      .catch((error) => {
+        if (cache.get(cacheKey) === entry) cache.delete(cacheKey);
+        throw error;
+      });
+    cache.set(cacheKey, entry);
+  }
+  return entry.promise.then(cloneRobotMeshObject);
+}
+
+function robotObjectHasAncestor(object, predicate) {
+  let current = object;
+  while (current) {
+    if (predicate(current)) return true;
+    current = current.parent;
+  }
+  return false;
+}
+
 function prepareRobotViewerObject(THREE, object) {
+  const colliders = [];
   object.traverse((child) => {
+    if (child.isURDFCollider) {
+      child.visible = false;
+      child.userData.robotModelRole = "collision";
+      colliders.push(child);
+    }
     if (!child.isMesh) return;
+    if (robotObjectHasAncestor(child, (node) => node.isURDFCollider)) {
+      child.userData.robotModelRole = "collision";
+    }
     child.castShadow = false;
     child.receiveShadow = true;
     const materials = Array.isArray(child.material) ? child.material : [child.material];
@@ -2532,11 +2865,13 @@ function prepareRobotViewerObject(THREE, object) {
       if ("needsUpdate" in material) material.needsUpdate = true;
     });
   });
+  object.userData.collisionLoaded = colliders.length > 0;
+  return colliders;
 }
 
 async function buildRobotModelWithRobotViewerLoader(THREE, URDFLoader, ColladaLoader, STLLoader, model, urdfText) {
   const documentXml = parseRobotUrdfXml(urdfText);
-  const meshTotal = countRobotVisualMeshes(documentXml);
+  const meshTotal = countRobotMeshReferences(documentXml);
   const meshProgress = createRobotMeshProgress(meshTotal);
   const manager = new THREE.LoadingManager();
   const loader = new URDFLoader(manager);
@@ -2546,7 +2881,7 @@ async function buildRobotModelWithRobotViewerLoader(THREE, URDFLoader, ColladaLo
   const meshLoads = [];
 
   loader.parseVisual = true;
-  loader.parseCollision = false;
+  loader.parseCollision = true;
   loader.packages = (packageName) => `/api/robot-model-assets/${encodeURIComponent(model.family)}/${encodeURIComponent(model.key)}`;
   loader.loadMeshCb = (path, _manager, done) => {
     const url = robotAssetUrl(path);
@@ -2554,15 +2889,7 @@ async function buildRobotModelWithRobotViewerLoader(THREE, URDFLoader, ColladaLo
     const extension = robotAssetExtension(url);
     meshProgress.note(name);
     const meshLoad = (async () => {
-      if (extension === "dae") {
-        const collada = await loadWithThreeLoader(colladaLoader, url, (event) => meshProgress.note(name, event));
-        return collada.scene;
-      }
-      if (extension === "stl") {
-        const geometry = await loadWithThreeLoader(stlLoader, url, (event) => meshProgress.note(name, event));
-        return new THREE.Mesh(geometry, new THREE.MeshPhongMaterial());
-      }
-      throw new Error(`不支持的 mesh 格式：${robotAssetName(path)}`);
+      return cachedRobotMeshLoad({ THREE, colladaLoader, stlLoader }, url, extension, (event) => meshProgress.note(name, event));
     })()
       .then((object) => {
         done(object, null);
@@ -2580,15 +2907,15 @@ async function buildRobotModelWithRobotViewerLoader(THREE, URDFLoader, ColladaLo
   const root = loader.parse(urdfText, urdfBaseUrl);
   root.name = model.key || root.robotName || "robot_model";
   await Promise.all(meshLoads);
-  prepareRobotViewerObject(THREE, root);
+  const colliders = prepareRobotViewerObject(THREE, root);
   setRobotLoadProgress({
     active: true,
     value: 94,
     label: "生成关节结构",
-    detail: "Robot Viewer URDFLoader 已完成 link / joint 层级",
+    detail: "Robot Viewer URDFLoader 已完成 link / joint / collision 层级",
     level: "warn",
   });
-  return { root, joints: root.joints || {} };
+  return { root, joints: root.joints || {}, colliders };
 }
 
 function frameRobotModelInViewer(modelRoot) {
@@ -2754,19 +3081,25 @@ async function loadRobotModel(key = state.robotModel.selectedKey) {
       detail: "Robot Viewer URDFLoader 正在读取模型",
       level: "warn",
     });
-    const { root, joints } = await buildRobotModelWithRobotViewerLoader(THREE, URDFLoader, ColladaLoader, STLLoader, model, urdfText);
+    const { root, joints, colliders } = await buildRobotModelWithRobotViewerLoader(THREE, URDFLoader, ColladaLoader, STLLoader, model, urdfText);
 
+    if (state.robotModel.lidarOverlay.points?.parent) {
+      state.robotModel.lidarOverlay.points.parent.remove(state.robotModel.lidarOverlay.points);
+      state.robotModel.lidarOverlay.frameObject = null;
+    }
     if (state.robotModel.modelRoot) {
       state.robotModel.displayRoot.remove(state.robotModel.modelRoot);
     }
     state.robotModel.displayRoot.add(root);
     state.robotModel.modelRoot = root;
     state.robotModel.joints = joints;
+    state.robotModel.colliders = colliders;
     state.robotModel.metadata = model;
     state.robotModel.loadedKey = key;
     state.robotModel.hasModel = true;
     if (state.robotModel.poseSyncEnabled) updateRobotModelTransforms();
     frameRobotModelInViewer(root);
+    if (state.robotModel.lidarOverlay.enabled) ensureRobotLidarOverlay();
     setRobotLoadProgress({
       active: false,
       value: 100,
@@ -2826,14 +3159,12 @@ function renderRobotViewStatus() {
 
   const leftArm = armStatusText("left");
   const rightArm = armStatusText("right");
-  const chassisLevel = chassisFeedbackLevel();
-  const liftLevel = liftingFeedbackLevel();
-  const chassisText = state.chassisState.ok
-    ? state.chassisState.stale ? "延迟" : "在线"
-    : chassisReady() ? "等待" : "未启动";
-  const liftText = state.liftingState.ok
-    ? state.liftingState.stale ? "延迟" : "在线"
-    : liftingReady() ? "等待" : "未启动";
+  const chassisMeta = chassisFeedbackMeta();
+  const liftMeta = liftingFeedbackMeta();
+  const chassisLevel = chassisMeta.level;
+  const liftLevel = liftMeta.level;
+  const chassisText = chassisMeta.inlineText;
+  const liftText = liftMeta.inlineText;
   const actualHeight = Number(state.liftingState.heightM);
   const odom = state.chassisState.odom || {};
   const linearX = nestedNumber(odom, ["twist", "twist", "linear", "x"]);
@@ -2982,25 +3313,14 @@ function renderLiftPreview() {
   const powerText = Number.isFinite(voltage) && Number.isFinite(current)
     ? `${voltage.toFixed(0)} V / ${current.toFixed(2)} A`
     : "--";
-  const age = Number(state.liftingState.ageMs);
-  const ageText = Number.isFinite(age) ? `${Math.round(age)} ms` : "--";
-  const actualMetaText = state.liftingState.ok
-    ? state.liftingState.stale
-      ? `延迟 ${ageText}`
-      : `反馈 ${ageText}`
-    : "等待反馈";
+  const feedbackMeta = liftingFeedbackMeta();
+  const actualMetaText = feedbackMeta.inlineText;
   const reachText = state.liftingState.ok ? (state.liftingState.reachTarget ? "已到位" : "运动中") : "--";
   const serviceExternal = state.liftingRuntime.status === "external";
   const serviceText = serviceExternal ? "外部运行" : liftingReady() ? "运行中" : "未启动";
   const serviceLevel = serviceExternal ? "warn" : liftingReady() ? "ok" : "idle";
-  const feedbackLevel = liftingFeedbackLevel();
-  const feedbackText = state.liftingState.ok
-    ? state.liftingState.stale
-      ? "延迟"
-      : "在线"
-    : liftingReady()
-      ? "等待"
-      : "未启动";
+  const feedbackLevel = feedbackMeta.level;
+  const feedbackText = feedbackMeta.inlineText;
   const limitActive = Boolean(state.liftingState.upLimit || state.liftingState.downLimit);
   const limitText = !state.liftingState.ok ? "未知" : state.liftingState.upLimit ? "上限位" : state.liftingState.downLimit ? "下限位" : "正常";
   const limitLevel = !state.liftingState.ok ? "idle" : limitActive ? "warn" : "ok";
@@ -3023,6 +3343,8 @@ function renderLiftPreview() {
     const node = $(selector);
     if (node) node.textContent = text;
   });
+  const actualMeta = $("#liftActualValue");
+  if (actualMeta) actualMeta.className = `latency-text ${feedbackLevel}`;
 
   const heightInput = $("#liftHeightInput");
   if (heightInput) {
@@ -3055,7 +3377,6 @@ function renderLiftPreview() {
   const carriage = $("#liftGaugeCarriage");
   if (carriage) carriage.style.bottom = `clamp(16px, ${percent}%, calc(100% - 16px))`;
 
-  setStateBadge("#liftStateBadge", feedbackText, feedbackLevel);
   setStatusText("#liftServiceText", serviceText, serviceLevel);
   setStatusText("#liftInitText", state.liftingState.initState ? "完成" : "未完成", state.liftingState.initState ? "ok" : "warn");
   setStatusText("#liftFeedbackText", feedbackText, feedbackLevel);
@@ -5124,27 +5445,60 @@ async function fetchLiftingMotorState() {
   }
 }
 
+function elapsedSince(timestamp, fallback = null) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.round(Date.now() - value));
+}
+
+function chassisHasCachedState() {
+  return Boolean(state.chassisState.system || state.chassisState.motion || state.chassisState.battery || state.chassisState.odom);
+}
+
 function applyChassisStatePayloads(results) {
   const byKind = {};
   results.forEach((item) => {
     byKind[item.kind] = item.payload;
   });
   const okPayloads = Object.values(byKind).filter((payload) => payload && payload.ok);
-  state.chassisState.system = byKind.system && byKind.system.ok ? byKind.system.data || null : null;
-  state.chassisState.motion = byKind.motion && byKind.motion.ok ? byKind.motion.data || null : null;
-  state.chassisState.battery = byKind.battery && byKind.battery.ok ? byKind.battery.data || null : null;
-  state.chassisState.odom = byKind.odom && byKind.odom.ok ? byKind.odom.data || null : null;
-  state.chassisState.ok = okPayloads.length > 0;
-  state.chassisState.code = state.chassisState.ok
-    ? okPayloads.some((payload) => payload.stale) ? "ROS-R-STALE" : "ROS-R-OK"
-    : (byKind.system && byKind.system.code) || "ROS-R-NODATA";
-  state.chassisState.detail = state.chassisState.ok
-    ? "底盘反馈在线。"
-    : (byKind.system && byKind.system.detail) || "等待底盘反馈。";
-  state.chassisState.stale = !state.chassisState.ok || okPayloads.every((payload) => payload.stale);
-  const ages = okPayloads.map((payload) => Number(payload.ageMs)).filter(Number.isFinite);
-  state.chassisState.ageMs = ages.length ? Math.max(...ages) : null;
-  state.chassisState.receivedAt = okPayloads.find((payload) => payload.receivedAt)?.receivedAt || null;
+  const failedPayloads = Object.values(byKind).filter((payload) => payload && !payload.ok);
+  const hadCachedState = chassisHasCachedState();
+
+  Object.entries(chassisTopicKeys).forEach(([kind]) => {
+    const payload = byKind[kind];
+    if (payload && payload.ok) {
+      state.chassisState[kind] = payload.data || null;
+    }
+  });
+
+  if (okPayloads.length > 0) {
+    const ages = okPayloads.map((payload) => Number(payload.ageMs)).filter(Number.isFinite);
+    const ageMs = ages.length ? Math.max(...ages) : elapsedSince(state.chassisState.lastOkAt, state.chassisState.ageMs);
+    const hasStalePayload = okPayloads.some((payload) => payload.stale);
+    const hasFailedPayload = failedPayloads.length > 0;
+    state.chassisState.ok = true;
+    state.chassisState.code = hasStalePayload || hasFailedPayload ? "ROS-R-STALE" : "ROS-R-OK";
+    state.chassisState.detail = hasFailedPayload ? "底盘反馈部分读取失败，保留上一帧。" : "底盘反馈在线。";
+    state.chassisState.stale = hasStalePayload || hasFailedPayload;
+    state.chassisState.ageMs = ageMs;
+    state.chassisState.receivedAt = okPayloads.find((payload) => payload.receivedAt)?.receivedAt || state.chassisState.receivedAt;
+    state.chassisState.lastOkAt = Number.isFinite(ageMs) ? Date.now() - ageMs : Date.now();
+  } else if (hadCachedState) {
+    const failedPayload = failedPayloads.find((payload) => payload.detail);
+    state.chassisState.ok = true;
+    state.chassisState.code = "ROS-R-STALE";
+    state.chassisState.detail = failedPayload && failedPayload.detail ? `${failedPayload.detail}，保留上一帧。` : "底盘反馈本轮读取失败，保留上一帧。";
+    state.chassisState.stale = true;
+    state.chassisState.ageMs = elapsedSince(state.chassisState.lastOkAt, state.chassisState.ageMs);
+  } else {
+    const failedPayload = failedPayloads.find((payload) => payload.detail || payload.code);
+    state.chassisState.ok = false;
+    state.chassisState.code = (failedPayload && failedPayload.code) || "ROS-R-NODATA";
+    state.chassisState.detail = (failedPayload && failedPayload.detail) || "等待底盘反馈。";
+    state.chassisState.stale = true;
+    state.chassisState.ageMs = null;
+    state.chassisState.receivedAt = null;
+  }
   renderDeviceBaseMetrics();
 }
 
@@ -5171,14 +5525,22 @@ async function fetchChassisTopic(kind, key) {
 }
 
 async function fetchChassisState(options = {}) {
-  const results = await Promise.all(
-    Object.entries(chassisTopicKeys).map(([kind, key]) => fetchChassisTopic(kind, key)),
-  );
-  applyChassisStatePayloads(results);
-  if (!options.silent && !state.chassisState.ok) {
-    addLog("底盘", state.chassisState.detail);
+  if (state.chassisState.polling) {
+    return null;
   }
-  return results;
+  state.chassisState.polling = true;
+  try {
+    const results = await Promise.all(
+      Object.entries(chassisTopicKeys).map(([kind, key]) => fetchChassisTopic(kind, key)),
+    );
+    applyChassisStatePayloads(results);
+    if (!options.silent && !state.chassisState.ok) {
+      addLog("底盘", state.chassisState.detail);
+    }
+    return results;
+  } finally {
+    state.chassisState.polling = false;
+  }
 }
 
 function chassisBaseValue(key, fallback) {
@@ -5488,11 +5850,26 @@ function commandLiftRelative(direction) {
   return commandLiftHeight(state.liftPreview.mode);
 }
 
+function markPiperJointFeedbackDelayed(feedback, detail) {
+  const hasCachedPositions = Array.isArray(feedback.positions) && feedback.positions.length > 0;
+  if (!hasCachedPositions) return false;
+  feedback.ok = true;
+  feedback.code = "ROS-R-STALE";
+  feedback.detail = detail;
+  feedback.stale = true;
+  feedback.ageMs = elapsedSince(feedback.lastOkAt, feedback.ageMs);
+  return true;
+}
+
 function applyPiperJointPayload(side, payload) {
   const feedback = state.piperJoints[side];
   if (!feedback) return;
 
   if (!payload || !payload.ok) {
+    const detail = payload && payload.detail
+      ? `${payload.detail}，保留上一帧。`
+      : `${piperArmLabels[side]}关节反馈本轮读取失败，保留上一帧。`;
+    if (markPiperJointFeedbackDelayed(feedback, detail)) return;
     feedback.ok = false;
     feedback.code = payload && payload.code ? payload.code : "ROS-R-ERROR";
     feedback.detail = payload && payload.detail ? payload.detail : `${piperArmLabels[side]}关节反馈读取失败。`;
@@ -5507,16 +5884,31 @@ function applyPiperJointPayload(side, payload) {
   const data = payload.data || {};
   const names = Array.isArray(data.name) ? data.name.map((name) => String(name)) : [];
   const positions = Array.isArray(data.position) ? data.position : [];
-  feedback.ok = positions.length > 0;
-  feedback.code = feedback.ok ? payload.code || "ROS-R-OK" : "ROS-R-NODATA";
-  feedback.detail = feedback.ok ? payload.detail || "" : `${piperArmLabels[side]} JointState 中没有 position 数据。`;
+  if (!positions.length) {
+    const detail = `${piperArmLabels[side]} JointState 中没有 position 数据，保留上一帧。`;
+    if (markPiperJointFeedbackDelayed(feedback, detail)) return;
+    feedback.ok = false;
+    feedback.code = "ROS-R-NODATA";
+    feedback.detail = `${piperArmLabels[side]} JointState 中没有 position 数据。`;
+    feedback.names = [];
+    feedback.positions = [];
+    feedback.ageMs = null;
+    feedback.stale = true;
+    feedback.receivedAt = payload.receivedAt || null;
+    return;
+  }
+  const ageMs = Number.isFinite(Number(payload.ageMs)) ? Number(payload.ageMs) : null;
+  feedback.ok = true;
+  feedback.code = payload.code || "ROS-R-OK";
+  feedback.detail = payload.detail || "";
   feedback.names = names;
   feedback.positions = positions;
   feedback.velocity = Array.isArray(data.velocity) ? data.velocity : [];
   feedback.effort = Array.isArray(data.effort) ? data.effort : [];
-  feedback.ageMs = Number.isFinite(Number(payload.ageMs)) ? Number(payload.ageMs) : null;
+  feedback.ageMs = ageMs;
   feedback.stale = Boolean(payload.stale);
   feedback.receivedAt = payload.receivedAt || null;
+  feedback.lastOkAt = Number.isFinite(ageMs) ? Date.now() - ageMs : Date.now();
   feedback.topic = payload.topic || "";
 }
 
@@ -5526,34 +5918,42 @@ function renderPiperJointFeedback() {
 }
 
 async function fetchPiperJointStates() {
-  const entries = Object.entries(piperJointTopicKeys);
-  const results = await Promise.all(
-    entries.map(async ([side, key]) => {
-      try {
-        const response = await fetch(`/api/ros/topics/${key}?wait=${piperJointReadWaitSec}`, { cache: "no-store" });
-        const payload = await response.json();
-        if (!response.ok && !payload.code) {
-          payload.ok = false;
-          payload.code = `HTTP-${response.status}`;
-          payload.detail = `HTTP ${response.status}`;
+  if (state.piperJointPolling) {
+    return null;
+  }
+  state.piperJointPolling = true;
+  try {
+    const entries = Object.entries(piperJointTopicKeys);
+    const results = await Promise.all(
+      entries.map(async ([side, key]) => {
+        try {
+          const response = await fetch(`/api/ros/topics/${key}?wait=${piperJointReadWaitSec}`, { cache: "no-store" });
+          const payload = await response.json();
+          if (!response.ok && !payload.code) {
+            payload.ok = false;
+            payload.code = `HTTP-${response.status}`;
+            payload.detail = `HTTP ${response.status}`;
+          }
+          return [side, payload];
+        } catch (error) {
+          return [
+            side,
+            {
+              ok: false,
+              code: "ROS-R-FETCH",
+              detail: error.message,
+            },
+          ];
         }
-        return [side, payload];
-      } catch (error) {
-        return [
-          side,
-          {
-            ok: false,
-            code: "ROS-R-FETCH",
-            detail: error.message,
-          },
-        ];
-      }
-    }),
-  );
+      }),
+    );
 
-  results.forEach(([side, payload]) => applyPiperJointPayload(side, payload));
-  renderPiperJointFeedback();
-  return results;
+    results.forEach(([side, payload]) => applyPiperJointPayload(side, payload));
+    renderPiperJointFeedback();
+    return results;
+  } finally {
+    state.piperJointPolling = false;
+  }
 }
 
 async function requestPiperRuntimeAction(action) {
@@ -5600,6 +6000,57 @@ function mergeCameraFeeds(feeds = []) {
   });
 }
 
+function renderCameraPreviewToggle() {
+  const button = $("#cameraPreviewToggleButton");
+  if (!button) return;
+  const enabled = Boolean(state.cameraFrames.previewEnabled);
+  button.textContent = enabled ? "回显开启" : "回显关闭";
+  button.title = enabled ? "关闭相机图像回显" : "开启相机图像回显";
+  button.classList.toggle("is-active", enabled);
+  button.setAttribute("aria-pressed", enabled ? "true" : "false");
+}
+
+function clearCameraFrameDisplay() {
+  Object.values(state.cameraFrames.frameTimers).forEach((timer) => window.clearTimeout(timer));
+  Object.values(state.cameraFrames.frameObjectUrls).forEach((url) => {
+    if (url) URL.revokeObjectURL(url);
+  });
+  state.cameraFrames.activeRequests = {};
+  state.cameraFrames.frameObjectUrls = {};
+  state.cameraFrames.frameSequences = {};
+  state.cameraFrames.frameTimers = {};
+  state.cameraFrames.feeds = mergeCameraFeeds();
+  state.cameraFrames.error = "";
+  $$("#cameraFrameGrid .camera-frame-card").forEach((card) => {
+    card.classList.remove("has-frame", "is-error", "is-ok", "is-warn", "is-danger");
+    card.classList.add("is-idle");
+    const image = card.querySelector("img[data-camera-frame]");
+    if (image) image.removeAttribute("src");
+    const placeholder = card.querySelector(".camera-frame-placeholder");
+    if (placeholder) placeholder.textContent = "回显关闭";
+  });
+}
+
+function setCameraPreviewEnabled(enabled, options = {}) {
+  const nextEnabled = Boolean(enabled);
+  if (state.cameraFrames.previewEnabled === nextEnabled && !options.force) return;
+  state.cameraFrames.previewEnabled = nextEnabled;
+  renderCameraPreviewToggle();
+  if (!nextEnabled) {
+    clearCameraFrameDisplay();
+    renderCameraFrames();
+    if (!options.silent) addLog("相机", "相机图像回显已关闭");
+    return;
+  }
+  renderCameraFrames();
+  fetchCameraFrames({ silent: true });
+  if (!options.silent) addLog("相机", "相机图像回显已开启");
+}
+
+function toggleCameraPreview() {
+  setCameraPreviewEnabled(!state.cameraFrames.previewEnabled);
+}
+
 function cameraFrameAgeText(feed) {
   const ageMs = Number(feed.ageMs);
   if (!Number.isFinite(ageMs)) return "无帧";
@@ -5608,6 +6059,7 @@ function cameraFrameAgeText(feed) {
 }
 
 function cameraFrameStatus(feed) {
+  if (!state.cameraFrames.previewEnabled) return { text: "关闭", level: "idle" };
   if (!feed.hasFrame) return { text: "无帧", level: "idle" };
   if (feed.stale) return { text: "过期", level: "warn" };
   return { text: "实时", level: "ok" };
@@ -5646,6 +6098,7 @@ function decodeCameraImage(url) {
 }
 
 function scheduleCameraFrame(feed, delayMs = cameraFrameIntervalMs) {
+  if (!state.cameraFrames.previewEnabled) return;
   const key = cameraFeedKey(feed);
   window.clearTimeout(state.cameraFrames.frameTimers[key]);
   state.cameraFrames.frameTimers[key] = window.setTimeout(() => {
@@ -5654,6 +6107,7 @@ function scheduleCameraFrame(feed, delayMs = cameraFrameIntervalMs) {
 }
 
 async function requestCameraFrame(feed) {
+  if (!state.cameraFrames.previewEnabled) return;
   const key = cameraFeedKey(feed);
   if (state.cameraFrames.activeRequests[key]) return;
 
@@ -5680,6 +6134,10 @@ async function requestCameraFrame(feed) {
       throw error;
     }
 
+    if (!state.cameraFrames.previewEnabled) {
+      URL.revokeObjectURL(objectUrl);
+      return;
+    }
     if (!card.isConnected) {
       URL.revokeObjectURL(objectUrl);
       return;
@@ -5705,7 +6163,7 @@ async function requestCameraFrame(feed) {
     }
   } finally {
     delete state.cameraFrames.activeRequests[key];
-    if (card && card.isConnected) {
+    if (state.cameraFrames.previewEnabled && card && card.isConnected) {
       const elapsed = performance.now() - startedAt;
       scheduleCameraFrame(feed, Math.max(40, cameraFrameIntervalMs - elapsed));
     }
@@ -5713,6 +6171,7 @@ async function requestCameraFrame(feed) {
 }
 
 function ensureCameraFrameLoop(feed) {
+  if (!state.cameraFrames.previewEnabled) return;
   const key = cameraFeedKey(feed);
   if (state.cameraFrames.frameTimers[key] || state.cameraFrames.activeRequests[key]) return;
   const index = cameraFeedLayout.findIndex((entry) => cameraFeedKey(entry) === key);
@@ -5733,7 +6192,7 @@ function ensureCameraFrameCard(grid, feed) {
       <article class="preview-card camera-frame-card is-idle" data-feed-key="${escapeHtml(key)}">
         <figure class="camera-frame-visual">
           <img alt="${escapeHtml(feed.label)}" data-camera-frame="${escapeHtml(key)}">
-          <span class="camera-frame-placeholder">等待画面</span>
+          <span class="camera-frame-placeholder">${state.cameraFrames.previewEnabled ? "等待画面" : "回显关闭"}</span>
         </figure>
         <div class="camera-frame-meta">
           <strong>${escapeHtml(feed.label)}</strong>
@@ -5771,7 +6230,7 @@ function updateCameraFrameCard(card, feed) {
   const detail = card.querySelector("p");
   if (detail) {
     const format = feed.format ? String(feed.format) : "compressed";
-    const text = feed.hasFrame ? `${cameraFrameAgeText(feed)} / ${format}` : feed.topic || "";
+    const text = !state.cameraFrames.previewEnabled ? "回显关闭" : feed.hasFrame ? `${cameraFrameAgeText(feed)} / ${format}` : feed.topic || "";
     detail.textContent = text;
     detail.title = feed.topic || "";
   }
@@ -5780,15 +6239,22 @@ function updateCameraFrameCard(card, feed) {
   if (image && image.alt !== feed.label) {
     image.alt = feed.label;
   }
+  const placeholder = card.querySelector(".camera-frame-placeholder");
+  if (placeholder) {
+    placeholder.textContent = state.cameraFrames.previewEnabled ? "等待画面" : "回显关闭";
+  }
 }
 
 function renderCameraFrames() {
   const feeds = state.cameraFrames.feeds.length ? state.cameraFrames.feeds : mergeCameraFeeds();
+  renderCameraPreviewToggle();
   const summary = $("#cameraFeedSummary");
   if (summary) {
     const liveCount = feeds.filter((feed) => feed.hasFrame && !feed.stale).length;
     const frameCount = feeds.filter((feed) => feed.hasFrame).length;
-    summary.textContent = state.cameraFrames.error
+    summary.textContent = !state.cameraFrames.previewEnabled
+      ? "回显关闭"
+      : state.cameraFrames.error
       ? `异常：${state.cameraFrames.error}`
       : `${liveCount} 路实时 / ${frameCount} 路有帧 / 共 ${feeds.length} 路`;
   }
@@ -5815,6 +6281,10 @@ function renderCameraFrames() {
 }
 
 async function fetchCameraFrames(options = {}) {
+  if (!state.cameraFrames.previewEnabled) {
+    renderCameraFrames();
+    return null;
+  }
   try {
     const response = await fetch("/api/sensors/cameras", { cache: "no-store" });
     const payload = await response.json();
@@ -5837,6 +6307,58 @@ async function fetchCameraFrames(options = {}) {
     }
     return null;
   }
+}
+
+function renderLidarPreviewToggle() {
+  const button = $("#lidarPreviewToggleButton");
+  if (!button) return;
+  const enabled = Boolean(state.lidarCloud.previewEnabled);
+  button.textContent = enabled ? "回显开启" : "回显关闭";
+  button.title = enabled ? "关闭 LiDAR 点云回显" : "开启 LiDAR 点云回显";
+  button.classList.toggle("is-active", enabled);
+  button.setAttribute("aria-pressed", enabled ? "true" : "false");
+}
+
+function clearLidarFrameDisplay() {
+  const lidar = state.lidarCloud;
+  window.clearTimeout(lidar.frameTimer);
+  lidar.frameTimer = null;
+  lidar.activeRequest = false;
+  lidar.sequence = null;
+  lidar.clouds = [];
+  lidar.error = "";
+  lidar.hasFrame = false;
+  lidar.pointCount = 0;
+  lidar.sourcePointCount = 0;
+  lidar.ageMs = null;
+  lidar.stale = true;
+  lidar.frameId = "";
+  lidar.receivedAt = null;
+  lidar.frameRate = null;
+  lidar.frameTimes = [];
+  if (lidar.points) lidar.points.visible = false;
+}
+
+function setLidarPreviewEnabled(enabled, options = {}) {
+  const nextEnabled = Boolean(enabled);
+  if (state.lidarCloud.previewEnabled === nextEnabled && !options.force) return;
+  state.lidarCloud.previewEnabled = nextEnabled;
+  renderLidarPreviewToggle();
+  if (!nextEnabled) {
+    clearLidarFrameDisplay();
+    renderLidarCloudStatus();
+    if (!options.silent) addLog("LiDAR", "LiDAR 点云回显已关闭");
+    return;
+  }
+  if (state.lidarCloud.points) state.lidarCloud.points.visible = true;
+  renderLidarCloudStatus();
+  fetchLidarCloudStatus({ silent: true });
+  requestLidarFrame();
+  if (!options.silent) addLog("LiDAR", "LiDAR 点云回显已开启");
+}
+
+function toggleLidarPreview() {
+  setLidarPreviewEnabled(!state.lidarCloud.previewEnabled);
 }
 
 function lidarAgeText(ageMs) {
@@ -5898,7 +6420,9 @@ function bindLidarViewerControls(surface) {
   if (!surface || !controls) return;
 
   surface.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
     controls.dragging = true;
+    controls.dragMode = viewerDragMode(event);
     controls.lastX = event.clientX;
     controls.lastY = event.clientY;
     surface.setPointerCapture(event.pointerId);
@@ -5910,19 +6434,25 @@ function bindLidarViewerControls(surface) {
     const dy = event.clientY - controls.lastY;
     controls.lastX = event.clientX;
     controls.lastY = event.clientY;
-    controls.yaw -= dx * 0.006;
-    controls.pitch = clamp(controls.pitch + dy * 0.006, -1.2, 1.35);
+    if (controls.dragMode === "pan") {
+      panViewerTarget(state.lidarCloud.camera, controls, surface, dx, dy);
+    } else {
+      controls.yaw -= dx * 0.006;
+      controls.pitch = clamp(controls.pitch + dy * 0.006, -1.2, 1.35);
+    }
     updateLidarCamera();
   });
 
   const release = (event) => {
     controls.dragging = false;
+    controls.dragMode = "rotate";
     if (surface.hasPointerCapture(event.pointerId)) {
       surface.releasePointerCapture(event.pointerId);
     }
   };
   surface.addEventListener("pointerup", release);
   surface.addEventListener("pointercancel", release);
+  surface.addEventListener("contextmenu", (event) => event.preventDefault());
   surface.addEventListener(
     "wheel",
     (event) => {
@@ -5963,10 +6493,12 @@ async function initializeLidarViewer() {
 
       const geometry = new THREE.BufferGeometry();
       const material = new THREE.PointsMaterial({
-        size: 0.055,
+        size: lidarPointRadiusToMaterialSize(state.lidarCloud.pointRadius),
+        map: createLidarPointTexture(THREE),
         vertexColors: true,
         sizeAttenuation: true,
         transparent: true,
+        alphaTest: 0.12,
         opacity: 0.96,
       });
       const points = new THREE.Points(geometry, material);
@@ -5985,6 +6517,7 @@ async function initializeLidarViewer() {
         distance: 18,
         target: new THREE.Vector3(0, 0, 0),
         dragging: false,
+        dragMode: "rotate",
         lastX: 0,
         lastY: 0,
       };
@@ -6015,11 +6548,74 @@ async function initializeLidarViewer() {
   return state.lidarCloud.initPromise;
 }
 
-function lidarColor(value, colors, offset) {
-  const t = clamp(value, 0, 1);
-  colors[offset] = clamp(1.45 * t - 0.12, 0.05, 1);
-  colors[offset + 1] = clamp(1.3 - Math.abs(t - 0.55) * 2.1, 0.16, 1);
-  colors[offset + 2] = clamp(1.18 - 1.25 * t, 0.18, 1);
+function normalizeLidarPointRadius(value) {
+  const numeric = Number(value);
+  const fallback = Number.isFinite(state.lidarCloud.pointRadius) ? state.lidarCloud.pointRadius : lidarPointRadiusDefault;
+  const clamped = clamp(Number.isFinite(numeric) ? numeric : fallback, lidarPointRadiusMin, lidarPointRadiusMax);
+  return clamp(Math.round(clamped / lidarPointRadiusStep) * lidarPointRadiusStep, lidarPointRadiusMin, lidarPointRadiusMax);
+}
+
+function lidarPointRadiusToMaterialSize(radius) {
+  return normalizeLidarPointRadius(radius) * 2;
+}
+
+function renderLidarPointRadiusControl() {
+  const radius = normalizeLidarPointRadius(state.lidarCloud.pointRadius);
+  const valueNode = $("#lidarPointRadiusValue");
+  if (valueNode) valueNode.textContent = radius.toFixed(3);
+
+  const input = $("#lidarPointRadiusInput");
+  if (input) {
+    input.min = String(lidarPointRadiusMin);
+    input.max = String(lidarPointRadiusMax);
+    input.step = String(lidarPointRadiusStep);
+    input.value = radius.toFixed(3);
+  }
+}
+
+function setLidarPointRadius(value) {
+  const radius = normalizeLidarPointRadius(value);
+  state.lidarCloud.pointRadius = radius;
+  if (state.lidarCloud.material) {
+    state.lidarCloud.material.size = lidarPointRadiusToMaterialSize(radius);
+    state.lidarCloud.material.needsUpdate = true;
+  }
+  const robotLidarMaterial = state.robotModel.lidarOverlay.material;
+  if (robotLidarMaterial) {
+    robotLidarMaterial.size = lidarPointRadiusToMaterialSize(radius);
+    robotLidarMaterial.needsUpdate = true;
+  }
+  renderLidarPointRadiusControl();
+}
+
+function createLidarPointTexture(THREE) {
+  const size = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const context = canvas.getContext("2d");
+  const center = size / 2;
+  const gradient = context.createRadialGradient(center, center, 0, center, center, center);
+  gradient.addColorStop(0, "rgba(255, 255, 255, 1)");
+  gradient.addColorStop(0.58, "rgba(255, 255, 255, 0.95)");
+  gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, size, size);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  return texture;
+}
+
+function lidarAxisColor(xValue, yValue, zValue, colors, offset) {
+  const x = clamp(xValue, 0, 1);
+  const y = clamp(yValue, 0, 1);
+  const z = clamp(zValue, 0, 1);
+  colors[offset] = clamp(0.16 + 0.84 * x, 0, 1);
+  colors[offset + 1] = clamp(0.16 + 0.84 * y, 0, 1);
+  colors[offset + 2] = clamp(0.22 + 0.78 * z, 0, 1);
 }
 
 function updateLidarFrameRate() {
@@ -6035,11 +6631,7 @@ function updateLidarFrameRate() {
   }
 }
 
-function updateLidarPointCloud(buffer) {
-  const lidar = state.lidarCloud;
-  const THREE = lidar.three;
-  if (!THREE || !lidar.geometry) return;
-
+function buildLidarPointCloudAttributes(buffer) {
   const values = new Float32Array(buffer);
   const count = Math.floor(values.length / 4);
   const positions = new Float32Array(count * 3);
@@ -6050,8 +6642,6 @@ function updateLidarPointCloud(buffer) {
   let maxX = -Infinity;
   let maxY = -Infinity;
   let maxZ = -Infinity;
-  let minIntensity = Infinity;
-  let maxIntensity = -Infinity;
 
   for (let index = 0; index < count; index += 1) {
     const source = index * 4;
@@ -6059,7 +6649,6 @@ function updateLidarPointCloud(buffer) {
     const x = values[source];
     const y = values[source + 1];
     const z = values[source + 2];
-    const intensity = values[source + 3];
     positions[target] = x;
     positions[target + 1] = y;
     positions[target + 2] = z;
@@ -6069,47 +6658,78 @@ function updateLidarPointCloud(buffer) {
     maxX = Math.max(maxX, x);
     maxY = Math.max(maxY, y);
     maxZ = Math.max(maxZ, z);
-    minIntensity = Math.min(minIntensity, intensity);
-    maxIntensity = Math.max(maxIntensity, intensity);
   }
 
-  const useIntensity = maxIntensity > minIntensity;
+  const xRange = maxX > minX ? maxX - minX : 1;
+  const yRange = maxY > minY ? maxY - minY : 1;
   const zRange = maxZ > minZ ? maxZ - minZ : 1;
-  const intensityRange = maxIntensity > minIntensity ? maxIntensity - minIntensity : 1;
   for (let index = 0; index < count; index += 1) {
     const source = index * 4;
     const target = index * 3;
-    const value = useIntensity
-      ? (values[source + 3] - minIntensity) / intensityRange
-      : (values[source + 2] - minZ) / zRange;
-    lidarColor(value, colors, target);
+    lidarAxisColor(
+      (values[source] - minX) / xRange,
+      (values[source + 1] - minY) / yRange,
+      (values[source + 2] - minZ) / zRange,
+      colors,
+      target,
+    );
   }
 
-  const firstFrame = !lidar.hasFrame && count > 0;
-  lidar.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  lidar.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  return { positions, colors, count, minX, minY, minZ, maxX, maxY, maxZ };
+}
+
+function updateLidarPointCloud(buffer) {
+  const lidar = state.lidarCloud;
+  const THREE = lidar.three;
+  if (!THREE || !lidar.geometry) return;
+
+  const cloud = buildLidarPointCloudAttributes(buffer);
+  if (lidar.points) lidar.points.visible = true;
+  const firstFrame = !lidar.hasFrame && cloud.count > 0;
+  lidar.geometry.setAttribute("position", new THREE.BufferAttribute(cloud.positions, 3));
+  lidar.geometry.setAttribute("color", new THREE.BufferAttribute(cloud.colors, 3));
   lidar.geometry.computeBoundingSphere();
 
   if (firstFrame && lidar.controls) {
-    const centerX = (minX + maxX) / 2;
-    const centerY = (minY + maxY) / 2;
-    const centerZ = (minZ + maxZ) / 2;
-    const dx = maxX - minX;
-    const dy = maxY - minY;
-    const dz = maxZ - minZ;
+    const centerX = (cloud.minX + cloud.maxX) / 2;
+    const centerY = (cloud.minY + cloud.maxY) / 2;
+    const centerZ = (cloud.minZ + cloud.maxZ) / 2;
+    const dx = cloud.maxX - cloud.minX;
+    const dy = cloud.maxY - cloud.minY;
+    const dz = cloud.maxZ - cloud.minZ;
     const diagonal = Math.sqrt(dx * dx + dy * dy + dz * dz);
     lidar.controls.target.set(centerX, centerY, centerZ);
     lidar.controls.distance = clamp(diagonal * 1.4, 5, 120);
     updateLidarCamera();
   }
 
-  lidar.hasFrame = count > 0;
+  lidar.hasFrame = cloud.count > 0;
   updateLidarFrameRate();
+}
+
+function updateRobotLidarPointCloud(positions, colors, count) {
+  const robot = state.robotModel;
+  const overlay = robot.lidarOverlay;
+  if (!overlay.enabled) return;
+  if (!robotLidarFrameMatches()) {
+    overlay.error = `点云 frame=${overlay.lastFrameId || "--"} 与模型 frame=${robotLidarFrameName()} 不匹配`;
+    if (overlay.points) overlay.points.visible = false;
+    renderRobotLidarButton();
+    return;
+  }
+  if (!ensureRobotLidarOverlay() || !overlay.geometry || !robot.three) return;
+
+  overlay.geometry.setAttribute("position", new robot.three.BufferAttribute(new Float32Array(positions), 3));
+  overlay.geometry.setAttribute("color", new robot.three.BufferAttribute(new Float32Array(colors), 3));
+  overlay.geometry.computeBoundingSphere();
+  overlay.points.visible = count > 0;
+  overlay.error = "";
+  renderRobotLidarButton();
 }
 
 function applyLidarCloudPayload(payload) {
   const clouds = payload && Array.isArray(payload.clouds) ? payload.clouds : [];
-  const cloud = clouds.find((entry) => entry.key === lidarCloudKey) || clouds[0];
+  const cloud = clouds.find((entry) => entry.key === lidarViewerCloudKey) || clouds[0];
   state.lidarCloud.clouds = clouds;
   if (!cloud) return false;
   state.lidarCloud.hasFrame = Boolean(cloud.hasFrame) || state.lidarCloud.hasFrame;
@@ -6124,10 +6744,15 @@ function applyLidarCloudPayload(payload) {
   state.lidarCloud.sequence = Number.isFinite(Number(cloud.sequence)) ? Number(cloud.sequence) : state.lidarCloud.sequence;
   state.lidarCloud.error = cloud.parseError || (payload.ok ? "" : payload.detail || state.lidarCloud.error);
   renderLidarCloudStatus();
+  renderRobotLidarButton();
   return true;
 }
 
 async function fetchLidarCloudStatus(options = {}) {
+  if (!state.lidarCloud.previewEnabled) {
+    renderLidarCloudStatus();
+    return null;
+  }
   try {
     const response = await fetch("/api/sensors/lidar", { cache: "no-store" });
     const payload = await response.json();
@@ -6149,33 +6774,44 @@ async function fetchLidarCloudStatus(options = {}) {
   }
 }
 
-function lidarFrameUrl() {
+function lidarFrameUrl(key = lidarViewerCloudKey, options = {}) {
   const params = new URLSearchParams({
-    wait: "0.8",
+    wait: String(options.waitSec ?? lidarFrameWaitSec),
     max_points: String(lidarMaxPoints),
     t: String(Date.now()),
   });
-  const sequence = Number(state.lidarCloud.sequence);
+  const sequence = Number(options.afterSequence ?? state.lidarCloud.sequence);
   if (Number.isFinite(sequence)) {
     params.set("after", String(sequence));
   }
-  return `/api/sensors/lidar/${encodeURIComponent(lidarCloudKey)}/frame?${params.toString()}`;
+  return `/api/sensors/lidar/${encodeURIComponent(key)}/frame?${params.toString()}`;
 }
 
 function scheduleLidarFrame(delayMs = lidarFrameIntervalMs) {
+  if (!state.lidarCloud.previewEnabled) return;
   window.clearTimeout(state.lidarCloud.frameTimer);
   state.lidarCloud.frameTimer = window.setTimeout(() => {
     requestLidarFrame();
   }, delayMs);
 }
 
+function scheduleRobotLidarFrame(delayMs = lidarFrameIntervalMs) {
+  const overlay = state.robotModel.lidarOverlay;
+  window.clearTimeout(overlay.frameTimer);
+  if (!overlay.enabled) return;
+  overlay.frameTimer = window.setTimeout(() => {
+    requestRobotLidarFrame();
+  }, delayMs);
+}
+
 async function requestLidarFrame() {
+  if (!state.lidarCloud.previewEnabled) return;
   if (state.lidarCloud.activeRequest) return;
   const startedAt = performance.now();
   state.lidarCloud.activeRequest = true;
   try {
     await initializeLidarViewer();
-    const response = await fetch(lidarFrameUrl(), { cache: "no-store" });
+    const response = await fetch(lidarFrameUrl(lidarViewerCloudKey), { cache: "no-store" });
     const contentType = response.headers.get("Content-Type") || "";
     if (!response.ok || contentType.includes("application/json")) {
       const payload = contentType.includes("application/json") ? await response.json() : null;
@@ -6183,6 +6819,7 @@ async function requestLidarFrame() {
     }
 
     const buffer = await response.arrayBuffer();
+    if (!state.lidarCloud.previewEnabled) return;
     const sequence = Number(response.headers.get("X-Robot-Station-PointCloud-Sequence"));
     const ageMs = Number(response.headers.get("X-Robot-Station-PointCloud-Age-Ms"));
     const stale = response.headers.get("X-Robot-Station-PointCloud-Stale") === "1";
@@ -6195,6 +6832,7 @@ async function requestLidarFrame() {
     state.lidarCloud.sourcePointCount = Number.isFinite(sourcePointCount) ? sourcePointCount : state.lidarCloud.pointCount;
     state.lidarCloud.frameId = response.headers.get("X-Robot-Station-PointCloud-Frame-Id") || state.lidarCloud.frameId;
     state.lidarCloud.error = "";
+    state.robotModel.lidarOverlay.error = "";
     updateLidarPointCloud(buffer);
     renderLidarCloudStatus();
   } catch (error) {
@@ -6208,11 +6846,71 @@ async function requestLidarFrame() {
   }
 }
 
+async function requestRobotLidarFrame() {
+  const overlay = state.robotModel.lidarOverlay;
+  if (!overlay.enabled || overlay.activeRequest) return;
+  if (!ensureRobotLidarOverlay()) return;
+
+  const startedAt = performance.now();
+  overlay.activeRequest = true;
+  try {
+    const response = await fetch(
+      lidarFrameUrl(robotLidarCloudKey, {
+        afterSequence: overlay.sequence,
+        waitSec: lidarFrameWaitSec,
+      }),
+      { cache: "no-store" },
+    );
+    const contentType = response.headers.get("Content-Type") || "";
+    if (!response.ok || contentType.includes("application/json")) {
+      const payload = contentType.includes("application/json") ? await response.json() : null;
+      throw new Error((payload && payload.detail) || `HTTP ${response.status}`);
+    }
+
+    const buffer = await response.arrayBuffer();
+    const sequence = Number(response.headers.get("X-Robot-Station-PointCloud-Sequence"));
+    const frameId = response.headers.get("X-Robot-Station-PointCloud-Frame-Id") || "";
+    overlay.sequence = Number.isFinite(sequence) ? sequence : overlay.sequence;
+    overlay.lastFrameId = frameId;
+    overlay.error = "";
+    const cloud = buildLidarPointCloudAttributes(buffer);
+    updateRobotLidarPointCloud(cloud.positions, cloud.colors, cloud.count);
+  } catch (error) {
+    overlay.error = error.message;
+    if (overlay.points) overlay.points.visible = false;
+    renderRobotLidarButton();
+  } finally {
+    overlay.activeRequest = false;
+    const elapsed = performance.now() - startedAt;
+    const delay = overlay.error ? 1000 : Math.max(60, lidarFrameIntervalMs - elapsed);
+    scheduleRobotLidarFrame(delay);
+  }
+}
+
 function renderLidarCloudStatus() {
   const lidar = state.lidarCloud;
-  const topic = (lidar.clouds[0] && lidar.clouds[0].topic) || "/rslidar_points";
+  const selectedCloud = lidar.clouds.find((entry) => entry.key === lidarViewerCloudKey) || lidar.clouds[0];
+  const topic = (selectedCloud && selectedCloud.topic) || "/rslidar_points";
   const topicNode = $("#lidarCloudTopic");
   if (topicNode) topicNode.textContent = topic;
+  renderLidarPreviewToggle();
+
+  if (!lidar.previewEnabled) {
+    setStateBadge("#lidarCloudStatus", "回显关闭", "idle");
+    const pointCount = $("#lidarPointCount");
+    if (pointCount) pointCount.textContent = "0";
+    const age = $("#lidarFrameAge");
+    if (age) age.textContent = "--";
+    const rate = $("#lidarFrameRate");
+    if (rate) rate.textContent = "--";
+    const frameId = $("#lidarFrameId");
+    if (frameId) frameId.textContent = "--";
+    renderLidarPointRadiusControl();
+    renderRobotLidarButton();
+    const overlay = $("#lidarOverlay");
+    if (overlay) overlay.textContent = "回显关闭";
+    return;
+  }
 
   let badgeText = "等待点云";
   let badgeLevel = "idle";
@@ -6236,6 +6934,8 @@ function renderLidarCloudStatus() {
   if (rate) rate.textContent = Number.isFinite(lidar.frameRate) ? lidar.frameRate.toFixed(1) : "--";
   const frameId = $("#lidarFrameId");
   if (frameId) frameId.textContent = lidar.frameId || "--";
+  renderLidarPointRadiusControl();
+  renderRobotLidarButton();
 
   const overlay = $("#lidarOverlay");
   if (overlay) {
@@ -6299,6 +6999,13 @@ function bindEvents() {
   });
   $("#cameraRuntimeStatus").addEventListener("click", toggleCameraRuntime);
   $("#lidarRuntimeStatus").addEventListener("click", toggleLidarRuntime);
+  $("#cameraPreviewToggleButton").addEventListener("click", toggleCameraPreview);
+  $("#lidarPreviewToggleButton").addEventListener("click", toggleLidarPreview);
+  const lidarPointRadiusInput = $("#lidarPointRadiusInput");
+  if (lidarPointRadiusInput) {
+    lidarPointRadiusInput.addEventListener("input", (event) => setLidarPointRadius(event.currentTarget.value));
+    renderLidarPointRadiusControl();
+  }
   $("#robotModelSelect").addEventListener("change", (event) => {
     state.robotModel.selectedKey = event.currentTarget.value;
     const selected = state.robotModel.models.find((model) => model.key === state.robotModel.selectedKey);
@@ -6328,6 +7035,7 @@ function bindEvents() {
     loadRobotModel();
   });
   $("#robotPoseSyncButton").addEventListener("click", toggleRobotPoseSync);
+  $("#robotLidarToggleButton").addEventListener("click", toggleRobotLidarOverlay);
   $("#armCompareList").addEventListener("input", (event) => {
     const input = event.target.closest("[data-action-kind]");
     if (!input) return;
@@ -6610,7 +7318,6 @@ function init() {
   refreshPlaybackStatus({ silent: true });
   renderRobotViewStatus();
   fetchRobotModels({ silent: true });
-  initializeLidarViewer();
   initializeRobotViewer();
   addLog("系统", "Robot Station 前端原型已加载");
   addLog("ROS", "等待接入真实 ROS 状态");
@@ -6622,10 +7329,7 @@ function init() {
   fetchChassisRuntimeStatus({ silent: true });
   fetchChassisState({ silent: true });
   fetchCameraRuntimeStatus({ silent: true });
-  fetchCameraFrames({ silent: true });
   fetchLidarRuntimeStatus({ silent: true });
-  fetchLidarCloudStatus({ silent: true });
-  requestLidarFrame();
   fetchLiftingMotorState();
   fetchPiperJointStates();
   syncClock();
@@ -6635,9 +7339,13 @@ function init() {
   window.setInterval(() => runBackgroundPoll(() => fetchLiftingRuntimeStatus({ silent: true })), 3000);
   window.setInterval(() => runBackgroundPoll(() => fetchChassisRuntimeStatus({ silent: true })), 3000);
   window.setInterval(() => runBackgroundPoll(() => fetchCameraRuntimeStatus({ silent: true })), 3000);
-  window.setInterval(() => runBackgroundPoll(() => fetchCameraFrames({ silent: true })), 1000);
+  window.setInterval(() => {
+    if (state.cameraFrames.previewEnabled) runBackgroundPoll(() => fetchCameraFrames({ silent: true }));
+  }, 1000);
   window.setInterval(() => runBackgroundPoll(() => fetchLidarRuntimeStatus({ silent: true })), 3000);
-  window.setInterval(() => runBackgroundPoll(() => fetchLidarCloudStatus({ silent: true })), 1000);
+  window.setInterval(() => {
+    if (state.lidarCloud.previewEnabled) runBackgroundPoll(() => fetchLidarCloudStatus({ silent: true }));
+  }, 1000);
   window.setInterval(() => runBackgroundPoll(fetchLiftingMotorState), 500);
   window.setInterval(() => runBackgroundPoll(() => fetchChassisState({ silent: true })), 500);
   window.setInterval(() => runBackgroundPoll(fetchPiperJointStates), piperJointPollIntervalMs);

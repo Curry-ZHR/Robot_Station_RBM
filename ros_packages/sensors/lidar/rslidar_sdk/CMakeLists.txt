@@ -194,11 +194,23 @@ if(rclcpp_FOUND)
     sensor_msgs 
     rslidar_msg)
 
+  add_executable(rslidar_self_filter_node
+                 node/rslidar_self_filter_node.cpp)
+
+  target_link_libraries(rslidar_self_filter_node
+                        ${YAML_CPP_LIBRARIES})
+
+  ament_target_dependencies(rslidar_self_filter_node
+    rclcpp
+    sensor_msgs)
+
   install(TARGETS
     rslidar_sdk_node
+    rslidar_self_filter_node
     DESTINATION lib/${PROJECT_NAME})
 
   install(DIRECTORY
+    config
     launch
     rviz
     DESTINATION share/${PROJECT_NAME})
@@ -206,4 +218,3 @@ if(rclcpp_FOUND)
   ament_package()
 
 endif(rclcpp_FOUND)
-

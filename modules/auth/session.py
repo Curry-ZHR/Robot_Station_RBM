@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_USER_FILE = ROOT_DIR / "config" / "users.txt"
-DEFAULT_TIMEOUT_SEC = float(os.environ.get("ROBOT_STATION_AUTH_TIMEOUT_SEC", "120"))
+DEFAULT_TIMEOUT_SEC = float(os.environ.get("ROBOT_STATION_AUTH_TIMEOUT_SEC", "3600"))
 
 
 def _utc_timestamp():

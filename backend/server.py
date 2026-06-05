@@ -3,8 +3,10 @@ import argparse
 import json
 import mimetypes
 import os
+import shutil
 import threading
 import time
+from email.utils import formatdate
 from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -48,6 +50,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = ROOT_DIR / "frontend"
 LOGGER = get_logger()
 AUTH_COOKIE = "robot_station_session"
+MODEL_ASSET_CACHE_SECONDS = int(os.environ.get("ROBOT_STATION_MODEL_ASSET_CACHE_SECONDS", "86400"))
 
 
 def log_check_result(result):
@@ -285,8 +288,13 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
+    def has_response_header(self, name):
+        prefix = f"{name}:".encode("ascii", errors="ignore").lower()
+        return any(line.lower().startswith(prefix) for line in getattr(self, "_headers_buffer", []))
+
     def end_headers(self):
-        self.send_header("Cache-Control", "no-store")
+        if not self.has_response_header("Cache-Control"):
+            self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
     def auth_token(self):
@@ -415,7 +423,11 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             except RobotModelError as exc:
                 self.write_json({"ok": False, "code": exc.code, "detail": exc.detail}, status=robot_model_error_status(exc))
                 return
-            self.write_binary(asset_path.read_bytes(), self.guess_type(str(asset_path)))
+            self.write_file(
+                asset_path,
+                self.guess_type(str(asset_path)),
+                headers={"Cache-Control": f"public, max-age={MODEL_ASSET_CACHE_SECONDS}"},
+            )
             return
         camera_tail = api_tail(parsed.path, "/api/sensors/cameras")
         if camera_tail is not None:
@@ -824,6 +836,18 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
+
+    def write_file(self, path, content_type, status=200, headers=None):
+        stat_result = path.stat()
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(stat_result.st_size))
+        self.send_header("Last-Modified", formatdate(stat_result.st_mtime, usegmt=True))
+        for key, value in (headers or {}).items():
+            self.send_header(key, value)
+        self.end_headers()
+        with path.open("rb") as handle:
+            shutil.copyfileobj(handle, self.wfile, length=1024 * 1024)
 
     def write_camera_stream(self, reader, camera, kind, fps=8.0):
         result = reader.read_frame(camera, kind, timeout_sec=2.0)

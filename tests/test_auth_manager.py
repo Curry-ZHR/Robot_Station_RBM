@@ -1,3 +1,7 @@
+import importlib
+import os
+
+import modules.auth.session as auth_session
 from modules.auth.session import RobotAuthManager
 
 
@@ -44,3 +48,19 @@ def test_invalid_password_is_rejected(tmp_path):
     assert not result["ok"]
     assert result["code"] == "AUTH-INVALID"
     assert token is None
+
+
+def test_default_timeout_is_one_hour(monkeypatch):
+    original_timeout = os.environ.get("ROBOT_STATION_AUTH_TIMEOUT_SEC")
+    monkeypatch.delenv("ROBOT_STATION_AUTH_TIMEOUT_SEC", raising=False)
+
+    reloaded = importlib.reload(auth_session)
+
+    try:
+        assert reloaded.DEFAULT_TIMEOUT_SEC == 3600
+    finally:
+        if original_timeout is None:
+            os.environ.pop("ROBOT_STATION_AUTH_TIMEOUT_SEC", None)
+        else:
+            os.environ["ROBOT_STATION_AUTH_TIMEOUT_SEC"] = original_timeout
+        importlib.reload(auth_session)

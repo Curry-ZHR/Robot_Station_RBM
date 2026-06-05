@@ -35,9 +35,16 @@ class LidarPointCloudSpec:
 
 
 LIDAR_POINT_CLOUD_SPECS = {
+    "rslidar_points_raw": LidarPointCloudSpec(
+        key="rslidar_points_raw",
+        label="RoboSense LiDAR Raw",
+        topic="/rslidar_points_raw",
+        stale_after_sec=1.0,
+        default_max_points=60000,
+    ),
     "rslidar_points": LidarPointCloudSpec(
         key="rslidar_points",
-        label="RoboSense LiDAR",
+        label="RoboSense LiDAR Filtered",
         topic="/rslidar_points",
         stale_after_sec=1.0,
         default_max_points=60000,

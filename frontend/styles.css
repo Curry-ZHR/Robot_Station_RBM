@@ -665,6 +665,25 @@ body[data-active-view="robot-view"] .workbench {
   font-weight: 700;
 }
 
+.robot-model-actions .robot-lidar-button.is-active {
+  border-color: #38bdf8;
+  background: #e0f2fe;
+  color: #0369a1;
+  font-weight: 700;
+}
+
+.robot-model-actions .robot-lidar-button.is-warn {
+  border-color: var(--warning);
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.robot-model-actions .robot-lidar-button.is-danger {
+  border-color: var(--danger);
+  background: #fef2f2;
+  color: var(--danger);
+}
+
 .robot-load-progress {
   display: grid;
   gap: 7px;
@@ -1558,6 +1577,22 @@ body[data-active-view="robot-view"] .event-drawer {
   color: var(--idle);
 }
 
+.latency-text.ok {
+  color: var(--ok);
+}
+
+.latency-text.warn {
+  color: var(--warn);
+}
+
+.latency-text.danger {
+  color: var(--danger);
+}
+
+.latency-text.idle {
+  color: var(--idle);
+}
+
 .check-actions {
   display: flex;
   justify-content: flex-end;
@@ -2335,6 +2370,26 @@ body[data-active-view="robot-view"] .event-drawer {
   overflow-wrap: anywhere;
 }
 
+.sensor-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.sensor-preview-toggle {
+  min-width: 84px;
+  white-space: nowrap;
+}
+
+.sensor-preview-toggle.is-active {
+  border-color: #38bdf8;
+  background: #e0f2fe;
+  color: #0369a1;
+  font-weight: 700;
+}
+
 .camera-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -2354,12 +2409,26 @@ body[data-active-view="robot-view"] .event-drawer {
   margin-bottom: 12px;
 }
 
-.lidar-toolbar span {
+.lidar-toolbar > span,
+.lidar-point-size-control {
   min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-muted);
+}
+
+.lidar-point-size-control {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+}
+
+.lidar-point-size-control input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
 }
 
 .lidar-toolbar strong,
@@ -4403,12 +4472,21 @@ body[data-active-view="robot-view"] .event-drawer {
     flex-wrap: wrap;
   }
 
+  .camera-strip,
+  .sensor-preview-actions {
+    flex-wrap: wrap;
+  }
+
   .lift-state-grid,
   .lift-action-controls {
     grid-template-columns: 1fr;
   }
 
   .lidar-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .lidar-point-size-control {
     grid-template-columns: 1fr;
   }
 

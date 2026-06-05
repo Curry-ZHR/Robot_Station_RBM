@@ -10,7 +10,8 @@
       "frames": {
         "base": "base_link",
         "odom": "odom",
-        "lift": "lifting_link"
+        "lift": "lifting_link",
+        "lidar": "rslidar"
       },
       "jointMap": {
         "lift": "lifting_joint",
