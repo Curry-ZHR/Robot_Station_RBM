@@ -3,12 +3,18 @@ import os
 import threading
 import time
 
-from modules.ros_io import get_ros_writer
+from modules.ros_io import get_ros_runtime, get_ros_writer
+from modules.ros_io.runtime import RosRuntimeError
+from modules.ros_io.serializers import RosMessageImportError, import_service_class
 
 
 DEFAULT_MAX_LINEAR_MPS = 0.20
 DEFAULT_MAX_LATERAL_MPS = 0.15
 DEFAULT_MAX_ANGULAR_RAD_S = 0.50
+RESET_ODOM_SERVICE_TYPE = "std_srvs/srv/Trigger"
+RESET_ODOM_SERVICE_NAME = os.environ.get("CHASSIS_RESET_ODOM_SERVICE_NAME", "/reset_odom")
+RESET_ODOM_TIMEOUT_SEC = 2.0
+RESET_ODOM_WAIT_TIMEOUT_SEC = float(os.environ.get("CHASSIS_RESET_ODOM_WAIT_TIMEOUT_SEC", "0.3"))
 _command_sequence_lock = threading.Lock()
 _latest_command_sequence = None
 
@@ -190,3 +196,43 @@ def stop_chassis(payload=None, writer=None):
 
 def chassis_limits():
     return _result(True, "CHASSIS-C-LIMITS", "Chassis velocity limits loaded.", limits=_limits())
+
+
+def _reset_odom_timeout_sec():
+    try:
+        return max(
+            0.1,
+            _number(os.environ.get("CHASSIS_RESET_ODOM_TIMEOUT_SEC"), "CHASSIS_RESET_ODOM_TIMEOUT_SEC", RESET_ODOM_TIMEOUT_SEC),
+        )
+    except ChassisControlValidationError:
+        return RESET_ODOM_TIMEOUT_SEC
+
+
+def reset_chassis_odometry(payload=None):
+    try:
+        _as_payload_dict(payload)
+        service_class = import_service_class(RESET_ODOM_SERVICE_TYPE)
+        request = service_class.Request()
+        response = get_ros_runtime().call_service(
+            key="chassis_reset_odom",
+            service_type=RESET_ODOM_SERVICE_TYPE,
+            service_name=RESET_ODOM_SERVICE_NAME,
+            request=request,
+            timeout_sec=_reset_odom_timeout_sec(),
+            wait_timeout_sec=RESET_ODOM_WAIT_TIMEOUT_SEC,
+        )
+    except ChassisControlValidationError as exc:
+        return _result(False, "CHASSIS-C-PAYLOAD", str(exc))
+    except (RosRuntimeError, RosMessageImportError) as exc:
+        return _result(False, "CHASSIS-C-UNAVAILABLE", str(exc), action="reset_odom", service=RESET_ODOM_SERVICE_NAME)
+
+    ok = bool(getattr(response, "success", False))
+    message = str(getattr(response, "message", "") or "").strip()
+    return _result(
+        ok,
+        "CHASSIS-C-ODOM-RESET" if ok else "CHASSIS-C-ODOM-RESET-FAILED",
+        message or ("Chassis odometry reset to zero." if ok else "Chassis odometry reset failed."),
+        action="reset_odom",
+        service=RESET_ODOM_SERVICE_NAME,
+        publishedAt=time.strftime("%H:%M:%S"),
+    )

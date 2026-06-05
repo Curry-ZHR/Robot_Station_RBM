@@ -4059,6 +4059,12 @@ body[data-active-view="robot-view"] .event-drawer {
   gap: 10px;
 }
 
+.base-odom-title {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
 .base-odom-head span {
   display: inline-flex;
   align-items: center;
@@ -4081,6 +4087,29 @@ body[data-active-view="robot-view"] .event-drawer {
 .base-odom-readout.is-live .base-odom-head span::before {
   background: var(--ok);
   box-shadow: 0 0 0 3px rgba(21, 128, 61, 0.18);
+}
+
+.base-odom-reset-button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #cfd9e7;
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.base-odom-reset-button:hover:not(:disabled) {
+  border-color: #9db3cc;
+  background: #f8fbff;
+}
+
+.base-odom-reset-button.is-busy {
+  border-color: #f59e0b;
+  color: #92400e;
 }
 
 .base-odom-head small {

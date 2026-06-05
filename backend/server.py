@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from modules.auth import get_auth_manager
-from modules.control.chassis import chassis_limits, publish_chassis_velocity, stop_chassis
+from modules.control.chassis import chassis_limits, publish_chassis_velocity, reset_chassis_odometry, stop_chassis
 from modules.control.lifting import (
     clear_lifting_error,
     initialize_lifting,
@@ -572,6 +572,8 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         handlers = {
             "cmd_vel": publish_chassis_velocity,
             "velocity": publish_chassis_velocity,
+            "reset_odom": reset_chassis_odometry,
+            "reset-odom": reset_chassis_odometry,
             "stop": stop_chassis,
         }
         handler = handlers.get(chassis_action)

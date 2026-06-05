@@ -156,6 +156,13 @@ void RangerROSMessenger::SetupSubscription() {
   motion_cmd_sub_ = node_->create_subscription<geometry_msgs::msg::Twist>(
       "/cmd_vel", 1, std::bind(&RangerROSMessenger::TwistCmdCallback, this, std::placeholders::_1)
       );
+  reset_odom_srv_ = node_->create_service<std_srvs::srv::Trigger>(
+      "/reset_odom",
+      std::bind(
+          &RangerROSMessenger::ResetOdomCallback,
+          this,
+          std::placeholders::_1,
+          std::placeholders::_2));
   tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(node_);
 }
 
@@ -471,6 +478,24 @@ void RangerROSMessenger::TwistCmdCallback(geometry_msgs::msg::Twist::SharedPtr m
       break;
     }
   }
+}
+
+void RangerROSMessenger::ResetOdomCallback(
+    const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+    std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+  (void)request;
+  ResetOdometry();
+  response->success = true;
+  response->message = "Ranger odometry reset to zero.";
+  RCLCPP_INFO(node_->get_logger(), "Ranger odometry reset to zero");
+}
+
+void RangerROSMessenger::ResetOdometry() {
+  current_time_ = node_->get_clock()->now();
+  last_time_ = current_time_;
+  position_x_ = 0.0;
+  position_y_ = 0.0;
+  theta_ = 0.0;
 }
 
 geometry_msgs::msg::Quaternion RangerROSMessenger::createQuaternionMsgFromYaw(double yaw) {

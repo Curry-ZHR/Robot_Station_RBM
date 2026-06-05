@@ -212,8 +212,11 @@
                       <div class="metric-grid" id="deviceBaseMetrics"></div>
                       <div class="base-odom-readout" id="baseOdomReadout" aria-label="底座里程计">
                         <div class="base-odom-head">
-                          <span>里程计</span>
-                          <small id="baseOdomFrame">odom → base_link</small>
+                          <div class="base-odom-title">
+                            <span>里程计</span>
+                            <small id="baseOdomFrame">odom → base_link</small>
+                          </div>
+                          <button class="base-odom-reset-button" id="baseOdomResetButton" type="button" title="将 ROS /odom 重置为 0">归零</button>
                         </div>
                         <div class="base-odom-cells">
                           <div class="base-odom-cell">

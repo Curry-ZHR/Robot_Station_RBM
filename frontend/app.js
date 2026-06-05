@@ -201,6 +201,7 @@ const state = {
     keyboardKeys: [],
     keyboardActiveKey: null,
     busy: false,
+    resettingOdom: false,
     commandSequence: Date.now(),
     command: {
       linearX: 0,
@@ -2180,6 +2181,18 @@ function renderBaseOdomReadout(odom = state.chassisState.odom || {}) {
   setText("#baseOdomPosY", posY === null ? "--" : posY.toFixed(2));
   setText("#baseOdomYaw", yaw === null ? "--" : radToDeg(yaw).toFixed(1));
   setText("#baseOdomDist", distance === null ? "--" : distance.toFixed(2));
+  renderBaseOdomResetButton();
+}
+
+function renderBaseOdomResetButton() {
+  const button = $("#baseOdomResetButton");
+  if (!button) return;
+  const busy = state.chassisControl.resettingOdom;
+  const ready = chassisReady();
+  button.disabled = busy || !ready;
+  button.classList.toggle("is-busy", busy);
+  button.textContent = busy ? "归零中" : "归零";
+  button.title = ready ? "将 ROS /odom 重置为 0" : "Chassis 服务未运行，无法重置 /odom";
 }
 
 function liftPercent(height = state.liftPreview.height) {
@@ -5563,6 +5576,40 @@ async function fetchChassisState(options = {}) {
   }
 }
 
+async function resetChassisOdometry() {
+  if (state.chassisControl.resettingOdom) return null;
+  if (!chassisReady()) {
+    addLog("底盘", "Chassis 服务未启动，里程计无法归零");
+    renderBaseOdomResetButton();
+    return null;
+  }
+
+  state.chassisControl.resettingOdom = true;
+  clearChassisStopTimers();
+  stopChassisDrive("里程计归零");
+  renderBaseOdomResetButton();
+
+  try {
+    const response = await fetchChassisControl("/api/control/chassis/reset_odom", {
+      commandSource: "里程计归零",
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.detail || `HTTP ${response.status}`);
+    }
+    addLog("底盘", `里程计归零：${result.code}`);
+    await fetchChassisState({ silent: true });
+    window.setTimeout(() => fetchChassisState({ silent: true }), 150);
+    return result;
+  } catch (error) {
+    addLog("底盘", `里程计归零失败：${error.message}`);
+    return null;
+  } finally {
+    state.chassisControl.resettingOdom = false;
+    renderBaseOdomResetButton();
+  }
+}
+
 function chassisBaseValue(key, fallback) {
   const item = deviceBaseControlItems.find((entry) => entry.key === key);
   if (!item) return fallback;
@@ -7010,6 +7057,7 @@ function bindEvents() {
   $("#liftingRuntimeStatus").addEventListener("click", toggleLiftingRuntime);
   $("#chassisRuntimeStatus").addEventListener("click", toggleChassisRuntime);
   $("#chassisKeyboardButton").addEventListener("click", toggleChassisKeyboardListening);
+  $("#baseOdomResetButton").addEventListener("click", resetChassisOdometry);
   document.addEventListener("keydown", handleChassisKeyboardKeyDown);
   document.addEventListener("keyup", handleChassisKeyboardKeyUp);
   window.addEventListener("blur", () => {
