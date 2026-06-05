@@ -2159,7 +2159,27 @@ function renderDeviceBaseMetrics() {
   ]
     .map(([name, value]) => `<div class="metric-card"><span>${name}</span><strong>${value}</strong></div>`)
     .join("");
+  renderBaseOdomReadout(odom);
   renderRobotViewStatus();
+}
+
+function renderBaseOdomReadout(odom = state.chassisState.odom || {}) {
+  const readout = $("#baseOdomReadout");
+  if (!readout) return;
+  const hasOdom = Boolean(state.chassisState.odom);
+  const posX = nestedNumber(odom, ["pose", "pose", "position", "x"]);
+  const posY = nestedNumber(odom, ["pose", "pose", "position", "y"]);
+  const yaw = yawFromOdom(odom);
+  const distance = posX === null || posY === null ? null : Math.hypot(posX, posY);
+  readout.classList.toggle("is-live", hasOdom);
+  const setText = (selector, value) => {
+    const el = $(selector);
+    if (el) el.textContent = value;
+  };
+  setText("#baseOdomPosX", posX === null ? "--" : posX.toFixed(2));
+  setText("#baseOdomPosY", posY === null ? "--" : posY.toFixed(2));
+  setText("#baseOdomYaw", yaw === null ? "--" : radToDeg(yaw).toFixed(1));
+  setText("#baseOdomDist", distance === null ? "--" : distance.toFixed(2));
 }
 
 function liftPercent(height = state.liftPreview.height) {

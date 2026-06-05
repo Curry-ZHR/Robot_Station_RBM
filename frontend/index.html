@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Robot Station</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260605-platform-odom" />
   </head>
   <body>
     <div class="auth-overlay" id="authOverlay" role="dialog" aria-modal="true" aria-labelledby="authTitle">
@@ -210,6 +210,34 @@
                         <span>里程计</span><strong class="status-text idle" id="baseOdomText">未接入</strong>
                       </div>
                       <div class="metric-grid" id="deviceBaseMetrics"></div>
+                      <div class="base-odom-readout" id="baseOdomReadout" aria-label="底座里程计">
+                        <div class="base-odom-head">
+                          <span>里程计</span>
+                          <small id="baseOdomFrame">odom → base_link</small>
+                        </div>
+                        <div class="base-odom-cells">
+                          <div class="base-odom-cell">
+                            <span>位置 X</span>
+                            <strong id="baseOdomPosX">--</strong>
+                            <small>m</small>
+                          </div>
+                          <div class="base-odom-cell">
+                            <span>位置 Y</span>
+                            <strong id="baseOdomPosY">--</strong>
+                            <small>m</small>
+                          </div>
+                          <div class="base-odom-cell">
+                            <span>航向</span>
+                            <strong id="baseOdomYaw">--</strong>
+                            <small>°</small>
+                          </div>
+                          <div class="base-odom-cell">
+                            <span>位移</span>
+                            <strong id="baseOdomDist">--</strong>
+                            <small>m</small>
+                          </div>
+                        </div>
+                      </div>
                     </section>
 
                     <section class="platform-sensing-section device-zone-lift">
@@ -752,6 +780,6 @@
 
     <div class="rich-tooltip" id="richTooltip" role="tooltip" aria-hidden="true"></div>
 
-    <script src="./app.js?v=20260605-lidar-split"></script>
+    <script src="./app.js?v=20260605-platform-odom"></script>
   </body>
 </html>
