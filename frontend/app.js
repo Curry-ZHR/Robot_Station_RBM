@@ -156,6 +156,32 @@ const state = {
     animationFrame: null,
     resizeObserver: null,
   },
+  mapping: {
+    status: "idle",
+    busy: false,
+    session: null,
+    frameCount: 10,
+    cloudTopic: "/rslidar_points",
+    odomTopic: "/odom",
+    baseFrame: "base_link",
+    captureTimer: null,
+    lastError: "",
+    saveName: "",
+    mapPreview: {
+      activeRequest: false,
+      hasFrame: false,
+      initialized: false,
+      pointCount: 0,
+      sourcePointCount: 0,
+      sizeBytes: 0,
+      mtimeMs: null,
+      loadedRevision: "",
+      error: "",
+      geometry: null,
+      material: null,
+      points: null,
+    },
+  },
   armControl: {
     active: false,
     busy: false,
@@ -638,6 +664,24 @@ const chassisTopicKeys = {
   battery: "chassis_battery_state",
   odom: "chassis_odom",
 };
+const mappingStatusMeta = {
+  idle: { label: "未开始", level: "idle" },
+  ready: { label: "可采集", level: "ok" },
+  capturing: { label: "采集中", level: "warn" },
+  failed: { label: "失败", level: "danger" },
+  saved: { label: "已保存", level: "ok" },
+};
+
+const mappingProgressMeta = {
+  capturing: { label: "采集点云", level: "warn" },
+  filtering: { label: "合并点云", level: "warn" },
+  registering: { label: "配准中", level: "warn" },
+  registering_ndt: { label: "NDT 配准", level: "warn" },
+  registering_gicp: { label: "GICP 配准", level: "warn" },
+  writing_map: { label: "写入地图", level: "warn" },
+  done: { label: "完成", level: "ok" },
+  failed: { label: "失败", level: "danger" },
+};
 
 const chassisMotionModeLabels = {
   0: "阿克曼",
@@ -1011,6 +1055,19 @@ function formatNumber(value, digits = 3) {
   return Number.isFinite(value) ? value.toFixed(digits) : "--";
 }
 
+function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "--";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`;
+}
+
 function radToDeg(rad) {
   return rad * 180 / Math.PI;
 }
@@ -1118,8 +1175,8 @@ function setLidarRuntime(status) {
 }
 
 function showView(view) {
-  if (view !== "platform-control" && state.chassisControl.keyboardListening) {
-    stopChassisKeyboardControl("离开平台控制，键盘监听停止", { deactivate: true });
+  if (!["platform-control", "robot-view"].includes(view) && state.chassisControl.keyboardListening) {
+    stopChassisKeyboardControl("离开底盘控制视图，键盘监听停止", { deactivate: true });
   }
   document.body.dataset.activeView = view;
   $$(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === view));
@@ -2146,8 +2203,9 @@ function renderDeviceBaseMetrics() {
   const serviceLevel = serviceExternal ? "warn" : chassisReady() ? "ok" : "idle";
   setStatusText("#baseControlText", serviceText, serviceLevel);
   setStatusText("#baseOdomText", odomText, state.chassisState.odom ? feedbackLevel : "idle");
-  $$("[data-device-drive]").forEach((button) => {
-    button.disabled = !chassisReady() && button.dataset.deviceDrive !== "stop";
+  $$("[data-device-drive], [data-mapping-drive]").forEach((button) => {
+    const action = button.dataset.deviceDrive || button.dataset.mappingDrive;
+    button.disabled = !chassisReady() && action !== "stop";
   });
   renderChassisKeyboardControl();
   node.innerHTML = [
@@ -2239,6 +2297,41 @@ function yawFromOdom(odom) {
   const w = nestedNumber(odom, ["pose", "pose", "orientation", "w"]);
   if ([x, y, z, w].some((value) => value === null)) return null;
   return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+}
+
+function mappingFinalTransform(session = state.mapping.session) {
+  const transform = session?.lastResult?.registration?.finalTransform;
+  if (!Array.isArray(transform) || transform.length !== 16) return null;
+  const values = transform.map((value) => Number(value));
+  return values.every(Number.isFinite) ? values : null;
+}
+
+function mappingPoseFromTransform(transform = mappingFinalTransform()) {
+  if (!transform) return null;
+  return {
+    x: transform[3],
+    y: transform[7],
+    z: transform[11],
+    yaw: Math.atan2(transform[4], transform[0]),
+  };
+}
+
+function mappingMapRevision(session = state.mapping.session) {
+  if (!session?.tmpMapPath) return "";
+  const keyframes = Array.isArray(session.keyframes) ? session.keyframes : [];
+  if (!keyframes.length && !session.lastResult?.mapPath) return "";
+  const registration = session.lastResult?.registration || {};
+  return [
+    session.id || "",
+    Number(session.captureCount) || keyframes.length,
+    registration.mapPoints || "",
+    session.lastResult?.mapPath || session.tmpMapPath || "",
+    session.updatedAt || "",
+  ].join(":");
+}
+
+function mappingMapVisible() {
+  return Boolean(state.mapping.mapPreview.hasFrame);
 }
 
 function robotJointDeg(side, index, fallback = 0) {
@@ -2387,6 +2480,15 @@ function robotLidarButtonMeta() {
   if (busy) {
     return { text: "LiDAR", title: "整机模型加载中", disabled: true, active: overlay.enabled, level: "warn" };
   }
+  if (mappingMapVisible()) {
+    return {
+      text: "LiDAR 已暂停",
+      title: "累计地图显示中，实时 LiDAR 叠加层已暂停",
+      disabled: true,
+      active: false,
+      level: "idle",
+    };
+  }
   if (overlay.enabled && overlay.error) {
     return {
       text: "LiDAR 无数据",
@@ -2449,6 +2551,12 @@ function findRobotFrameObject(frameName) {
 function ensureRobotLidarOverlay() {
   const robot = state.robotModel;
   const overlay = robot.lidarOverlay;
+  if (mappingMapVisible()) {
+    overlay.error = "累计地图显示中";
+    if (overlay.points) overlay.points.visible = false;
+    renderRobotLidarButton();
+    return false;
+  }
   if (!robot.hasModel || !robot.three || !robot.modelRoot) {
     overlay.error = "请先加载整机模型";
     renderRobotLidarButton();
@@ -2493,6 +2601,14 @@ function ensureRobotLidarOverlay() {
 
 async function setRobotLidarOverlayEnabled(enabled) {
   const overlay = state.robotModel.lidarOverlay;
+  if (enabled && mappingMapVisible()) {
+    overlay.enabled = false;
+    overlay.error = "累计地图显示中";
+    if (overlay.points) overlay.points.visible = false;
+    renderRobotLidarButton();
+    addLog("模型", "累计地图显示中，实时 LiDAR 点云叠加已暂停");
+    return false;
+  }
   overlay.enabled = Boolean(enabled);
   overlay.error = "";
   renderRobotLidarButton();
@@ -2525,6 +2641,15 @@ async function setRobotLidarOverlayEnabled(enabled) {
 
 function toggleRobotLidarOverlay() {
   setRobotLidarOverlayEnabled(!state.robotModel.lidarOverlay.enabled);
+}
+
+function pauseRobotLidarOverlayForMappingMap() {
+  const overlay = state.robotModel.lidarOverlay;
+  window.clearTimeout(overlay.frameTimer);
+  overlay.enabled = false;
+  overlay.error = "累计地图显示中";
+  if (overlay.points) overlay.points.visible = false;
+  renderRobotLidarButton();
 }
 
 function robotMeshProgressValue() {
@@ -3031,8 +3156,15 @@ function updateRobotModelTransforms() {
     }
   });
 
-  const yaw = yawFromOdom(state.chassisState.odom || {});
-  robot.modelRoot.rotation.z = yaw === null ? 0 : yaw;
+  const mappingPose = mappingPoseFromTransform();
+  if (mappingPose) {
+    robot.modelRoot.scale.setScalar(1);
+    robot.modelRoot.position.set(mappingPose.x, mappingPose.y, Number.isFinite(mappingPose.z) ? mappingPose.z : 0);
+    robot.modelRoot.rotation.z = mappingPose.yaw;
+  } else {
+    const yaw = yawFromOdom(state.chassisState.odom || {});
+    robot.modelRoot.rotation.z = yaw === null ? 0 : yaw;
+  }
 }
 
 function setRobotPoseSyncEnabled(enabled, options = {}) {
@@ -3130,8 +3262,8 @@ async function loadRobotModel(key = state.robotModel.selectedKey) {
     state.robotModel.metadata = model;
     state.robotModel.loadedKey = key;
     state.robotModel.hasModel = true;
-    if (state.robotModel.poseSyncEnabled) updateRobotModelTransforms();
     frameRobotModelInViewer(root);
+    if (state.robotModel.poseSyncEnabled || mappingFinalTransform()) updateRobotModelTransforms();
     if (state.robotModel.lidarOverlay.enabled) ensureRobotLidarOverlay();
     setRobotLoadProgress({
       active: false,
@@ -3283,6 +3415,95 @@ function renderRobotViewStatus() {
   renderRobotViewFigure();
 }
 
+function renderMappingStatus() {
+  const mapping = state.mapping;
+  const session = mapping.session;
+  const statusKey = session?.status || mapping.status || "idle";
+  const meta = mappingStatusMeta[statusKey] || mappingStatusMeta.idle;
+  const busy = Boolean(mapping.busy || session?.busy);
+  const progress = session?.progress || null;
+  const progressMeta = mappingProgressMeta[progress?.phase] || null;
+  const busyLabel = progress?.label || progressMeta?.label || "采集中";
+  const keyframes = Array.isArray(session?.keyframes) ? session.keyframes : [];
+  const lastResult = session?.lastResult || null;
+  const mapPreview = mapping.mapPreview;
+
+  setStateBadge("#mappingBadge", busy ? busyLabel : meta.label, busy ? (progressMeta?.level || "warn") : meta.level);
+  setText("#mappingSummary", session?.detail || mapping.lastError || "等待创建建图会话");
+  setText("#mappingSessionText", session ? `${session.id} / ${session.sessionDir || ""}` : "未创建 session");
+
+  const frameInput = $("#mappingFrameCountInput");
+  if (frameInput && document.activeElement !== frameInput) frameInput.value = String(mapping.frameCount || 10);
+  const cloudInput = $("#mappingCloudTopicInput");
+  if (cloudInput && document.activeElement !== cloudInput) cloudInput.value = mapping.cloudTopic || "/rslidar_points";
+  const odomInput = $("#mappingOdomTopicInput");
+  if (odomInput && document.activeElement !== odomInput) odomInput.value = mapping.odomTopic || "/odom";
+  const baseInput = $("#mappingBaseFrameInput");
+  if (baseInput && document.activeElement !== baseInput) baseInput.value = mapping.baseFrame || "base_link";
+
+  const startButton = $("#mappingStartButton");
+  if (startButton) {
+    startButton.disabled = busy;
+    startButton.textContent = session ? "重建" : "新建";
+  }
+  const captureButton = $("#mappingCaptureButton");
+  if (captureButton) {
+    captureButton.disabled = busy || !session;
+    captureButton.textContent = busy ? busyLabel : keyframes.length ? "继续采集" : "采集点云";
+  }
+  const saveButton = $("#mappingSaveButton");
+  if (saveButton) saveButton.disabled = busy || !session || keyframes.length === 0;
+  const resetButton = $("#mappingResetButton");
+  if (resetButton) resetButton.disabled = !session && !busy;
+
+  const metrics = $("#mappingMetrics");
+  if (metrics) {
+    const registration = lastResult?.registration || {};
+    const mapState = mapPreview.activeRequest
+      ? "加载中"
+      : mapPreview.error
+        ? "异常"
+        : mapPreview.hasFrame
+          ? "已显示"
+          : session?.tmpMapPath
+            ? "待加载"
+            : "--";
+    metrics.innerHTML = [
+      ["Keyframes", String(keyframes.length)],
+      ["点云", mapping.cloudTopic || "--"],
+      ["里程计", mapping.odomTopic || "--"],
+      ["阶段", busy ? busyLabel : registration.stage || statusKey],
+      ["Fitness", Number.isFinite(Number(registration.fitness)) ? Number(registration.fitness).toFixed(5) : "--"],
+      ["地图", mapState],
+      ["地图点", mapPreview.hasFrame ? Math.max(0, Math.round(mapPreview.pointCount || 0)).toLocaleString("zh-CN") : "--"],
+      ["地图大小", mapPreview.hasFrame ? formatBytes(mapPreview.sizeBytes) : "--"],
+    ]
+      .map(([name, value]) => `<div class="metric-card"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
+      .join("");
+  }
+
+  const list = $("#mappingKeyframeList");
+  if (list) {
+    list.innerHTML = keyframes.length
+      ? keyframes
+          .map((keyframe) => {
+            const index = Number(keyframe.index);
+            const frames = Number(keyframe.frames);
+            return `
+              <div class="mapping-keyframe-row">
+                <span>#${Number.isFinite(index) ? index : "--"}</span>
+                <strong>${Number.isFinite(frames) ? `${frames} 帧` : "已采集"}</strong>
+                <small>${escapeHtml(keyframe.path || "")}</small>
+              </div>
+            `;
+          })
+          .join("")
+      : `<div class="mapping-keyframe-empty">${escapeHtml(session?.lastError || "暂无 keyframe")}</div>`;
+  }
+
+  renderChassisKeyboardControl();
+}
+
 function renderLiftingRuntime() {
   const label = getLiftingRuntimeLabel();
   renderStatusSwitch("#liftingRuntimeStatus", "Lifting", label.level, {
@@ -3430,10 +3651,8 @@ function renderLiftPreview() {
   renderRobotViewStatus();
 }
 
-function renderDeviceControls() {
-  renderPiperJointFeedback();
-
-  const baseNode = $("#deviceBaseControlPanel");
+function renderBaseControlPanel(selector) {
+  const baseNode = $(selector);
   if (baseNode) {
     baseNode.innerHTML = deviceBaseControlItems
       .map((item) => {
@@ -3455,12 +3674,18 @@ function renderDeviceControls() {
               aria-valuetext="${formatCommandSpeed(item, value)}"
             />
             <small>${formatCommandSpeed(item, item.max)}</small>
-            <strong id="basePreview${item.key}">${formatCommandSpeed(item, value)}</strong>
+            <strong>${formatCommandSpeed(item, value)}</strong>
           </label>
         `;
       })
       .join("");
   }
+}
+
+function renderDeviceControls() {
+  renderPiperJointFeedback();
+  renderBaseControlPanel("#deviceBaseControlPanel");
+  renderBaseControlPanel("#mappingBaseControlPanel");
   renderLiftPreview();
 }
 
@@ -4688,6 +4913,147 @@ function finishCollection(result = "完成") {
   addLog("数采", `episode_043 ${result}`);
 }
 
+function readMappingSettings() {
+  const frameCount = clamp(Math.round(Number($("#mappingFrameCountInput")?.value) || state.mapping.frameCount || 10), 1, 200);
+  const cloudTopic = String($("#mappingCloudTopicInput")?.value || state.mapping.cloudTopic || "/rslidar_points").trim() || "/rslidar_points";
+  const odomTopic = String($("#mappingOdomTopicInput")?.value || state.mapping.odomTopic || "/odom").trim() || "/odom";
+  const baseFrame = String($("#mappingBaseFrameInput")?.value || state.mapping.baseFrame || "base_link").trim() || "base_link";
+  return { frameCount, cloudTopic, odomTopic, baseFrame };
+}
+
+function applyMappingStatus(result = {}) {
+  const session = result.session || null;
+  state.mapping.session = session;
+  state.mapping.busy = Boolean(result.busy || session?.busy);
+  state.mapping.status = session?.status || "idle";
+  state.mapping.lastError = session?.lastError || (!result.ok ? result.detail || result.code || "" : "");
+  const settings = session?.settings;
+  if (settings) {
+    state.mapping.frameCount = Number(settings.frameCount) || state.mapping.frameCount;
+    state.mapping.cloudTopic = settings.cloudTopic || state.mapping.cloudTopic;
+    state.mapping.odomTopic = settings.odomTopic || state.mapping.odomTopic;
+    state.mapping.baseFrame = settings.baseFrame || state.mapping.baseFrame;
+  }
+  syncMappingMapPreview();
+  updateRobotModelTransforms();
+  renderMappingStatus();
+  renderRobotViewStatus();
+  if (state.mapping.busy) {
+    scheduleMappingStatusPoll(700);
+  } else {
+    window.clearTimeout(state.mapping.captureTimer);
+    state.mapping.captureTimer = null;
+  }
+}
+
+async function mappingPost(action, payload = {}) {
+  const response = await fetch(`/api/mapping/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  const result = await response.json().catch(() => ({}));
+  applyMappingStatus(result);
+  return { response, result };
+}
+
+async function refreshMappingStatus(options = {}) {
+  try {
+    const response = await fetch("/api/mapping/status", { cache: "no-store" });
+    const result = await response.json();
+    applyMappingStatus(result);
+    return result;
+  } catch (error) {
+    if (!options.silent) addLog("建图", `状态刷新失败：${error.message}`);
+    return null;
+  }
+}
+
+function scheduleMappingStatusPoll(delayMs = 1000) {
+  window.clearTimeout(state.mapping.captureTimer);
+  state.mapping.captureTimer = window.setTimeout(() => refreshMappingStatus({ silent: true }), delayMs);
+}
+
+async function startMappingSession() {
+  if (state.mapping.busy) return;
+  const hasSession = Boolean(state.mapping.session);
+  const ok = await confirmAction(
+    hasSession ? "重建点云地图" : "新建点云地图",
+    hasSession
+      ? "重建会清空当前建图会话和所有 tmp 临时文件，然后创建新的空白会话。已保存的 .pcd 地图不会删除。"
+      : "新建会清空过去的 tmp 临时建图文件，然后创建新的空白会话。已保存的 .pcd 地图不会删除。",
+  );
+  if (!ok) return;
+  const settings = readMappingSettings();
+  state.mapping.status = "ready";
+  state.mapping.busy = true;
+  clearMappingMapPreview();
+  renderMappingStatus();
+  try {
+    const { result } = await mappingPost("start", settings);
+    const removed = Number(result.tempCleanup?.removed || 0);
+    addLog("建图", result.ok ? `建图会话已创建，已清理 ${removed} 项 tmp` : `建图启动失败：${result.detail || result.code}`);
+  } catch (error) {
+    addLog("建图", `建图启动失败：${error.message}`);
+  } finally {
+    await refreshMappingStatus({ silent: true });
+  }
+}
+
+async function captureMappingKeyframe() {
+  if (!state.mapping.session) {
+    await startMappingSession();
+    if (!state.mapping.session) return;
+  }
+  const settings = readMappingSettings();
+  state.mapping.busy = true;
+  state.mapping.status = "capturing";
+  renderMappingStatus();
+  try {
+    const { result } = await mappingPost("capture", settings);
+    addLog("建图", result.ok ? `开始采集 ${settings.frameCount} 帧点云` : `采集启动失败：${result.detail || result.code}`);
+  } catch (error) {
+    addLog("建图", `采集启动失败：${error.message}`);
+  } finally {
+    scheduleMappingStatusPoll(700);
+  }
+}
+
+async function saveMappingMap() {
+  if (!state.mapping.session) return;
+  const name = `${state.mapping.session.id || "mapping"}.pcd`;
+  try {
+    const { result } = await mappingPost("save", { name });
+    addLog("建图", result.ok ? `地图已保存：${result.path || name}` : `保存失败：${result.detail || result.code}`);
+  } catch (error) {
+    addLog("建图", `保存失败：${error.message}`);
+  }
+}
+
+async function resetMappingSession() {
+  const ok = await confirmAction(
+    "重置点云建图",
+    "重置会停止当前建图会话，并清空所有 tmp 临时建图文件。已保存的 .pcd 地图不会删除。",
+  );
+  if (!ok) return;
+  window.clearTimeout(state.mapping.captureTimer);
+  state.mapping.captureTimer = null;
+  try {
+    const { result } = await mappingPost("reset", { clearTmp: true });
+    const removed = Number(result.tempCleanup?.removed || 0);
+    addLog("建图", result.ok ? `建图会话已重置，已清理 ${removed} 项 tmp` : `重置失败：${result.detail || result.code}`);
+  } catch (error) {
+    addLog("建图", `重置失败：${error.message}`);
+  } finally {
+    state.mapping.session = null;
+    state.mapping.status = "idle";
+    state.mapping.busy = false;
+    clearMappingMapPreview();
+    renderMappingStatus();
+  }
+}
+
 async function inferencePost(action, payload = {}) {
   const response = await fetch(`/api/inference/${action}`, {
     method: "POST",
@@ -5630,12 +5996,16 @@ function chassisCommandForDrive(action) {
 }
 
 function renderChassisKeyboardControl() {
-  const button = $("#chassisKeyboardButton");
   const listening = state.chassisControl.keyboardListening;
   const activeKey = state.chassisControl.keyboardActiveKey;
-  if (button) {
+  ["#chassisKeyboardButton", "#mappingChassisKeyboardButton"].forEach((selector) => {
+    const button = $(selector);
+    if (!button) return;
     const ready = chassisReady();
     button.className = `keyboard-listen-button state-badge ${listening ? "ok" : "idle"}`;
+    if (selector === "#mappingChassisKeyboardButton") {
+      button.classList.add("mapping-keyboard-button");
+    }
     button.textContent = listening ? "监听中" : "键盘监听";
     button.disabled = !ready;
     button.title = ready
@@ -5645,9 +6015,10 @@ function renderChassisKeyboardControl() {
       : "Chassis 服务未启动，无法监听键盘";
     button.setAttribute("aria-pressed", listening ? "true" : "false");
     button.setAttribute("aria-label", listening ? `键盘监听已开启${activeKey ? `，当前 ${activeKey.toUpperCase()}` : ""}` : "开启键盘监听");
-  }
-  $$("[data-device-drive]").forEach((driveButton) => {
-    driveButton.classList.toggle("is-active", state.chassisControl.activeDrive === driveButton.dataset.deviceDrive);
+  });
+  $$("[data-device-drive], [data-mapping-drive]").forEach((driveButton) => {
+    const action = driveButton.dataset.deviceDrive || driveButton.dataset.mappingDrive;
+    driveButton.classList.toggle("is-active", state.chassisControl.activeDrive === action);
   });
 }
 
@@ -5678,7 +6049,8 @@ function setChassisKeyboardListening(listening) {
     state.chassisControl.keyboardListening = true;
     clearChassisKeyboardKeys();
     renderChassisKeyboardControl();
-    $("#chassisKeyboardButton")?.focus();
+    const buttonSelector = document.body.dataset.activeView === "robot-view" ? "#mappingChassisKeyboardButton" : "#chassisKeyboardButton";
+    $(buttonSelector)?.focus();
     addLog("底盘", "键盘监听已开启");
     return;
   }
@@ -5691,7 +6063,7 @@ function toggleChassisKeyboardListening() {
 
 function keyboardEventTargetIsEditable(target) {
   if (!(target instanceof Element)) return false;
-  if (target.closest("#chassisKeyboardButton")) return false;
+  if (target.closest("#chassisKeyboardButton, #mappingChassisKeyboardButton")) return false;
   const input = target.closest("input");
   if (input) {
     const type = String(input.getAttribute("type") || "text").toLowerCase();
@@ -5703,7 +6075,7 @@ function keyboardEventTargetIsEditable(target) {
 function canHandleChassisKeyboardEvent(event) {
   return (
     state.chassisControl.keyboardListening &&
-    document.body.dataset.activeView === "platform-control" &&
+    ["platform-control", "robot-view"].includes(document.body.dataset.activeView) &&
     !event.altKey &&
     !event.ctrlKey &&
     !event.metaKey &&
@@ -6745,6 +7117,145 @@ function buildLidarPointCloudAttributes(buffer) {
   return { positions, colors, count, minX, minY, minZ, maxX, maxY, maxZ };
 }
 
+function ensureMappingMapLayer() {
+  const robot = state.robotModel;
+  const preview = state.mapping.mapPreview;
+  if (!robot.three || !robot.scene) return false;
+
+  if (!preview.points) {
+    preview.geometry = new robot.three.BufferGeometry();
+    preview.material = new robot.three.PointsMaterial({
+      size: Math.max(0.012, lidarPointRadiusToMaterialSize(state.lidarCloud.pointRadius) * 0.7),
+      map: createLidarPointTexture(robot.three),
+      vertexColors: true,
+      sizeAttenuation: true,
+      transparent: true,
+      alphaTest: 0.1,
+      opacity: 0.9,
+      depthWrite: false,
+    });
+    preview.points = new robot.three.Points(preview.geometry, preview.material);
+    preview.points.name = "mapping_accumulated_map";
+    preview.points.frustumCulled = false;
+  }
+
+  if (preview.points.parent !== robot.scene) {
+    robot.scene.add(preview.points);
+  }
+  preview.initialized = true;
+  preview.points.visible = preview.hasFrame;
+  return true;
+}
+
+function frameMappingMapInRobotViewer(cloud) {
+  const robot = state.robotModel;
+  if (!robot.controls || !robot.three || !cloud || cloud.count <= 0) return;
+  const centerX = (cloud.minX + cloud.maxX) / 2;
+  const centerY = (cloud.minY + cloud.maxY) / 2;
+  const centerZ = (cloud.minZ + cloud.maxZ) / 2;
+  const dx = cloud.maxX - cloud.minX;
+  const dy = cloud.maxY - cloud.minY;
+  const dz = cloud.maxZ - cloud.minZ;
+  const diagonal = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  robot.controls.target.set(centerX, centerY, centerZ);
+  robot.controls.distance = clamp(diagonal * 1.35, 4, 160);
+  updateRobotCamera();
+}
+
+function updateMappingMapPointCloud(buffer) {
+  const robot = state.robotModel;
+  const preview = state.mapping.mapPreview;
+  if (!robot.three || !ensureMappingMapLayer()) return null;
+
+  const cloud = buildLidarPointCloudAttributes(buffer);
+  preview.geometry.setAttribute("position", new robot.three.BufferAttribute(cloud.positions, 3));
+  preview.geometry.setAttribute("color", new robot.three.BufferAttribute(cloud.colors, 3));
+  preview.geometry.computeBoundingSphere();
+  preview.hasFrame = cloud.count > 0;
+  preview.pointCount = cloud.count;
+  preview.points.visible = preview.hasFrame;
+  if (preview.hasFrame) {
+    pauseRobotLidarOverlayForMappingMap();
+    frameMappingMapInRobotViewer(cloud);
+  }
+  return cloud;
+}
+
+function clearMappingMapPreview() {
+  const preview = state.mapping.mapPreview;
+  preview.hasFrame = false;
+  preview.pointCount = 0;
+  preview.sourcePointCount = 0;
+  preview.sizeBytes = 0;
+  preview.mtimeMs = null;
+  preview.loadedRevision = "";
+  preview.error = "";
+  if (preview.points) preview.points.visible = false;
+  if (state.robotModel.hasModel && state.robotModel.modelRoot && !mappingFinalTransform()) {
+    frameRobotModelInViewer(state.robotModel.modelRoot);
+    updateRobotModelTransforms();
+  }
+}
+
+async function requestMappingMapFrame(revision = mappingMapRevision()) {
+  const preview = state.mapping.mapPreview;
+  if (!revision || preview.activeRequest) return null;
+  preview.activeRequest = true;
+  preview.error = "";
+  renderMappingStatus();
+
+  try {
+    const initialized = await initializeRobotViewer();
+    if (!initialized || !ensureMappingMapLayer()) throw new Error("整机 3D 视图未就绪");
+    const response = await fetch(`/api/mapping/map/frame?t=${Date.now()}`, { cache: "no-store" });
+    const contentType = response.headers.get("Content-Type") || "";
+    if (!response.ok || contentType.includes("application/json")) {
+      const payload = contentType.includes("application/json") ? await response.json() : null;
+      throw new Error((payload && payload.detail) || `HTTP ${response.status}`);
+    }
+
+    const buffer = await response.arrayBuffer();
+    const cloud = updateMappingMapPointCloud(buffer);
+    if (!cloud) throw new Error("累计地图渲染失败");
+    const pointCount = Number(response.headers.get("X-Robot-Station-PointCloud-Point-Count"));
+    const sourcePointCount = Number(response.headers.get("X-Robot-Station-PointCloud-Source-Point-Count"));
+    const sizeBytes = Number(response.headers.get("X-Robot-Station-Mapping-Map-Size-Bytes"));
+    const mtimeMs = Number(response.headers.get("X-Robot-Station-Mapping-Map-Mtime-Ms"));
+    preview.pointCount = Number.isFinite(pointCount) ? pointCount : cloud.count;
+    preview.sourcePointCount = Number.isFinite(sourcePointCount) ? sourcePointCount : preview.pointCount;
+    preview.sizeBytes = Number.isFinite(sizeBytes) ? sizeBytes : buffer.byteLength;
+    preview.mtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+    preview.loadedRevision = revision;
+    preview.error = "";
+    updateRobotModelTransforms();
+    renderRobotViewStatus();
+    return cloud;
+  } catch (error) {
+    preview.error = error.message;
+    if (preview.points) preview.points.visible = false;
+    return null;
+  } finally {
+    preview.activeRequest = false;
+    renderMappingStatus();
+  }
+}
+
+function syncMappingMapPreview() {
+  const session = state.mapping.session;
+  if (session?.status === "failed" || session?.progress?.phase === "failed") {
+    if (!state.mapping.mapPreview.hasFrame) clearMappingMapPreview();
+    return;
+  }
+  const revision = mappingMapRevision();
+  if (!revision) {
+    clearMappingMapPreview();
+    return;
+  }
+  if (!state.mapping.busy && revision !== state.mapping.mapPreview.loadedRevision) {
+    requestMappingMapFrame(revision);
+  }
+}
+
 function updateLidarPointCloud(buffer) {
   const lidar = state.lidarCloud;
   const THREE = lidar.three;
@@ -6778,6 +7289,10 @@ function updateRobotLidarPointCloud(positions, colors, count) {
   const robot = state.robotModel;
   const overlay = robot.lidarOverlay;
   if (!overlay.enabled) return;
+  if (mappingMapVisible()) {
+    pauseRobotLidarOverlayForMappingMap();
+    return;
+  }
   if (!robotLidarFrameMatches()) {
     overlay.error = `点云 frame=${overlay.lastFrameId || "--"} 与模型 frame=${robotLidarFrameName()} 不匹配`;
     if (overlay.points) overlay.points.visible = false;
@@ -7104,6 +7619,15 @@ function bindEvents() {
   });
   $("#robotPoseSyncButton").addEventListener("click", toggleRobotPoseSync);
   $("#robotLidarToggleButton").addEventListener("click", toggleRobotLidarOverlay);
+  $("#mappingStartButton").addEventListener("click", startMappingSession);
+  $("#mappingCaptureButton").addEventListener("click", captureMappingKeyframe);
+  $("#mappingSaveButton").addEventListener("click", saveMappingMap);
+  $("#mappingResetButton").addEventListener("click", resetMappingSession);
+  $("#mappingChassisKeyboardButton").addEventListener("click", toggleChassisKeyboardListening);
+  $("#mappingConfigForm").addEventListener("input", () => {
+    Object.assign(state.mapping, readMappingSettings());
+    renderMappingStatus();
+  });
   $("#armCompareList").addEventListener("input", (event) => {
     const input = event.target.closest("[data-action-kind]");
     if (!input) return;
@@ -7237,11 +7761,12 @@ function bindEvents() {
     }
   });
 
-  $$("[data-device-drive]").forEach((button) => {
+  $$("[data-device-drive], [data-mapping-drive]").forEach((button) => {
     const label = button.textContent.trim();
+    const action = button.dataset.deviceDrive || button.dataset.mappingDrive;
     button.addEventListener("pointerdown", (event) => {
       event.preventDefault();
-      startChassisDrive(button.dataset.deviceDrive, label);
+      startChassisDrive(action, label);
     });
     button.addEventListener("pointerup", () => {
       stopChassisDrive("松开停止");
@@ -7264,7 +7789,7 @@ function bindEvents() {
     });
   });
 
-  $("#deviceBaseControlPanel").addEventListener("input", (event) => {
+  const handleBaseControlInput = (event) => {
     const input = event.target.closest("[data-base-control]");
     if (!input) return;
     const item = deviceBaseControlItems.find((entry) => entry.key === input.dataset.baseControl);
@@ -7278,13 +7803,16 @@ function bindEvents() {
       row.style.setProperty("--speed-color", speedRiskColor(item.value));
     }
     input.setAttribute("aria-valuetext", formatCommandSpeed(item));
-    const preview = $(`#basePreview${item.key}`);
+    const preview = row?.querySelector("strong");
     if (preview) preview.textContent = formatCommandSpeed(item);
+    renderBaseControlPanel(event.currentTarget.id === "deviceBaseControlPanel" ? "#mappingBaseControlPanel" : "#deviceBaseControlPanel");
     renderDeviceBaseMetrics();
     if (state.chassisControl.activeDrive) {
       requestChassisVelocity(chassisCommandForDrive(state.chassisControl.activeDrive), { source: "速度调整", quiet: true });
     }
-  });
+  };
+  $("#deviceBaseControlPanel").addEventListener("input", handleBaseControlInput);
+  $("#mappingBaseControlPanel").addEventListener("input", handleBaseControlInput);
 
   $("#liftControlPanel").addEventListener("input", (event) => {
     const input = event.target.closest("[data-lift-control]");
@@ -7385,7 +7913,9 @@ function init() {
   renderPlayback();
   refreshPlaybackStatus({ silent: true });
   renderRobotViewStatus();
+  renderMappingStatus();
   fetchRobotModels({ silent: true });
+  refreshMappingStatus({ silent: true });
   initializeRobotViewer();
   addLog("系统", "Robot Station 前端原型已加载");
   addLog("ROS", "等待接入真实 ROS 状态");

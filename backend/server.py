@@ -29,6 +29,7 @@ from modules.data_collection import get_action_mirror, shutdown_action_mirror, s
 from modules.drivers.can.can_activate import activate_can
 from modules.inference import get_inference_manager
 from modules.logger import get_logger, setup_logger
+from modules.map import get_mapping_manager, mapping_result_status
 from modules.playback import load_playback_dataset, playback_result_status
 from modules.playback_manager import get_playback_manager
 from modules.robot_description import RobotModelError, get_model, list_models, resolve_model_asset
@@ -51,6 +52,34 @@ FRONTEND_DIR = ROOT_DIR / "frontend"
 LOGGER = get_logger()
 AUTH_COOKIE = "robot_station_session"
 MODEL_ASSET_CACHE_SECONDS = int(os.environ.get("ROBOT_STATION_MODEL_ASSET_CACHE_SECONDS", "86400"))
+
+
+def env_flag(name, default=True):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    text = str(raw).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
+    return default
+
+
+def autostart_transforms():
+    if not env_flag("ROBOT_STATION_AUTOSTART_TRANSFORMS", True):
+        LOGGER.info("Static transform autostart disabled")
+        return None
+
+    manager = get_service_manager()
+    status = manager.get_service("transforms")
+    if not status.get("ok"):
+        LOGGER.info("Static transform service not available: %s", status.get("detail", "unknown"))
+        return status
+
+    result = manager.start_service("transforms")
+    log_action_result("Service transforms start", result)
+    return result
 
 
 def log_check_result(result):
@@ -538,6 +567,41 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/inference/status":
             self.write_json(get_inference_manager().status())
             return
+        mapping_tail = api_tail(parsed.path, "/api/mapping")
+        if mapping_tail is not None:
+            if mapping_tail in ("", "status"):
+                result = get_mapping_manager().status()
+                self.write_json(result, status=mapping_result_status(result))
+                return
+            if mapping_tail == "map/frame":
+                result = get_mapping_manager().read_map_frame()
+                if not result.get("ok"):
+                    self.write_json(result, status=mapping_result_status(result))
+                    return
+                self.write_binary(
+                    result["body"],
+                    result["contentType"],
+                    headers={
+                        "X-Robot-Station-PointCloud-Point-Count": str(result.get("pointCount", "")),
+                        "X-Robot-Station-PointCloud-Source-Point-Count": str(result.get("sourcePointCount", "")),
+                        "X-Robot-Station-PointCloud-Stride-Floats": str(result.get("strideFloats", "")),
+                        "X-Robot-Station-PointCloud-Fields": ",".join(result.get("fields", [])),
+                        "X-Robot-Station-Mapping-Session-Id": str(result.get("sessionId", "")),
+                        "X-Robot-Station-Mapping-Capture-Count": str(result.get("captureCount", "")),
+                        "X-Robot-Station-Mapping-Map-Size-Bytes": str(result.get("sizeBytes", "")),
+                        "X-Robot-Station-Mapping-Map-Mtime-Ms": str(result.get("mtimeMs", "")),
+                    },
+                )
+                return
+            self.write_json(
+                {
+                    "ok": False,
+                    "code": "MAP-ACTION",
+                    "detail": "Mapping GET path must be /api/mapping/status or /api/mapping/map/frame.",
+                },
+                status=404,
+            )
+            return
         if parsed.path == "/api/playback/status":
             self.write_json(get_playback_manager().status())
             return
@@ -685,6 +749,45 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             status=400,
         )
 
+    def handle_mapping(self, action):
+        manager = get_mapping_manager()
+        if action in ("", "status"):
+            result = manager.status()
+            self.write_json(result, status=mapping_result_status(result))
+            return
+        if action == "start":
+            payload = self.read_json_body()
+            result = manager.start(payload)
+            log_action_result("Mapping start", result)
+            self.write_json(result, status=mapping_result_status(result))
+            return
+        if action == "capture":
+            payload = self.read_json_body()
+            result = manager.capture(payload)
+            log_action_result("Mapping capture", result)
+            self.write_json(result, status=mapping_result_status(result))
+            return
+        if action == "save":
+            payload = self.read_json_body()
+            result = manager.save(payload)
+            log_action_result("Mapping save", result)
+            self.write_json(result, status=mapping_result_status(result))
+            return
+        if action == "reset":
+            payload = self.read_json_body()
+            result = manager.reset(payload)
+            log_action_result("Mapping reset", result)
+            self.write_json(result, status=mapping_result_status(result))
+            return
+        self.write_json(
+            {
+                "ok": False,
+                "code": "MAP-ACTION",
+                "detail": f"Unsupported mapping action: {action}",
+            },
+            status=400,
+        )
+
     def handle_playback(self, action):
         manager = get_playback_manager()
         if action == "enable":
@@ -763,6 +866,10 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         inference_action = api_tail(parsed.path, "/api/inference")
         if inference_action is not None:
             self.handle_inference(inference_action)
+            return
+        mapping_action = api_tail(parsed.path, "/api/mapping")
+        if mapping_action is not None:
+            self.handle_mapping(mapping_action)
             return
         if parsed.path == "/api/playback/load":
             payload = self.read_json_body()
@@ -1093,6 +1200,7 @@ def main():
         LOGGER.info("Lifting control URL: http://%s:%s", args.host, args.lifting_port)
     if piper_httpd is not None:
         LOGGER.info("Piper control URL: http://%s:%s", args.host, args.piper_port)
+    autostart_transforms()
     start_action_mirror()
     LOGGER.info("Press Ctrl+C to stop")
     try:

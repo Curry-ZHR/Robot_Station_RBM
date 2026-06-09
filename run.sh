@@ -23,6 +23,8 @@ LIFTING_SETUP="${ROOT_DIR}/ros_packages/control/lifting/install/setup.bash"
 CHASSIS_SETUP="${ROOT_DIR}/ros_packages/control/chassis/install/setup.bash"
 CAMERA_SETUP="${ROOT_DIR}/ros_packages/sensors/camera/orbbec/install/setup.bash"
 LIDAR_SETUP="${ROOT_DIR}/ros_packages/sensors/lidar/install/setup.bash"
+LOCALIZATION_SETUP="${ROOT_DIR}/ros_packages/localization/install/setup.bash"
+MAPPER_SETUP="${ROOT_DIR}/ros_packages/localization/robot_station_mapper/install/setup.bash"
 
 disable_proxy_env() {
   unset http_proxy https_proxy ftp_proxy all_proxy ws_proxy wss_proxy rsync_proxy no_proxy
@@ -59,6 +61,14 @@ fi
 
 if [[ -f "${LIDAR_SETUP}" ]]; then
   source_setup "${LIDAR_SETUP}"
+fi
+
+if [[ -f "${LOCALIZATION_SETUP}" ]]; then
+  source_setup "${LOCALIZATION_SETUP}"
+fi
+
+if [[ -f "${MAPPER_SETUP}" ]]; then
+  source_setup "${MAPPER_SETUP}"
 fi
 
 disable_proxy_env

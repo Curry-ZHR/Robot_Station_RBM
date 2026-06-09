@@ -1,11 +1,15 @@
 from dataclasses import asdict, dataclass, field
+import json
 import os
 from pathlib import Path
+import re
+import shlex
 
 from modules.drivers.can.can_interface import DEFAULT_CHASSIS_CAN_TARGETS, load_chassis_can_config
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+STATIC_TRANSFORMS_CONFIG = ROOT_DIR / "config" / "static_transforms.json"
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,167 @@ def _default_chassis_can_port():
     return next(iter(ports), "can_chassis")
 
 
+def _coerce_bool(value, default=True):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
+    return default
+
+
+def _number(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _format_number(value):
+    return f"{float(value):.12g}"
+
+
+def _frame_name(value, field):
+    text = str(value or "").strip().lstrip("/")
+    if not text:
+        raise ValueError(f"Static transform {field} must be a non-empty frame name.")
+    return text
+
+
+def _triplet(raw, names):
+    if isinstance(raw, dict):
+        return tuple(_number(raw.get(name, 0.0)) for name in names)
+    if isinstance(raw, (list, tuple)) and len(raw) >= 3:
+        return tuple(_number(raw[index], 0.0) for index in range(3))
+    return (0.0, 0.0, 0.0)
+
+
+def _node_name(value):
+    text = re.sub(r"[^A-Za-z0-9_]", "_", str(value or "").strip())
+    text = re.sub(r"_+", "_", text).strip("_")
+    if not text:
+        text = "transform"
+    if not re.match(r"^[A-Za-z_]", text):
+        text = f"tf_{text}"
+    return f"robot_station_static_tf_{text[:64]}"
+
+
+def static_transforms_config_path():
+    configured = os.environ.get("ROBOT_STATION_STATIC_TRANSFORMS_CONFIG")
+    if configured:
+        return Path(configured).expanduser()
+    return STATIC_TRANSFORMS_CONFIG
+
+
+def load_static_transform_config(path=None):
+    config_path = Path(path).expanduser() if path else static_transforms_config_path()
+    if not config_path.exists():
+        return {"enabled": False, "transforms": [], "path": str(config_path)}
+
+    with config_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError("Static transform config must be a JSON object.")
+
+    transforms = payload.get("transforms", [])
+    if transforms is None:
+        transforms = []
+    if not isinstance(transforms, list):
+        raise ValueError("Static transform config field transforms must be a list.")
+
+    return {
+        "enabled": _coerce_bool(payload.get("enabled"), True),
+        "transforms": transforms,
+        "path": str(config_path),
+    }
+
+
+def _static_transform_command(transform):
+    if not isinstance(transform, dict):
+        raise ValueError("Each static transform entry must be a JSON object.")
+
+    parent = _frame_name(
+        transform.get("parentFrame") or transform.get("parent_frame") or transform.get("parent"),
+        "parentFrame",
+    )
+    child = _frame_name(
+        transform.get("childFrame") or transform.get("child_frame") or transform.get("child"),
+        "childFrame",
+    )
+    name = transform.get("name") or f"{parent}_to_{child}"
+    x, y, z = _triplet(transform.get("translation", {}), ("x", "y", "z"))
+    roll, pitch, yaw = _triplet(transform.get("rotation", {}), ("roll", "pitch", "yaw"))
+    node_name = _node_name(name)
+
+    return (
+        "ros2",
+        "run",
+        "tf2_ros",
+        "static_transform_publisher",
+        "--x",
+        _format_number(x),
+        "--y",
+        _format_number(y),
+        "--z",
+        _format_number(z),
+        "--roll",
+        _format_number(roll),
+        "--pitch",
+        _format_number(pitch),
+        "--yaw",
+        _format_number(yaw),
+        "--frame-id",
+        parent,
+        "--child-frame-id",
+        child,
+        "--ros-args",
+        "-r",
+        f"__node:={node_name}",
+    ), node_name
+
+
+def static_transform_service_spec(ros_distro=None, config=None):
+    ros_distro = ros_distro or os.environ.get("ROS_DISTRO", "humble")
+    config = config or load_static_transform_config()
+    if not config.get("enabled", True):
+        return None
+
+    transform_entries = config.get("transforms", [])
+    if not transform_entries:
+        return None
+
+    commands = []
+    cleanup_patterns = []
+    for transform in transform_entries:
+        command, node_name = _static_transform_command(transform)
+        commands.append(command)
+        cleanup_patterns.append(f"__node:={node_name}")
+
+    if len(commands) == 1:
+        command = commands[0]
+    else:
+        shell_lines = ["set -e"]
+        shell_lines.extend(f"{shlex.join(entry)} &" for entry in commands)
+        shell_lines.append("wait")
+        command = ("bash", "-lc", "\n".join(shell_lines))
+
+    return ManagedServiceSpec(
+        key="transforms",
+        name="Static robot transforms",
+        command=command,
+        setup_scripts=(f"/opt/ros/{ros_distro}/setup.bash",),
+        cleanup_process_patterns=tuple(cleanup_patterns),
+        cwd=str(ROOT_DIR),
+        shutdown_timeout_sec=4.0,
+        startup_grace_sec=0.5,
+        description="Publish configured static TF frames for Robot Station.",
+    )
+
+
 def default_service_specs():
     ros_distro = os.environ.get("ROS_DISTRO", "humble")
     piper_joint_speed_percent = os.environ.get("PIPER_JOINT_SPEED_PERCENT", "10")
@@ -66,7 +231,7 @@ def default_service_specs():
     chassis_smoother_linear_deadband_mps = os.environ.get("CHASSIS_SMOOTHER_LINEAR_DEADBAND_MPS", "0.005")
     chassis_smoother_angular_deadband_rad_s = os.environ.get("CHASSIS_SMOOTHER_ANGULAR_DEADBAND_RAD_S", "0.01")
     chassis_smoothed_action_topic = os.environ.get("CHASSIS_SMOOTHED_ACTION_TOPIC", "/action/chassis_smoothed")
-    return {
+    specs = {
         "piper": ManagedServiceSpec(
             key="piper",
             name="Piper ROS control",
@@ -210,3 +375,7 @@ def default_service_specs():
             description="Launch the RoboSense LiDAR driver without RViz.",
         ),
     }
+    transforms = static_transform_service_spec(ros_distro=ros_distro)
+    if transforms is not None:
+        specs["transforms"] = transforms
+    return specs

@@ -561,12 +561,18 @@ body[data-active-view="robot-view"] .workbench {
 }
 
 .device-control-view.is-active,
-.platform-control-view.is-active,
-.robot-view.is-active {
+.platform-control-view.is-active {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-height: calc(100vh - 90px);
   overflow: hidden;
+}
+
+.robot-view.is-active {
+  display: grid;
+  grid-template-rows: auto auto;
+  min-height: 0;
+  overflow: visible;
 }
 
 .device-page-head,
@@ -614,21 +620,166 @@ body[data-active-view="robot-view"] .workbench {
 .robot-view-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
   gap: 12px;
   min-height: 0;
-  height: clamp(560px, calc(100vh - 154px), 780px);
+  height: auto;
   margin-bottom: 0;
+  overflow: visible;
 }
 
 .robot-viewport-card {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
   min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .robot-view .panel {
   padding: 10px;
+}
+
+.mapping-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 260px;
+  overflow: hidden;
+}
+
+.robot-view .mapping-panel {
+  overflow: visible;
+}
+
+.mapping-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: min(100%, 420px);
+}
+
+.mapping-actions button,
+.mapping-actions .state-badge {
+  min-height: 32px;
+}
+
+.mapping-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(220px, 0.85fr) minmax(280px, 1.2fr);
+  gap: 12px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.robot-view .mapping-layout {
+  overflow: visible;
+}
+
+.mapping-section {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  padding-right: 12px;
+  border-right: 1px solid var(--line);
+}
+
+.mapping-section:last-child {
+  padding-right: 0;
+  border-right: 0;
+}
+
+.mapping-config-form {
+  gap: 8px;
+}
+
+.mapping-config-form label {
+  min-width: 0;
+}
+
+.mapping-config-form input {
+  min-width: 0;
+}
+
+.mapping-drive-section {
+  justify-items: center;
+}
+
+.mapping-keyboard-button {
+  width: min(100%, 240px);
+  justify-content: center;
+}
+
+.mapping-drive-cluster {
+  min-height: 132px;
+}
+
+.mapping-base-control-panel {
+  width: min(100%, 330px);
+}
+
+.mapping-metrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.mapping-metrics .metric-card {
+  min-height: 58px;
+  padding: 8px;
+}
+
+.mapping-metrics .metric-card strong {
+  margin-top: 4px;
+  font-size: 14px;
+}
+
+.mapping-log {
+  display: grid;
+  gap: 6px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.mapping-keyframe-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 40px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.mapping-keyframe-row strong,
+.mapping-keyframe-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mapping-keyframe-row strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.mapping-keyframe-row span,
+.mapping-keyframe-row small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mapping-keyframe-empty {
+  display: grid;
+  min-height: 56px;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
 }
 
 .robot-model-actions {
@@ -747,8 +898,8 @@ body[data-active-view="robot-view"] .workbench {
 
 .robot-stage {
   position: relative;
-  min-height: clamp(430px, calc(100vh - 260px), 680px);
-  height: 100%;
+  min-height: 640px;
+  height: clamp(640px, 72vh, 900px);
   overflow: hidden;
   background: #09111f;
   isolation: isolate;
@@ -3258,7 +3409,8 @@ body[data-active-view="robot-view"] .event-drawer {
   justify-self: center;
 }
 
-.platform-remote-card .compact-drive-pad {
+.platform-remote-card .compact-drive-pad,
+.mapping-panel .compact-drive-pad {
   width: 150px;
   max-width: none;
   justify-self: center;
@@ -3311,11 +3463,13 @@ body[data-active-view="robot-view"] .event-drawer {
   font-weight: 800;
 }
 
-.platform-remote-card .drive-pad span {
+.platform-remote-card .drive-pad span,
+.mapping-panel .drive-pad span {
   display: block;
 }
 
-.platform-remote-card .drive-pad button {
+.platform-remote-card .drive-pad button,
+.mapping-panel .drive-pad button {
   min-height: 40px;
   border: 1px solid #d8e0ea;
   border-radius: 0;
@@ -3326,33 +3480,39 @@ body[data-active-view="robot-view"] .event-drawer {
   user-select: none;
 }
 
-.platform-remote-card .drive-pad button[data-device-drive="forward"] {
+.platform-remote-card .drive-pad button[data-device-drive="forward"],
+.mapping-panel .drive-pad button[data-mapping-drive="forward"] {
   border-radius: 10px 10px 0 0;
   border-bottom-width: 0;
 }
 
-.platform-remote-card .drive-pad button[data-device-drive="strafe-left"] {
+.platform-remote-card .drive-pad button[data-device-drive="strafe-left"],
+.mapping-panel .drive-pad button[data-mapping-drive="strafe-left"] {
   border-radius: 10px 0 0 10px;
   border-right-width: 0;
 }
 
-.platform-remote-card .drive-pad button[data-device-drive="stop"] {
+.platform-remote-card .drive-pad button[data-device-drive="stop"],
+.mapping-panel .drive-pad button[data-mapping-drive="stop"] {
   background: #ffffff;
   color: #0f766e;
   font-size: 14px;
 }
 
-.platform-remote-card .drive-pad button[data-device-drive="strafe-right"] {
+.platform-remote-card .drive-pad button[data-device-drive="strafe-right"],
+.mapping-panel .drive-pad button[data-mapping-drive="strafe-right"] {
   border-radius: 0 10px 10px 0;
   border-left-width: 0;
 }
 
-.platform-remote-card .drive-pad button[data-device-drive="backward"] {
+.platform-remote-card .drive-pad button[data-device-drive="backward"],
+.mapping-panel .drive-pad button[data-mapping-drive="backward"] {
   border-radius: 0 0 10px 10px;
   border-top-width: 0;
 }
 
-.platform-remote-card [data-device-drive].is-active {
+.platform-remote-card [data-device-drive].is-active,
+.mapping-panel [data-mapping-drive].is-active {
   border-color: #0f766e;
   background: #ccfbf1;
   color: #0f3f3a;
@@ -3466,14 +3626,16 @@ body[data-active-view="robot-view"] .event-drawer {
 }
 
 .platform-remote-card .base-slider-row,
-.platform-remote-card .lift-slider-row {
+.platform-remote-card .lift-slider-row,
+.mapping-panel .base-slider-row {
   grid-template-columns: 56px minmax(0, 1fr) 78px;
   gap: 8px;
   min-height: 32px;
 }
 
 .platform-remote-card .base-slider-row small,
-.platform-remote-card .lift-slider-row small {
+.platform-remote-card .lift-slider-row small,
+.mapping-panel .base-slider-row small {
   display: none;
 }
 
@@ -4419,12 +4581,18 @@ body[data-active-view="robot-view"] .event-drawer {
   .device-card,
   .platform-sensing-card,
   .platform-remote-card,
-  .robot-viewport-card {
+  .robot-viewport-card,
+  .mapping-panel {
     overflow: visible;
   }
 
+  .mapping-panel {
+    min-height: 0;
+  }
+
   .platform-sensing-stack,
-  .platform-remote-body {
+  .platform-remote-body,
+  .mapping-layout {
     grid-template-rows: auto;
   }
 
@@ -4486,8 +4654,26 @@ body[data-active-view="robot-view"] .event-drawer {
 
   .platform-sensing-card,
   .platform-remote-card,
-  .robot-viewport-card {
+  .robot-viewport-card,
+  .mapping-panel {
     overflow: visible;
+  }
+
+  .mapping-layout {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  .mapping-section {
+    padding-right: 0;
+    padding-bottom: 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .mapping-section:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
   }
 
   .platform-remote-card {
@@ -4687,7 +4873,8 @@ body[data-active-view="robot-view"] .event-drawer {
   }
 
   .robot-stage {
-    min-height: 340px;
+    min-height: 420px;
+    height: clamp(420px, 62vh, 640px);
   }
 
   .robot-model-actions {
@@ -4763,7 +4950,8 @@ body[data-active-view="robot-view"] .event-drawer {
   }
 
   .robot-stage {
-    min-height: 300px;
+    min-height: 340px;
+    height: 64vh;
   }
 
   .robot-viewport-card .panel-head {

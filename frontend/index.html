@@ -451,6 +451,77 @@
                     </div>
                   </div>
                 </article>
+                <article class="panel mapping-panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>点云建图</h2>
+                      <p id="mappingSummary">等待创建建图会话</p>
+                    </div>
+                    <div class="mapping-actions">
+                      <span class="state-badge idle" id="mappingBadge">未开始</span>
+                      <button class="secondary-button" id="mappingStartButton" type="button">新建</button>
+                      <button class="primary-button" id="mappingCaptureButton" type="button" disabled>采集点云</button>
+                      <button class="secondary-button" id="mappingSaveButton" type="button" disabled>保存</button>
+                      <button class="icon-button stop" id="mappingResetButton" type="button" disabled>重置</button>
+                    </div>
+                  </div>
+
+                  <div class="mapping-layout">
+                    <section class="mapping-section mapping-config-section">
+                      <div class="section-title compact-title">
+                        <h2>采集参数</h2>
+                        <span>静止采集多帧后自动拼接</span>
+                      </div>
+                      <form class="config-form mapping-config-form" id="mappingConfigForm" autocomplete="off">
+                        <label><span class="field-label">采集帧数<em>frames</em></span><input id="mappingFrameCountInput" type="number" min="1" max="200" step="1" value="10" inputmode="numeric"></label>
+                        <label><span class="field-label">点云 topic<em>filtered</em></span><input id="mappingCloudTopicInput" type="text" value="/rslidar_points"></label>
+                        <label><span class="field-label">里程计 topic<em>odom</em></span><input id="mappingOdomTopicInput" type="text" value="/odom"></label>
+                        <label><span class="field-label">base frame<em>TF</em></span><input id="mappingBaseFrameInput" type="text" value="base_link"></label>
+                      </form>
+                    </section>
+
+                    <section class="mapping-section mapping-drive-section">
+                      <div class="section-title compact-title">
+                        <h2>移动底座</h2>
+                        <span>与平台控制共用限速和指令通路</span>
+                      </div>
+                      <button
+                        class="keyboard-listen-button state-badge idle mapping-keyboard-button"
+                        id="mappingChassisKeyboardButton"
+                        type="button"
+                        aria-pressed="false"
+                        title="点击后监听 W/S/A/D 和 Q/E"
+                      >
+                        键盘监听
+                      </button>
+                      <div class="base-drive-cluster mapping-drive-cluster">
+                        <button class="base-rotate-button rotate-left" data-mapping-drive="left" title="左旋" aria-label="左旋">↺</button>
+                        <button class="base-rotate-button rotate-right" data-mapping-drive="right" title="右旋" aria-label="右旋">↻</button>
+                        <div class="drive-pad compact-drive-pad base-drive-pad">
+                          <span></span>
+                          <button data-mapping-drive="forward" title="前进" aria-label="前进">↑</button>
+                          <span></span>
+                          <button data-mapping-drive="strafe-left" title="向左横移" aria-label="向左横移">←</button>
+                          <button data-mapping-drive="stop" title="停止" aria-label="停止">●</button>
+                          <button data-mapping-drive="strafe-right" title="向右横移" aria-label="向右横移">→</button>
+                          <span></span>
+                          <button data-mapping-drive="backward" title="后退" aria-label="后退">↓</button>
+                          <span></span>
+                        </div>
+                      </div>
+                      <div class="base-control-panel mapping-base-control-panel" id="mappingBaseControlPanel"></div>
+                    </section>
+
+                    <section class="mapping-section mapping-status-section">
+                      <div class="section-title compact-title">
+                        <h2>建图状态</h2>
+                        <span id="mappingSessionText">未创建 session</span>
+                      </div>
+                      <div class="metric-grid mapping-metrics" id="mappingMetrics"></div>
+                      <div class="mapping-log" id="mappingKeyframeList"></div>
+                    </section>
+                  </div>
+                </article>
               </div>
             </section>
 
