@@ -66,6 +66,7 @@ def mapping_result_status(result):
         "MAP-PCD": 422,
         "MAP-DEPENDENCY": 503,
         "MAP-CAPTURE-FAILED": 500,
+        "MAP-SAVE-FAILED": 500,
     }
     return mapping.get(result.get("code", ""), 500)
 
@@ -91,6 +92,19 @@ def _clean_topic(value, default):
     if not text:
         return default
     return text if text.startswith("/") else f"/{text}"
+
+
+def _safe_map_stem(value, default):
+    text = str(value or default or "").strip()
+    if text.lower().endswith(".pcd"):
+        text = text[:-4]
+    stem = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in text)
+    stem = stem.strip(" .")
+    if not stem:
+        stem = str(default or "mapping").strip() or "mapping"
+    if stem in {"tmp", "tmp_map"}:
+        stem = f"{stem}_saved"
+    return stem
 
 
 def _session_id():
@@ -456,22 +470,98 @@ class MappingManager:
         with self._lock:
             if self._session is None:
                 return _result(False, "MAP-NOSESSION", "No mapping session is active.")
+            if self._is_busy_locked():
+                return _result(False, "MAP-BUSY", "Mapping capture is running.", session=self._session_payload_locked())
             source = Path(self._session["tmpMapPath"])
             if not source.exists():
                 return _result(False, "MAP-NOTFOUND", "Temporary map file does not exist.", session=self._session_payload_locked())
-            name = str(payload.get("name") or f"{self._session['id']}.pcd").strip()
-            if not name.endswith(".pcd"):
-                name = f"{name}.pcd"
-            safe_name = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in name)
+            safe_stem = _safe_map_stem(payload.get("name"), self._session["id"])
             self.output_root.mkdir(parents=True, exist_ok=True)
-            destination = self.output_root / safe_name
-            shutil.copy2(source, destination)
+            package_dir = self.output_root / safe_stem
+            staging_dir = self.output_root / f".{safe_stem}.saving"
+            map_destination = package_dir / "map.pcd"
+            try:
+                if staging_dir.exists():
+                    _remove_path(staging_dir)
+                staging_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, staging_dir / "map.pcd")
+
+                session_dir = Path(self._session["sessionDir"])
+                package_files = {
+                    "statePath": ("state.txt", "state.txt"),
+                    "lastResultPath": ("last_result.json", "last_result.json"),
+                    "logPath": ("mapper.log", "mapper.log"),
+                }
+                package = {
+                    "format": "robot_station_map_package",
+                    "version": 1,
+                    "path": str(package_dir),
+                    "mapPath": str(map_destination),
+                    "manifestPath": str(package_dir / "manifest.json"),
+                }
+                for field, (source_name, destination_name) in package_files.items():
+                    file_source = session_dir / source_name
+                    if file_source.exists() and file_source.is_file():
+                        shutil.copy2(file_source, staging_dir / destination_name)
+                        package[field] = str(package_dir / destination_name)
+
+                keyframe_source = Path(self._session.get("keyframeDir", session_dir / "keyframes"))
+                if keyframe_source.exists() and keyframe_source.is_dir():
+                    shutil.copytree(keyframe_source, staging_dir / "keyframes")
+                    package["keyframeDir"] = str(package_dir / "keyframes")
+
+                now = time.strftime("%Y-%m-%d %H:%M:%S")
+                package_manifest = self._session_payload_locked()
+                package_manifest.update(
+                    {
+                        "status": "saved",
+                        "detail": f"地图包已保存到 {package_dir}。",
+                        "savedAt": now,
+                        "updatedAt": now,
+                        "savedMapPath": str(map_destination),
+                        "savedPackagePath": str(package_dir),
+                        "savedMapPackage": package,
+                    }
+                )
+                (staging_dir / "manifest.json").write_text(
+                    json.dumps(package_manifest, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+
+                if package_dir.exists():
+                    _remove_path(package_dir)
+                staging_dir.replace(package_dir)
+            except Exception as exc:
+                try:
+                    if staging_dir.exists():
+                        _remove_path(staging_dir)
+                except Exception:
+                    LOGGER.exception("Failed to clear incomplete mapping save package: %s", staging_dir)
+                LOGGER.exception("Failed to save mapping package")
+                return _result(
+                    False,
+                    "MAP-SAVE-FAILED",
+                    f"Failed to save mapping package: {exc}",
+                    session=self._session_payload_locked(),
+                )
+
             self._session["status"] = "saved"
-            self._session["detail"] = f"地图已保存到 {destination}。"
-            self._session["savedMapPath"] = str(destination)
-            self._session["updatedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            self._session["detail"] = f"地图包已保存到 {package_dir}。"
+            self._session["savedAt"] = package_manifest["savedAt"]
+            self._session["savedMapPath"] = str(map_destination)
+            self._session["savedPackagePath"] = str(package_dir)
+            self._session["savedMapPackage"] = package
+            self._session["updatedAt"] = package_manifest["updatedAt"]
             self._write_manifest_locked()
-            return _result(True, "MAP-SAVED", "Mapping result saved.", session=self._session_payload_locked(), path=str(destination))
+            return _result(
+                True,
+                "MAP-SAVED",
+                "Mapping package saved.",
+                session=self._session_payload_locked(),
+                path=str(map_destination),
+                packagePath=str(package_dir),
+                package=package,
+            )
 
     def reset(self, payload=None):
         payload = payload or {}

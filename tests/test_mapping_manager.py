@@ -71,7 +71,12 @@ if args.progress_path:
 if {sleep_sec!r}:
     time.sleep({sleep_sec!r})
 (session / "keyframes").mkdir(parents=True, exist_ok=True)
+(session / "keyframes" / "keyframe_000.pcd").write_text("keyframe\\n", encoding="utf-8")
 (session / "map_tmp.pcd").write_text("pcd\\n", encoding="utf-8")
+(session / "state.txt").write_text(
+    "1 0 0 0\\n1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 1\\n",
+    encoding="utf-8",
+)
 (session / "last_result.json").write_text(json.dumps({{
 	    "ok": {exit_code == 0},
     "detail": "fake mapper result",
@@ -161,7 +166,38 @@ def test_mapping_session_capture_and_save(tmp_path):
 
     saved = manager.save({"name": "test_map"})
     assert saved["ok"]
-    assert saved["path"].endswith("test_map.pcd")
+    assert saved["path"].endswith("test_map/map.pcd")
+    assert saved["packagePath"].endswith("test_map")
+
+    package_dir = Path(saved["packagePath"])
+    assert (package_dir / "map.pcd").read_text(encoding="utf-8") == "pcd\n"
+    assert (package_dir / "state.txt").exists()
+    assert (package_dir / "last_result.json").exists()
+    assert (package_dir / "keyframes" / "keyframe_000.pcd").read_text(encoding="utf-8") == (
+        "keyframe\n"
+    )
+    manifest = json.loads((package_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["savedMapPath"] == str(package_dir / "map.pcd")
+    assert manifest["savedPackagePath"] == str(package_dir)
+    assert manifest["savedMapPackage"]["format"] == "robot_station_map_package"
+    assert saved["session"]["savedMapPackage"]["statePath"] == str(package_dir / "state.txt")
+
+
+def test_mapping_save_rejects_running_capture(tmp_path):
+    manager = MappingManager(
+        tmp_root=tmp_path / "tmp",
+        output_root=tmp_path / "out",
+        mapper_command=make_fake_mapper(tmp_path, sleep_sec=0.2),
+    )
+    manager.start({"sessionId": "active"})
+
+    capture = manager.capture({})
+    assert capture["ok"]
+    saved = manager.save({"name": "busy_map"})
+
+    assert not saved["ok"]
+    assert saved["code"] == "MAP-BUSY"
+    assert wait_for_idle(manager)["session"]["status"] == "ready"
 
 
 def test_mapping_start_clears_previous_tmp_entries(tmp_path):
