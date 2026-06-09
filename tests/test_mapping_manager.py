@@ -98,6 +98,78 @@ sys.exit({exit_code})
     return (sys.executable, str(script))
 
 
+def make_indexed_fake_mapper(tmp_path, sleep_sec=0.0):
+    script = tmp_path / "indexed_fake_mapper.py"
+    script.write_text(
+        f"""
+import argparse
+import json
+import pathlib
+import sys
+import time
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--session-dir", required=True)
+parser.add_argument("--frames")
+parser.add_argument("--cloud-topic")
+parser.add_argument("--odom-topic")
+parser.add_argument("--base-frame")
+parser.add_argument("--capture-timeout-sec")
+parser.add_argument("--progress-path")
+parser.add_argument("--voxel-leaf")
+parser.add_argument("--ndt-resolution")
+parser.add_argument("--gicp-max-correspondence")
+args = parser.parse_args()
+session = pathlib.Path(args.session_dir)
+if args.progress_path:
+    pathlib.Path(args.progress_path).write_text(json.dumps({{
+        "phase": "registering",
+        "capturedFrames": int(args.frames),
+        "targetFrames": int(args.frames),
+    }}), encoding="utf-8")
+if {sleep_sec!r}:
+    time.sleep({sleep_sec!r})
+
+state_path = session / "state.txt"
+keyframe_index = 0
+if state_path.exists():
+    try:
+        keyframe_index = int(state_path.read_text(encoding="utf-8").split()[0])
+    except Exception:
+        keyframe_index = 0
+
+keyframe_dir = session / "keyframes"
+keyframe_dir.mkdir(parents=True, exist_ok=True)
+keyframe_path = keyframe_dir / f"keyframe_{{keyframe_index:03d}}.pcd"
+keyframe_path.write_text(f"keyframe {{keyframe_index}}\\n", encoding="utf-8")
+(session / "map_tmp.pcd").write_text(f"map {{keyframe_index}}\\n", encoding="utf-8")
+state_path.write_text(
+    f"{{keyframe_index + 1}} {{keyframe_index}} 0 0\\n1 0 0 {{keyframe_index}} 0 1 0 0 0 0 1 0 0 0 0 1\\n",
+    encoding="utf-8",
+)
+(session / "last_result.json").write_text(json.dumps({{
+    "ok": True,
+    "detail": "indexed fake mapper result",
+    "mapPath": str(session / "map_tmp.pcd"),
+    "keyframe": {{
+        "index": keyframe_index,
+        "path": str(keyframe_path),
+        "frames": int(args.frames),
+        "points": keyframe_index + 1,
+    }},
+    "registration": {{
+        "stage": "initial_map" if keyframe_index == 0 else "ndt_gicp",
+        "fitness": 0.0,
+        "finalTransform": [1, 0, 0, keyframe_index, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    }},
+}}), encoding="utf-8")
+sys.exit(0)
+""",
+        encoding="utf-8",
+    )
+    return (sys.executable, str(script))
+
+
 def make_polluting_fake_mapper(tmp_path):
     script = tmp_path / "polluting_fake_mapper.py"
     script.write_text(
@@ -198,6 +270,88 @@ def test_mapping_save_rejects_running_capture(tmp_path):
     assert not saved["ok"]
     assert saved["code"] == "MAP-BUSY"
     assert wait_for_idle(manager)["session"]["status"] == "ready"
+
+
+def test_mapping_delete_last_keyframe_can_repeat(tmp_path):
+    manager = MappingManager(
+        tmp_root=tmp_path / "tmp",
+        output_root=tmp_path / "out",
+        mapper_command=make_indexed_fake_mapper(tmp_path),
+    )
+    started = manager.start({"sessionId": "active", "frameCount": 4})
+    session_dir = Path(started["session"]["sessionDir"])
+    keyframe_dir = session_dir / "keyframes"
+
+    for expected_index in range(3):
+        capture = manager.capture({})
+        assert capture["ok"]
+        session = wait_for_idle(manager)["session"]
+        assert [entry["index"] for entry in session["keyframes"]] == list(range(expected_index + 1))
+        assert session["captureCount"] == expected_index + 1
+        assert session["deleteDepth"] == expected_index + 1
+        assert session["canDeleteLast"]
+
+    first_delete = manager.delete_last({})
+    assert first_delete["ok"]
+    session = first_delete["session"]
+    assert first_delete["deletedKeyframe"]["index"] == 2
+    assert [entry["index"] for entry in session["keyframes"]] == [0, 1]
+    assert session["captureCount"] == 2
+    assert session["deleteDepth"] == 2
+    assert (session_dir / "map_tmp.pcd").read_text(encoding="utf-8") == "map 1\n"
+    assert (session_dir / "state.txt").read_text(encoding="utf-8").startswith("2 1 0 0\n")
+    assert not (keyframe_dir / "keyframe_002.pcd").exists()
+
+    second_delete = manager.delete_last({})
+    assert second_delete["ok"]
+    session = second_delete["session"]
+    assert second_delete["deletedKeyframe"]["index"] == 1
+    assert [entry["index"] for entry in session["keyframes"]] == [0]
+    assert session["captureCount"] == 1
+    assert session["deleteDepth"] == 1
+    assert (session_dir / "map_tmp.pcd").read_text(encoding="utf-8") == "map 0\n"
+    assert (session_dir / "state.txt").read_text(encoding="utf-8").startswith("1 0 0 0\n")
+    assert not (keyframe_dir / "keyframe_001.pcd").exists()
+
+    third_delete = manager.delete_last({})
+    assert third_delete["ok"]
+    session = third_delete["session"]
+    assert third_delete["deletedKeyframe"]["index"] == 0
+    assert session["keyframes"] == []
+    assert session["lastResult"] is None
+    assert session["captureCount"] == 0
+    assert session["deleteDepth"] == 0
+    assert not session["canDeleteLast"]
+    assert not (session_dir / "map_tmp.pcd").exists()
+    assert not (session_dir / "state.txt").exists()
+    assert not (session_dir / "last_result.json").exists()
+    assert not (keyframe_dir / "keyframe_000.pcd").exists()
+
+    empty_delete = manager.delete_last({})
+    assert not empty_delete["ok"]
+    assert empty_delete["code"] == "MAP-NOKEYFRAME"
+    assert mapping_result_status(empty_delete) == 409
+
+
+def test_mapping_delete_last_rejects_running_capture(tmp_path):
+    manager = MappingManager(
+        tmp_root=tmp_path / "tmp",
+        output_root=tmp_path / "out",
+        mapper_command=make_indexed_fake_mapper(tmp_path, sleep_sec=0.2),
+    )
+    manager.start({"sessionId": "active"})
+
+    first_capture = manager.capture({})
+    assert first_capture["ok"]
+    assert wait_for_idle(manager)["session"]["captureCount"] == 1
+
+    second_capture = manager.capture({})
+    assert second_capture["ok"]
+    deleted = manager.delete_last({})
+
+    assert not deleted["ok"]
+    assert deleted["code"] == "MAP-BUSY"
+    assert wait_for_idle(manager)["session"]["captureCount"] == 2
 
 
 def test_mapping_start_clears_previous_tmp_entries(tmp_path):

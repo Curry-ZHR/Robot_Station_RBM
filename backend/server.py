@@ -773,6 +773,12 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             log_action_result("Mapping save", result)
             self.write_json(result, status=mapping_result_status(result))
             return
+        if action in ("delete-last", "delete_last", "remove-last"):
+            payload = self.read_json_body()
+            result = manager.delete_last(payload)
+            log_action_result("Mapping delete last", result)
+            self.write_json(result, status=mapping_result_status(result))
+            return
         if action == "reset":
             payload = self.read_json_body()
             result = manager.reset(payload)

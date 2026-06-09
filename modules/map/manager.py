@@ -62,13 +62,18 @@ def mapping_result_status(result):
         "MAP-PAYLOAD": 400,
         "MAP-NOSESSION": 409,
         "MAP-BUSY": 409,
+        "MAP-NOKEYFRAME": 409,
         "MAP-NOTFOUND": 404,
         "MAP-PCD": 422,
+        "MAP-HISTORY": 500,
         "MAP-DEPENDENCY": 503,
         "MAP-CAPTURE-FAILED": 500,
         "MAP-SAVE-FAILED": 500,
     }
     return mapping.get(result.get("code", ""), 500)
+
+
+MAPPING_SAVED_FIELDS = ("savedAt", "savedMapPath", "savedPackagePath", "savedMapPackage")
 
 
 def _clamp_int(value, default, minimum, maximum):
@@ -390,8 +395,10 @@ class MappingManager:
             session_id = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in session_id)
             session_dir = self.tmp_root / session_id
             keyframe_dir = session_dir / "keyframes"
+            history_dir = session_dir / ".history"
             session_dir.mkdir(parents=True, exist_ok=True)
             keyframe_dir.mkdir(parents=True, exist_ok=True)
+            history_dir.mkdir(parents=True, exist_ok=True)
 
             settings = self._settings_from_payload(payload)
             now = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -403,6 +410,7 @@ class MappingManager:
                 "updatedAt": now,
                 "sessionDir": str(session_dir),
                 "keyframeDir": str(keyframe_dir),
+                "historyDir": str(history_dir),
                 "tmpMapPath": str(session_dir / "map_tmp.pcd"),
                 "manifestPath": str(session_dir / "manifest.json"),
                 "lastResultPath": str(session_dir / "last_result.json"),
@@ -410,6 +418,7 @@ class MappingManager:
                 "logPath": str(session_dir / "mapper.log"),
                 "settings": settings,
                 "keyframes": [],
+                "deleteHistory": [],
                 "lastResult": None,
                 "lastError": "",
                 "captureCount": 0,
@@ -563,6 +572,49 @@ class MappingManager:
                 package=package,
             )
 
+    def delete_last(self, payload=None):
+        payload = payload or {}
+        if not isinstance(payload, dict):
+            return _result(False, "MAP-PAYLOAD", "Payload must be a JSON object.")
+        with self._lock:
+            if self._session is None:
+                return _result(False, "MAP-NOSESSION", "No mapping session is active.")
+            if self._is_busy_locked():
+                return _result(False, "MAP-BUSY", "Mapping capture is running.", session=self._session_payload_locked())
+
+            keyframes = [dict(entry) for entry in self._session.get("keyframes", []) if isinstance(entry, dict)]
+            if not keyframes:
+                return _result(False, "MAP-NOKEYFRAME", "No mapping keyframe is available to delete.", session=self._session_payload_locked())
+
+            history = [entry for entry in self._session.get("deleteHistory", []) if isinstance(entry, dict)]
+            if not history:
+                return _result(False, "MAP-HISTORY", "No previous mapping snapshot is available.", session=self._session_payload_locked())
+
+            history_entry = history[-1]
+            snapshot = self._read_history_snapshot_locked(history_entry)
+            if not isinstance(snapshot, dict):
+                return _result(False, "MAP-HISTORY", "Previous mapping snapshot could not be read.", session=self._session_payload_locked())
+
+            deleted_keyframe = dict(snapshot.get("deletedKeyframe") or history_entry.get("keyframe") or keyframes[-1])
+            self._restore_capture_rollback_locked(snapshot)
+            history.pop()
+            self._session["deleteHistory"] = history
+            self._session["status"] = "ready"
+            self._session["progress"] = None
+            self._session["lastError"] = ""
+            index = deleted_keyframe.get("index")
+            index_text = f" #{index}" if index is not None else ""
+            self._session["detail"] = f"已删除上一帧 keyframe{index_text}。"
+            self._session["updatedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            self._write_manifest_locked()
+            return _result(
+                True,
+                "MAP-DELETE-LAST",
+                "Last mapping keyframe deleted.",
+                session=self._session_payload_locked(),
+                deletedKeyframe=deleted_keyframe,
+            )
+
     def reset(self, payload=None):
         payload = payload or {}
         if not isinstance(payload, dict):
@@ -698,8 +750,6 @@ class MappingManager:
             rollback = session.get("_rollback")
             if not ok:
                 self._restore_capture_rollback_locked(rollback)
-            else:
-                self._clear_capture_rollback_locked(rollback)
             self._session["status"] = "ready" if ok else "failed"
             self._session["progress"] = _progress_payload(
                 "done" if ok else "failed",
@@ -711,13 +761,18 @@ class MappingManager:
                 self._session["lastResult"] = result
             self._session["lastError"] = "" if ok else detail
             self._session["updatedAt"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            keyframe = None
             if ok and isinstance(result, dict):
+                self._clear_saved_metadata_locked()
                 self._session["captureCount"] = int(self._session.get("captureCount", 0) or 0) + 1
                 keyframe = result.get("keyframe")
                 if isinstance(keyframe, dict):
                     existing = [entry for entry in self._session.get("keyframes", []) if entry.get("index") != keyframe.get("index")]
                     existing.append(keyframe)
                     self._session["keyframes"] = sorted(existing, key=lambda item: int(item.get("index", 0) or 0))
+                    self._push_delete_history_locked(rollback, keyframe)
+                else:
+                    self._clear_capture_rollback_locked(rollback)
             self._write_manifest_locked()
 
     def _capture_rollback_locked(self):
@@ -754,7 +809,81 @@ class MappingManager:
             "keyframes": keyframes,
             "lastResult": self._session.get("lastResult"),
             "captureCount": int(self._session.get("captureCount", 0) or 0),
+            "savedFields": {field: self._session.get(field) for field in MAPPING_SAVED_FIELDS if field in self._session},
         }
+
+    def _push_delete_history_locked(self, rollback, keyframe):
+        if self._session is None or not isinstance(rollback, dict) or not isinstance(keyframe, dict):
+            self._clear_capture_rollback_locked(rollback)
+            return None
+
+        session_dir = Path(self._session["sessionDir"])
+        source_dir = self._capture_rollback_dir(rollback, session_dir)
+        history_dir = Path(self._session.get("historyDir", session_dir / ".history"))
+        history = [entry for entry in self._session.get("deleteHistory", []) if isinstance(entry, dict)]
+        history_id = self._delete_history_id(history_dir, history, keyframe)
+        backup_dir = history_dir / history_id
+
+        try:
+            history_dir.mkdir(parents=True, exist_ok=True)
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir)
+            if source_dir and source_dir.exists():
+                shutil.move(str(source_dir), str(backup_dir))
+            else:
+                backup_dir.mkdir(parents=True, exist_ok=True)
+
+            snapshot = dict(rollback)
+            snapshot["backupDir"] = str(backup_dir)
+            snapshot["deletedKeyframe"] = dict(keyframe)
+            (backup_dir / "snapshot.json").write_text(
+                json.dumps(snapshot, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            entry = {
+                "id": history_id,
+                "keyframe": dict(keyframe),
+                "backupDir": str(backup_dir),
+            }
+            history.append(entry)
+            self._session["deleteHistory"] = history
+            return entry
+        except Exception as exc:
+            LOGGER.warning("Failed to store mapping delete history: %s", exc)
+            try:
+                if backup_dir.exists():
+                    shutil.rmtree(backup_dir)
+            except Exception:
+                LOGGER.warning("Failed to clear incomplete mapping history directory: %s", backup_dir)
+            self._clear_capture_rollback_locked(rollback, session_dir=session_dir)
+            return None
+
+    def _delete_history_id(self, history_dir, history, keyframe):
+        try:
+            keyframe_index = int(keyframe.get("index"))
+        except (TypeError, ValueError):
+            keyframe_index = len(history)
+        base = f"undo_{len(history):04d}_keyframe_{keyframe_index:03d}"
+        candidate = base
+        suffix = 1
+        while (history_dir / candidate).exists():
+            candidate = f"{base}_{suffix}"
+            suffix += 1
+        return candidate
+
+    def _read_history_snapshot_locked(self, history_entry):
+        if self._session is None or not isinstance(history_entry, dict):
+            return None
+        session_dir = Path(self._session["sessionDir"])
+        backup_dir = self._capture_rollback_dir(history_entry, session_dir)
+        if not backup_dir:
+            return None
+        snapshot_path = backup_dir / "snapshot.json"
+        snapshot = self._read_json_file(snapshot_path)
+        if not isinstance(snapshot, dict):
+            return None
+        snapshot["backupDir"] = str(backup_dir)
+        return snapshot
 
     def _restore_capture_rollback_locked(self, rollback):
         if self._session is None or not isinstance(rollback, dict):
@@ -791,7 +920,24 @@ class MappingManager:
         self._session["keyframes"] = [dict(entry) for entry in rollback.get("keyframes", []) if isinstance(entry, dict)]
         self._session["lastResult"] = rollback.get("lastResult")
         self._session["captureCount"] = int(rollback.get("captureCount", 0) or 0)
+        self._restore_saved_metadata_locked(rollback)
         self._clear_capture_rollback_locked(rollback, session_dir=session_dir)
+
+    def _clear_saved_metadata_locked(self):
+        if self._session is None:
+            return
+        for field in MAPPING_SAVED_FIELDS:
+            self._session.pop(field, None)
+
+    def _restore_saved_metadata_locked(self, snapshot):
+        if self._session is None:
+            return
+        saved_fields = snapshot.get("savedFields") if isinstance(snapshot, dict) else None
+        for field in MAPPING_SAVED_FIELDS:
+            if isinstance(saved_fields, dict) and field in saved_fields:
+                self._session[field] = saved_fields[field]
+            else:
+                self._session.pop(field, None)
 
     def _capture_rollback_dir(self, rollback, session_dir):
         raw_path = rollback.get("backupDir") if isinstance(rollback, dict) else ""
@@ -898,7 +1044,23 @@ class MappingManager:
         if self._session is None:
             return None
         payload = dict(self._session)
-        payload["busy"] = self._is_busy_locked()
+        busy = self._is_busy_locked()
+        delete_history = [
+            self._delete_history_entry_payload(entry)
+            for entry in self._session.get("deleteHistory", [])
+            if isinstance(entry, dict)
+        ]
+        payload["deleteHistory"] = delete_history
+        payload["deleteDepth"] = len(delete_history)
+        payload["canDeleteLast"] = bool(delete_history and payload.get("keyframes") and not busy)
+        payload["busy"] = busy
+        return payload
+
+    def _delete_history_entry_payload(self, entry):
+        keyframe = entry.get("keyframe") if isinstance(entry, dict) else None
+        payload = {"id": str(entry.get("id") or "")} if isinstance(entry, dict) else {"id": ""}
+        if isinstance(keyframe, dict):
+            payload["keyframe"] = dict(keyframe)
         return payload
 
     def _write_manifest_locked(self):

@@ -3453,6 +3453,10 @@ function renderMappingStatus() {
   }
   const saveButton = $("#mappingSaveButton");
   if (saveButton) saveButton.disabled = busy || !session || keyframes.length === 0;
+  const deleteLastButton = $("#mappingDeleteLastButton");
+  if (deleteLastButton) {
+    deleteLastButton.disabled = busy || !session || keyframes.length === 0 || !session.canDeleteLast;
+  }
   const resetButton = $("#mappingResetButton");
   if (resetButton) resetButton.disabled = !session && !busy;
 
@@ -5028,6 +5032,32 @@ async function saveMappingMap() {
     addLog("建图", result.ok ? `地图已保存：${result.path || name}` : `保存失败：${result.detail || result.code}`);
   } catch (error) {
     addLog("建图", `保存失败：${error.message}`);
+  }
+}
+
+async function deleteLastMappingKeyframe() {
+  const session = state.mapping.session;
+  const keyframes = Array.isArray(session?.keyframes) ? session.keyframes : [];
+  if (!session || !keyframes.length || state.mapping.busy || !session.canDeleteLast) return;
+
+  const lastKeyframe = keyframes[keyframes.length - 1] || {};
+  const index = Number(lastKeyframe.index);
+  const label = Number.isFinite(index) ? `#${index}` : "上一帧";
+  const ok = await confirmAction(
+    "删除上一帧点云",
+    `将从当前临时地图移除 keyframe ${label}，并回退建图状态。删除后不可恢复，但可以继续删除更早的 keyframe。`,
+  );
+  if (!ok) return;
+
+  try {
+    const { result } = await mappingPost("delete-last", {});
+    const deletedIndex = result.deletedKeyframe?.index;
+    const deletedLabel = deletedIndex !== undefined && deletedIndex !== null ? `#${deletedIndex}` : label;
+    addLog("建图", result.ok ? `已删除上一帧 keyframe ${deletedLabel}` : `删除失败：${result.detail || result.code}`);
+  } catch (error) {
+    addLog("建图", `删除失败：${error.message}`);
+  } finally {
+    await refreshMappingStatus({ silent: true });
   }
 }
 
@@ -7622,6 +7652,7 @@ function bindEvents() {
   $("#mappingStartButton").addEventListener("click", startMappingSession);
   $("#mappingCaptureButton").addEventListener("click", captureMappingKeyframe);
   $("#mappingSaveButton").addEventListener("click", saveMappingMap);
+  $("#mappingDeleteLastButton").addEventListener("click", deleteLastMappingKeyframe);
   $("#mappingResetButton").addEventListener("click", resetMappingSession);
   $("#mappingChassisKeyboardButton").addEventListener("click", toggleChassisKeyboardListening);
   $("#mappingConfigForm").addEventListener("input", () => {
