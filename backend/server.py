@@ -567,6 +567,41 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/inference/status":
             self.write_json(get_inference_manager().status())
             return
+        localization_tail = api_tail(parsed.path, "/api/localization")
+        if localization_tail is not None:
+            if localization_tail == "maps":
+                result = get_mapping_manager().list_saved_maps()
+                self.write_json(result, status=mapping_result_status(result))
+                return
+            parts = [part for part in localization_tail.split("/") if part]
+            if len(parts) == 3 and parts[0] == "maps" and parts[2] == "frame":
+                result = get_mapping_manager().read_saved_map_frame(parts[1])
+                if not result.get("ok"):
+                    self.write_json(result, status=mapping_result_status(result))
+                    return
+                self.write_binary(
+                    result["body"],
+                    result["contentType"],
+                    headers={
+                        "X-Robot-Station-PointCloud-Point-Count": str(result.get("pointCount", "")),
+                        "X-Robot-Station-PointCloud-Source-Point-Count": str(result.get("sourcePointCount", "")),
+                        "X-Robot-Station-PointCloud-Stride-Floats": str(result.get("strideFloats", "")),
+                        "X-Robot-Station-PointCloud-Fields": ",".join(result.get("fields", [])),
+                        "X-Robot-Station-Localization-Map-Name": str(result.get("mapName", "")),
+                        "X-Robot-Station-Localization-Map-Size-Bytes": str(result.get("sizeBytes", "")),
+                        "X-Robot-Station-Localization-Map-Mtime-Ms": str(result.get("mtimeMs", "")),
+                    },
+                )
+                return
+            self.write_json(
+                {
+                    "ok": False,
+                    "code": "MAP-ACTION",
+                    "detail": "Localization GET path must be /api/localization/maps or /api/localization/maps/<name>/frame.",
+                },
+                status=404,
+            )
+            return
         mapping_tail = api_tail(parsed.path, "/api/mapping")
         if mapping_tail is not None:
             if mapping_tail in ("", "status"):
@@ -981,6 +1016,11 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
 
         last_sequence = None
         last_sent_at = 0.0
+        # Re-send the most recent frame periodically even when the sensor stops
+        # producing new frames. Without this, a frozen feed never writes to the
+        # socket, so a client disconnect is never detected and this worker thread
+        # loops forever (thread leak).
+        keepalive_sec = 5.0
         while True:
             if not result.get("ok"):
                 time.sleep(0.2)
@@ -988,10 +1028,13 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 continue
 
             sequence = result.get("sequence")
-            if sequence != last_sequence:
-                delay = min_interval - (time.monotonic() - last_sent_at)
-                if delay > 0:
-                    time.sleep(delay)
+            is_new = sequence != last_sequence
+            needs_keepalive = bool(last_sent_at) and (time.monotonic() - last_sent_at) >= keepalive_sec
+            if is_new or needs_keepalive:
+                if is_new:
+                    delay = min_interval - (time.monotonic() - last_sent_at)
+                    if delay > 0:
+                        time.sleep(delay)
                 try:
                     self.write_multipart_frame(boundary, result)
                 except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):

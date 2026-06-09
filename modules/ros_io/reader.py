@@ -21,8 +21,9 @@ class RosTopicReader:
         self._runtime = runtime
         self._specs = specs or read_topic_specs()
         self._lock = threading.RLock()
+        self._condition = threading.Condition(self._lock)
         self._latest = {}
-        self._events = {}
+        self._sequence = {}
         self._subscribed = set()
 
     def list_topics(self):
@@ -40,11 +41,21 @@ class RosTopicReader:
         if not subscribe_result["ok"]:
             return subscribe_result
 
-        event = self._events[spec.key]
-        if timeout_sec and timeout_sec > 0:
-            event.wait(timeout_sec)
-
+        deadline = time.monotonic() + timeout_sec if timeout_sec and timeout_sec > 0 else None
         with self._lock:
+            baseline = self._latest.get(spec.key)
+            baseline_sequence = baseline.get("sequence") if baseline else None
+            while True:
+                latest = self._latest.get(spec.key)
+                sequence = latest.get("sequence") if latest else None
+                if latest is not None and sequence != baseline_sequence:
+                    break
+                if deadline is None:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._condition.wait(remaining)
             latest = self._latest.get(spec.key)
         if latest is None:
             return _result(
@@ -82,20 +93,21 @@ class RosTopicReader:
 
     def _ensure_subscription(self, spec):
         with self._lock:
-            if spec.key not in self._events:
-                self._events[spec.key] = threading.Event()
             if spec.key in self._subscribed:
                 return _result(True, "ROS-R-SUBSCRIBED", "Subscription already registered.")
 
         def callback(message, topic_key=spec.key):
             rendered = message_to_plain(message)
             with self._lock:
+                sequence = self._sequence.get(topic_key, 0) + 1
+                self._sequence[topic_key] = sequence
                 self._latest[topic_key] = {
                     "monotonic": time.monotonic(),
                     "received_at": time.strftime("%H:%M:%S"),
                     "data": rendered,
+                    "sequence": sequence,
                 }
-                self._events[topic_key].set()
+                self._condition.notify_all()
 
         try:
             self._runtime.create_subscription(

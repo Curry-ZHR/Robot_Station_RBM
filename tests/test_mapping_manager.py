@@ -567,3 +567,47 @@ def test_mapping_read_map_frame_rejects_path_escape(tmp_path):
 
     assert not result["ok"]
     assert result["code"] == "MAP-NOTFOUND"
+
+
+def test_mapping_list_saved_maps_filters_tmp_and_requires_map_pcd(tmp_path):
+    output_root = tmp_path / "out"
+    manager = MappingManager(
+        tmp_root=tmp_path / "tmp",
+        output_root=output_root,
+        mapper_command=make_fake_mapper(tmp_path),
+    )
+    write_binary_pcd(output_root / "map_a" / "map.pcd", [(0.0, 0.0, 0.0, 1.0)])
+    write_binary_pcd(output_root / "tmp" / "map.pcd", [(1.0, 0.0, 0.0, 1.0)])
+    (output_root / "unfinished").mkdir(parents=True)
+    (output_root / "unfinished" / "manifest.json").write_text("{}", encoding="utf-8")
+
+    result = manager.list_saved_maps()
+
+    assert result["ok"]
+    assert [entry["name"] for entry in result["maps"]] == ["map_a"]
+    assert result["maps"][0]["mapPath"].endswith("map_a/map.pcd")
+
+
+def test_mapping_read_saved_map_frame_returns_binary_map(tmp_path):
+    output_root = tmp_path / "out"
+    manager = MappingManager(
+        tmp_root=tmp_path / "tmp",
+        output_root=output_root,
+        mapper_command=make_fake_mapper(tmp_path),
+    )
+    write_binary_pcd(
+        output_root / "localization_map" / "map.pcd",
+        [
+            (2.0, 3.0, 4.0, 5.0),
+            (-2.0, -3.0, 1.5, 9.0),
+        ],
+    )
+
+    result = manager.read_saved_map_frame("localization_map")
+
+    assert result["ok"]
+    assert result["contentType"] == "application/octet-stream"
+    assert result["mapName"] == "localization_map"
+    assert result["pointCount"] == 2
+    assert result["fields"] == ["x", "y", "z", "intensity"]
+    assert result["body"] == struct.pack("<ffffffff", 2.0, 3.0, 4.0, 5.0, -2.0, -3.0, 1.5, 9.0)

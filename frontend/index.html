@@ -59,6 +59,7 @@
           <button class="nav-item" data-view="platform-control">平台控制</button>
           <button class="nav-item" data-view="robot-view">整机视图</button>
           <button class="nav-item" data-view="sensors">传感器</button>
+          <button class="nav-item" data-view="localization">定位</button>
           <button class="nav-item" data-view="data-playback">数据回放</button>
           <button class="nav-item" data-view="collection">数采</button>
           <button class="nav-item" data-view="inference">推理</button>
@@ -88,6 +89,10 @@
             </button>
             <button class="status-switch is-idle" id="chassisRuntimeStatus" type="button" aria-pressed="false" title="启动或关闭 Chassis">
               <span>Chassis</span>
+              <i aria-hidden="true"></i>
+            </button>
+            <button class="status-switch is-idle" id="localizationRuntimeStatus" type="button" aria-pressed="false" title="启动或关闭 Loc">
+              <span>Loc</span>
               <i aria-hidden="true"></i>
             </button>
             <button class="status-switch is-idle" id="cameraRuntimeStatus" type="button" aria-pressed="false" title="启动或关闭 Camera">
@@ -694,6 +699,64 @@
                 </article>
               </div>
 
+            </section>
+
+            <section class="view localization-view" data-view-panel="localization">
+              <div class="page-head compact">
+                <div>
+                  <p class="eyebrow">NDT + GICP</p>
+                  <h1>定位</h1>
+                </div>
+                <span class="state-badge idle" id="localizationPageBadge">未选择地图</span>
+              </div>
+
+              <article class="panel localization-map-panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>地图状态</h2>
+                    <p id="localizationMapSummary">等待读取 modules/map/data</p>
+                  </div>
+                  <div class="localization-map-actions">
+                    <select id="localizationMapSelect" aria-label="定位地图选择">
+                      <option value="">选择地图</option>
+                    </select>
+                    <button class="secondary-button" id="localizationRefreshMapsButton" type="button">刷新</button>
+                  </div>
+                </div>
+                <div class="metric-grid localization-map-metrics" id="localizationMapMetrics"></div>
+              </article>
+
+              <article class="panel localization-viewer-panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>地图 / URDF</h2>
+                    <p id="localizationViewerSummary">Ranger Mini v3 / 初始位姿 0, 0, 0</p>
+                  </div>
+                  <div class="localization-viewer-actions">
+                    <button class="secondary-button" id="localizationResetViewButton" type="button">重置视角</button>
+                    <button class="secondary-button" id="localizationCenterRobotButton" type="button">居中机器人</button>
+                  </div>
+                </div>
+                <div class="localization-viewer">
+                  <div class="localization-stage" id="localizationViewStage" aria-label="定位地图与机器人模型">
+                    <div class="localization-view-overlay">
+                      <strong id="localizationOverlayTitle">等待地图</strong>
+                      <span id="localizationOverlayDetail">选择保存地图后自动加载 map.pcd</span>
+                    </div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="panel localization-status-panel">
+                <div class="panel-head">
+                  <div>
+                    <h2>定位状态</h2>
+                    <p id="localizationStatusSummary">真实定位服务待接入</p>
+                  </div>
+                  <span class="state-badge idle" id="localizationStatusBadge">待接入</span>
+                </div>
+                <div class="metric-grid localization-status-metrics" id="localizationStatusMetrics"></div>
+              </article>
             </section>
 
             <section class="view" data-view-panel="data-playback">

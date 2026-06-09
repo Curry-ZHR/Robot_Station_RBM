@@ -374,6 +374,100 @@ class MappingManager:
             mapPath=str(resolved_map),
         )
 
+    def list_saved_maps(self):
+        maps = []
+        try:
+            self.output_root.mkdir(parents=True, exist_ok=True)
+            entries = sorted(self.output_root.iterdir(), key=lambda entry: entry.name)
+        except OSError as exc:
+            return _result(False, "MAP-NOTFOUND", f"Mapping output directory could not be read: {exc}")
+
+        for entry in entries:
+            if not entry.is_dir() or entry.name == "tmp" or entry.name.startswith("."):
+                continue
+            map_path = entry / "map.pcd"
+            if not map_path.is_file():
+                continue
+            try:
+                resolved_package = entry.resolve()
+                resolved_map = map_path.resolve()
+                resolved_package.relative_to(self.output_root.resolve())
+                resolved_map.relative_to(resolved_package)
+                stat_result = resolved_map.stat()
+            except OSError:
+                continue
+            except Exception:
+                continue
+
+            manifest_path = entry / "manifest.json"
+            manifest = self._read_json_file(manifest_path) if manifest_path.is_file() else None
+            maps.append(
+                {
+                    "name": entry.name,
+                    "path": str(resolved_package),
+                    "mapPath": str(resolved_map),
+                    "manifestPath": str(manifest_path) if manifest_path.is_file() else "",
+                    "sizeBytes": int(stat_result.st_size),
+                    "mtimeMs": int(stat_result.st_mtime * 1000),
+                    "savedAt": manifest.get("savedAt", "") if isinstance(manifest, dict) else "",
+                    "updatedAt": manifest.get("updatedAt", "") if isinstance(manifest, dict) else "",
+                    "detail": manifest.get("detail", "") if isinstance(manifest, dict) else "",
+                    "keyframeCount": len(manifest.get("keyframes", [])) if isinstance(manifest, dict) and isinstance(manifest.get("keyframes"), list) else 0,
+                }
+            )
+
+        return _result(
+            True,
+            "MAP-SAVED-LIST",
+            "Saved mapping packages loaded.",
+            maps=maps,
+            outputRoot=str(self.output_root),
+        )
+
+    def read_saved_map_frame(self, map_name):
+        name = str(map_name or "").strip()
+        if not name or name == "tmp" or "/" in name or "\\" in name:
+            return _result(False, "MAP-NOTFOUND", "Saved map name is invalid.")
+
+        map_path = self.output_root / name / "map.pcd"
+        try:
+            resolved_output = self.output_root.resolve()
+            resolved_map = map_path.resolve()
+            resolved_package = (self.output_root / name).resolve()
+            resolved_package.relative_to(resolved_output)
+            resolved_map.relative_to(resolved_package)
+        except Exception:
+            return _result(False, "MAP-NOTFOUND", "Saved map path is outside the mapping output directory.")
+        if not resolved_map.exists():
+            return _result(False, "MAP-NOTFOUND", "Saved map file does not exist.")
+        if not resolved_map.is_file():
+            return _result(False, "MAP-NOTFOUND", "Saved map path is not a file.")
+
+        try:
+            body, point_count, source_point_count = _read_pcd_payload(resolved_map)
+        except ValueError as exc:
+            return _result(False, "MAP-PCD", f"Saved map PCD could not be read: {exc}")
+        except OSError as exc:
+            return _result(False, "MAP-NOTFOUND", f"Saved map file could not be read: {exc}")
+
+        stat_result = resolved_map.stat()
+        return _result(
+            True,
+            "MAP-SAVED-FRAME",
+            "Saved mapping point cloud loaded.",
+            body=body,
+            contentType="application/octet-stream",
+            pointCount=point_count,
+            sourcePointCount=source_point_count,
+            strideFloats=4,
+            fields=list(PCD_FLOAT32_FIELDS),
+            mapName=name,
+            packagePath=str(resolved_package),
+            sizeBytes=int(stat_result.st_size),
+            mtimeMs=int(stat_result.st_mtime * 1000),
+            mapPath=str(resolved_map),
+        )
+
     def start(self, payload=None):
         payload = payload or {}
         if not isinstance(payload, dict):

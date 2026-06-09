@@ -45,6 +45,9 @@ const state = {
   chassisRuntime: {
     status: "stopped",
   },
+  localizationRuntime: {
+    status: "stopped",
+  },
   cameraRuntime: {
     status: "stopped",
   },
@@ -177,6 +180,29 @@ const state = {
       mtimeMs: null,
       loadedRevision: "",
       error: "",
+      geometry: null,
+      material: null,
+      points: null,
+    },
+  },
+  localization: {
+    maps: [],
+    mapsLoading: false,
+    selectedMapName: "",
+    selectedMap: null,
+    status: "idle",
+    lastError: "",
+    mapPreview: {
+      activeRequest: false,
+      hasFrame: false,
+      initialized: false,
+      pointCount: 0,
+      sourcePointCount: 0,
+      sizeBytes: 0,
+      mtimeMs: null,
+      loadedName: "",
+      error: "",
+      bounds: null,
       geometry: null,
       material: null,
       points: null,
@@ -606,6 +632,12 @@ const chassisRuntimeLabels = {
   unknown: { title: "Chassis 状态未知，点击刷新", level: "idle", pressed: false },
 };
 
+const localizationRuntimeLabels = {
+  stopped: { title: "Loc 未启动，选择地图后点击启动", level: "idle", pressed: false },
+  running: { title: "Loc 已开启，点击停止", level: "ok", pressed: true },
+  error: { title: "Loc 异常，点击重试", level: "danger", pressed: false },
+};
+
 const cameraRuntimeLabels = {
   stopped: { title: "Camera 未启动，点击启动", level: "idle", pressed: false },
   starting: { title: "Camera 启动中", level: "warn", pressed: false, busy: true },
@@ -643,6 +675,7 @@ const threeModuleUrl = "./vendor/three.module.min.js";
 const colladaLoaderUrl = "./vendor/ColladaLoader.js";
 const stlLoaderUrl = "./vendor/STLLoader.js";
 const urdfLoaderUrl = "./vendor/URDFLoader.js";
+const localizationDefaultModelKey = "ranger_mini_v3";
 let threeModulePromise = null;
 let threeLoaderPromise = null;
 
@@ -1128,6 +1161,13 @@ function getChassisRuntimeLabel() {
   return chassisRuntimeLabels[state.chassisRuntime.status] || chassisRuntimeLabels.error;
 }
 
+function getLocalizationRuntimeLabel() {
+  if (!state.localization.selectedMapName && state.localizationRuntime.status !== "running") {
+    return { ...localizationRuntimeLabels.stopped, title: "请先在定位页面选择地图" };
+  }
+  return localizationRuntimeLabels[state.localizationRuntime.status] || localizationRuntimeLabels.error;
+}
+
 function getCameraRuntimeLabel() {
   return cameraRuntimeLabels[state.cameraRuntime.status] || cameraRuntimeLabels.error;
 }
@@ -1164,6 +1204,12 @@ function setChassisRuntime(status) {
   renderDeviceBaseMetrics();
 }
 
+function setLocalizationRuntime(status) {
+  state.localizationRuntime.status = localizationRuntimeLabels[status] ? status : "error";
+  renderLocalizationRuntime();
+  renderLocalizationStatus();
+}
+
 function setCameraRuntime(status) {
   state.cameraRuntime.status = cameraRuntimeLabels[status] ? status : "unknown";
   renderCameraRuntime();
@@ -1191,6 +1237,23 @@ function showView(view) {
     fetchRobotModels({ silent: true });
     initializeRobotViewer();
     window.setTimeout(resizeRobotViewer, 0);
+  }
+  if (view === "localization") {
+    fetchLocalizationMaps({ silent: true });
+    ensureLocalizationRobotModel();
+    window.setTimeout(() => {
+      syncRobotViewerMount();
+      syncRobotViewerLayersForView();
+      resizeRobotViewer();
+      renderLocalizationStatus();
+    }, 0);
+  } else {
+    window.setTimeout(() => {
+      syncRobotViewerMount();
+      syncRobotViewerLayersForView();
+      resizeRobotViewer();
+      updateRobotModelTransforms();
+    }, 0);
   }
 }
 
@@ -2334,6 +2397,14 @@ function mappingMapVisible() {
   return Boolean(state.mapping.mapPreview.hasFrame);
 }
 
+function localizationViewActive() {
+  return document.body.dataset.activeView === "localization";
+}
+
+function localizationMapVisible() {
+  return localizationViewActive() && Boolean(state.localization.mapPreview.hasFrame);
+}
+
 function robotJointDeg(side, index, fallback = 0) {
   const value = stateValueFor(state.piperJoints[side], index);
   return Number.isFinite(value) ? radToDeg(value) : fallback;
@@ -2759,6 +2830,34 @@ async function fetchRobotModels(options = {}) {
   }
 }
 
+function robotViewerStage() {
+  if (localizationViewActive()) {
+    return $("#localizationViewStage") || $("#robotViewStage");
+  }
+  return $("#robotViewStage") || $("#localizationViewStage");
+}
+
+function syncRobotViewerMount() {
+  const robot = state.robotModel;
+  const container = robotViewerStage();
+  if (!container || !robot.renderer) return false;
+  if (robot.renderer.domElement.parentElement !== container) {
+    container.appendChild(robot.renderer.domElement);
+  }
+  return true;
+}
+
+function syncRobotViewerLayersForView() {
+  const mappingPreview = state.mapping.mapPreview;
+  if (mappingPreview.points) {
+    mappingPreview.points.visible = !localizationViewActive() && Boolean(mappingPreview.hasFrame);
+  }
+  const localizationPreview = state.localization.mapPreview;
+  if (localizationPreview.points) {
+    localizationPreview.points.visible = localizationMapVisible();
+  }
+}
+
 function updateRobotCamera() {
   const robot = state.robotModel;
   if (!robot.camera || !robot.controls) return;
@@ -2774,7 +2873,8 @@ function updateRobotCamera() {
 
 function resizeRobotViewer() {
   const robot = state.robotModel;
-  const container = $("#robotViewStage");
+  const container = robotViewerStage();
+  syncRobotViewerMount();
   if (!container || !robot.renderer || !robot.camera) return;
   const rect = container.getBoundingClientRect();
   const width = Math.floor(rect.width);
@@ -2853,12 +2953,17 @@ function bindRobotViewerControls(surface) {
 
 async function initializeRobotViewer() {
   const robot = state.robotModel;
-  if (robot.initialized) return true;
+  if (robot.initialized) {
+    syncRobotViewerMount();
+    syncRobotViewerLayersForView();
+    resizeRobotViewer();
+    return true;
+  }
   if (robot.initPromise) return robot.initPromise;
 
   robot.initPromise = loadThreeLoaders()
     .then(({ THREE }) => {
-      const container = $("#robotViewStage");
+      const container = robotViewerStage();
       if (!container) return false;
 
       const scene = new THREE.Scene();
@@ -2911,7 +3016,10 @@ async function initializeRobotViewer() {
 
       bindRobotViewerControls(renderer.domElement);
       robot.resizeObserver = new ResizeObserver(resizeRobotViewer);
-      robot.resizeObserver.observe(container);
+      ["#robotViewStage", "#localizationViewStage"].forEach((selector) => {
+        const stage = $(selector);
+        if (stage) robot.resizeObserver.observe(stage);
+      });
       window.addEventListener("resize", resizeRobotViewer);
 
       const animate = () => {
@@ -3156,6 +3264,13 @@ function updateRobotModelTransforms() {
     }
   });
 
+  if (localizationViewActive() && state.localization.selectedMapName) {
+    robot.modelRoot.scale.setScalar(1);
+    robot.modelRoot.position.set(0, 0, 0);
+    robot.modelRoot.rotation.z = 0;
+    return;
+  }
+
   const mappingPose = mappingPoseFromTransform();
   if (mappingPose) {
     robot.modelRoot.scale.setScalar(1);
@@ -3263,7 +3378,7 @@ async function loadRobotModel(key = state.robotModel.selectedKey) {
     state.robotModel.loadedKey = key;
     state.robotModel.hasModel = true;
     frameRobotModelInViewer(root);
-    if (state.robotModel.poseSyncEnabled || mappingFinalTransform()) updateRobotModelTransforms();
+    if (state.robotModel.poseSyncEnabled || mappingFinalTransform() || localizationViewActive()) updateRobotModelTransforms();
     if (state.robotModel.lidarOverlay.enabled) ensureRobotLidarOverlay();
     setRobotLoadProgress({
       active: false,
@@ -3508,6 +3623,126 @@ function renderMappingStatus() {
   renderChassisKeyboardControl();
 }
 
+function localizationSelectedMap() {
+  return state.localization.maps.find((entry) => entry.name === state.localization.selectedMapName) || state.localization.selectedMap || null;
+}
+
+function localizationTimestampText(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return "--";
+  return new Date(parsed).toLocaleString("zh-CN", { hour12: false });
+}
+
+function localizationMapStateText() {
+  const localization = state.localization;
+  const preview = localization.mapPreview;
+  if (localization.mapsLoading) return "读取地图列表";
+  if (preview.activeRequest) return "加载点云";
+  if (localization.lastError || preview.error) return "异常";
+  if (preview.hasFrame) return "已显示";
+  if (localization.selectedMapName) return "待加载";
+  if (localization.maps.length) return "待选择";
+  return "无可用地图";
+}
+
+function localizationMapLevel() {
+  const localization = state.localization;
+  if (localization.mapsLoading || localization.mapPreview.activeRequest) return "warn";
+  if (localization.lastError || localization.mapPreview.error) return "danger";
+  if (localization.mapPreview.hasFrame) return "ok";
+  return "idle";
+}
+
+function renderLocalizationMapSelect() {
+  const select = $("#localizationMapSelect");
+  if (!select) return;
+  const localization = state.localization;
+  const options = localization.maps.length
+    ? [`<option value="">选择地图</option>`]
+        .concat(localization.maps.map((entry) => `<option value="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</option>`))
+        .join("")
+    : `<option value="">${localization.mapsLoading ? "读取中" : "暂无可用地图"}</option>`;
+  if (select.dataset.options !== options) {
+    select.innerHTML = options;
+    select.dataset.options = options;
+  }
+  select.value = localization.selectedMapName || "";
+  select.disabled = localization.mapsLoading || localization.maps.length === 0;
+}
+
+function renderLocalizationStatus() {
+  const localization = state.localization;
+  const preview = localization.mapPreview;
+  const selected = localizationSelectedMap();
+  const statusText = localizationMapStateText();
+  const statusLevel = localizationMapLevel();
+  const locRunning = state.localizationRuntime.status === "running";
+  const currentMap = localization.selectedMapName || "--";
+  const pointCount = preview.hasFrame ? Math.max(0, Math.round(preview.pointCount || 0)).toLocaleString("zh-CN") : "--";
+  const sourcePointCount = preview.hasFrame ? Math.max(0, Math.round(preview.sourcePointCount || preview.pointCount || 0)).toLocaleString("zh-CN") : "--";
+  const sizeBytes = preview.hasFrame ? preview.sizeBytes : selected?.sizeBytes;
+  const mtimeMs = preview.hasFrame ? preview.mtimeMs : selected?.mtimeMs;
+
+  renderLocalizationRuntime();
+  renderLocalizationMapSelect();
+  setStateBadge("#localizationPageBadge", locRunning ? "Loc 运行中" : statusText, locRunning ? "ok" : statusLevel);
+  setStateBadge("#localizationStatusBadge", locRunning ? "运行中" : "待接入", locRunning ? "ok" : "idle");
+  setText(
+    "#localizationMapSummary",
+    localization.lastError || preview.error || (selected ? `${selected.name} / ${selected.mapPath || "map.pcd"}` : "选择 modules/map/data 下的已保存地图"),
+  );
+  setText(
+    "#localizationViewerSummary",
+    preview.hasFrame
+      ? `${currentMap} / Ranger Mini v3 / 初始位姿 0, 0, 0`
+      : "Ranger Mini v3 / 初始位姿 0, 0, 0",
+  );
+  setText("#localizationStatusSummary", locRunning ? "Loc 前端入口已开启，真实定位服务待接入" : "真实定位服务待接入");
+
+  const overlayTitle = $("#localizationOverlayTitle");
+  if (overlayTitle) overlayTitle.textContent = preview.activeRequest ? "地图加载中" : preview.hasFrame ? currentMap : statusText;
+  const overlayDetail = $("#localizationOverlayDetail");
+  if (overlayDetail) {
+    overlayDetail.textContent = preview.error
+      ? preview.error
+      : preview.hasFrame
+        ? `${pointCount} 点 / 可旋转、平移、缩放`
+        : "选择保存地图后自动加载 map.pcd";
+  }
+
+  const mapMetrics = $("#localizationMapMetrics");
+  if (mapMetrics) {
+    mapMetrics.innerHTML = [
+      ["可用地图", String(localization.maps.length)],
+      ["当前地图", currentMap],
+      ["地图状态", statusText],
+      ["地图点", pointCount],
+      ["源点数", sourcePointCount],
+      ["文件大小", Number.isFinite(Number(sizeBytes)) ? formatBytes(sizeBytes) : "--"],
+      ["更新时间", localizationTimestampText(mtimeMs)],
+      ["初始位姿", "0 / 0 / 0"],
+    ]
+      .map(([name, value]) => `<div class="metric-card"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
+      .join("");
+  }
+
+  const statusMetrics = $("#localizationStatusMetrics");
+  if (statusMetrics) {
+    statusMetrics.innerHTML = [
+      ["Loc", locRunning ? "运行中" : "未启动"],
+      ["地图", currentMap],
+      ["NDT", "待接入"],
+      ["GICP", "待接入"],
+      ["Pose X/Y/Yaw", "0.00 / 0.00 / 0.0"],
+      ["匹配分数", "--"],
+      ["置信度", "--"],
+      ["最近更新", locRunning ? formatTime() : "--"],
+    ]
+      .map(([name, value]) => `<div class="metric-card"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
+      .join("");
+  }
+}
+
 function renderLiftingRuntime() {
   const label = getLiftingRuntimeLabel();
   renderStatusSwitch("#liftingRuntimeStatus", "Lifting", label.level, {
@@ -3520,6 +3755,15 @@ function renderLiftingRuntime() {
 function renderChassisRuntime() {
   const label = getChassisRuntimeLabel();
   renderStatusSwitch("#chassisRuntimeStatus", "Chassis", label.level, {
+    pressed: label.pressed,
+    busy: label.busy,
+    title: label.title,
+  });
+}
+
+function renderLocalizationRuntime() {
+  const label = getLocalizationRuntimeLabel();
+  renderStatusSwitch("#localizationRuntimeStatus", "Loc", label.level, {
     pressed: label.pressed,
     busy: label.busy,
     title: label.title,
@@ -5082,6 +5326,107 @@ async function resetMappingSession() {
     clearMappingMapPreview();
     renderMappingStatus();
   }
+}
+
+async function ensureLocalizationRobotModel() {
+  if (!state.robotModel.models.length) {
+    await fetchRobotModels({ silent: true });
+  }
+  const defaultModel = state.robotModel.models.find((model) => model.key === localizationDefaultModelKey) || state.robotModel.models[0] || null;
+  if (defaultModel) state.robotModel.selectedKey = defaultModel.key;
+  const initialized = await initializeRobotViewer();
+  if (!initialized) {
+    renderLocalizationStatus();
+    return null;
+  }
+  syncRobotViewerMount();
+  syncRobotViewerLayersForView();
+  if (defaultModel && (!state.robotModel.hasModel || state.robotModel.loadedKey !== defaultModel.key)) {
+    const model = await loadRobotModel(defaultModel.key);
+    syncRobotViewerMount();
+    syncRobotViewerLayersForView();
+    updateRobotModelTransforms();
+    renderLocalizationStatus();
+    return model;
+  }
+  updateRobotModelTransforms();
+  renderLocalizationStatus();
+  return state.robotModel.metadata || defaultModel;
+}
+
+async function fetchLocalizationMaps(options = {}) {
+  const localization = state.localization;
+  if (localization.mapsLoading) return null;
+  localization.mapsLoading = true;
+  localization.lastError = "";
+  renderLocalizationStatus();
+  try {
+    const response = await fetch("/api/localization/maps", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok || !Array.isArray(payload.maps)) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+
+    localization.maps = payload.maps;
+    const selectedStillExists = localization.maps.some((entry) => entry.name === localization.selectedMapName);
+    let nextSelected = selectedStillExists ? localization.selectedMapName : "";
+    if (!nextSelected && localization.maps.length === 1) {
+      nextSelected = localization.maps[0].name;
+    }
+    localization.mapsLoading = false;
+    localization.lastError = "";
+    if (nextSelected !== localization.selectedMapName) {
+      await selectLocalizationMap(nextSelected, { silent: options.silent });
+    } else {
+      localization.selectedMap = localizationSelectedMap();
+      renderLocalizationStatus();
+    }
+    return payload;
+  } catch (error) {
+    localization.mapsLoading = false;
+    localization.maps = [];
+    localization.lastError = error.message;
+    clearLocalizationMapPreview();
+    if (!options.silent) addLog("定位", `地图列表读取失败：${error.message}`);
+    renderLocalizationStatus();
+    return null;
+  }
+}
+
+async function selectLocalizationMap(name, options = {}) {
+  const localization = state.localization;
+  const nextName = String(name || "").trim();
+  const previousName = localization.selectedMapName;
+  localization.selectedMapName = nextName;
+  localization.selectedMap = localizationSelectedMap();
+  localization.lastError = "";
+  if (previousName !== nextName) {
+    clearLocalizationMapPreview();
+    if (state.localizationRuntime.status === "running") {
+      setLocalizationRuntime("stopped");
+      addLog("定位", "地图已切换，Loc 已停止");
+    }
+  }
+  renderLocalizationStatus();
+  if (!nextName) return null;
+  if (!options.silent && previousName !== nextName) addLog("定位", `已选择地图：${nextName}`);
+  return requestLocalizationMapFrame(nextName);
+}
+
+function toggleLocalizationRuntime() {
+  if (state.localizationRuntime.status === "running") {
+    setLocalizationRuntime("stopped");
+    addLog("定位", "Loc 已停止");
+    return;
+  }
+  if (!state.localization.selectedMapName) {
+    addLog("定位", "请先在定位页面选择地图");
+    showView("localization");
+    renderLocalizationStatus();
+    return;
+  }
+  setLocalizationRuntime("running");
+  addLog("定位", `Loc 已开启：${state.localization.selectedMapName}（真实定位服务待接入）`);
 }
 
 async function inferencePost(action, payload = {}) {
@@ -7173,7 +7518,7 @@ function ensureMappingMapLayer() {
     robot.scene.add(preview.points);
   }
   preview.initialized = true;
-  preview.points.visible = preview.hasFrame;
+  preview.points.visible = !localizationViewActive() && preview.hasFrame;
   return true;
 }
 
@@ -7203,7 +7548,7 @@ function updateMappingMapPointCloud(buffer) {
   preview.geometry.computeBoundingSphere();
   preview.hasFrame = cloud.count > 0;
   preview.pointCount = cloud.count;
-  preview.points.visible = preview.hasFrame;
+  syncRobotViewerLayersForView();
   if (preview.hasFrame) {
     pauseRobotLidarOverlayForMappingMap();
     frameMappingMapInRobotViewer(cloud);
@@ -7284,6 +7629,151 @@ function syncMappingMapPreview() {
   if (!state.mapping.busy && revision !== state.mapping.mapPreview.loadedRevision) {
     requestMappingMapFrame(revision);
   }
+}
+
+function ensureLocalizationMapLayer() {
+  const robot = state.robotModel;
+  const preview = state.localization.mapPreview;
+  if (!robot.three || !robot.scene) return false;
+
+  if (!preview.points) {
+    preview.geometry = new robot.three.BufferGeometry();
+    preview.material = new robot.three.PointsMaterial({
+      size: Math.max(0.014, lidarPointRadiusToMaterialSize(state.lidarCloud.pointRadius) * 0.78),
+      map: createLidarPointTexture(robot.three),
+      vertexColors: true,
+      sizeAttenuation: true,
+      transparent: true,
+      alphaTest: 0.1,
+      opacity: 0.92,
+      depthWrite: false,
+    });
+    preview.points = new robot.three.Points(preview.geometry, preview.material);
+    preview.points.name = "localization_saved_map";
+    preview.points.frustumCulled = false;
+  }
+
+  if (preview.points.parent !== robot.scene) {
+    robot.scene.add(preview.points);
+  }
+  preview.initialized = true;
+  preview.points.visible = localizationMapVisible();
+  return true;
+}
+
+function frameLocalizationMapInRobotViewer(bounds = state.localization.mapPreview.bounds) {
+  const robot = state.robotModel;
+  if (!robot.controls || !robot.three || !bounds || bounds.count <= 0) return;
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+  const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+  const dx = bounds.maxX - bounds.minX;
+  const dy = bounds.maxY - bounds.minY;
+  const dz = bounds.maxZ - bounds.minZ;
+  const diagonal = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  robot.controls.yaw = -2.35;
+  robot.controls.pitch = 0.86;
+  robot.controls.target.set(centerX, centerY, centerZ);
+  robot.controls.distance = clamp(diagonal * 1.25, 5, 180);
+  updateRobotCamera();
+}
+
+function updateLocalizationMapPointCloud(buffer) {
+  const robot = state.robotModel;
+  const preview = state.localization.mapPreview;
+  if (!robot.three || !ensureLocalizationMapLayer()) return null;
+
+  const cloud = buildLidarPointCloudAttributes(buffer);
+  preview.geometry.setAttribute("position", new robot.three.BufferAttribute(cloud.positions, 3));
+  preview.geometry.setAttribute("color", new robot.three.BufferAttribute(cloud.colors, 3));
+  preview.geometry.computeBoundingSphere();
+  preview.hasFrame = cloud.count > 0;
+  preview.pointCount = cloud.count;
+  preview.bounds = cloud;
+  syncRobotViewerLayersForView();
+  if (preview.hasFrame) {
+    frameLocalizationMapInRobotViewer(cloud);
+  }
+  return cloud;
+}
+
+function clearLocalizationMapPreview() {
+  const preview = state.localization.mapPreview;
+  preview.hasFrame = false;
+  preview.pointCount = 0;
+  preview.sourcePointCount = 0;
+  preview.sizeBytes = 0;
+  preview.mtimeMs = null;
+  preview.loadedName = "";
+  preview.error = "";
+  preview.bounds = null;
+  if (preview.points) preview.points.visible = false;
+}
+
+async function requestLocalizationMapFrame(mapName = state.localization.selectedMapName) {
+  const preview = state.localization.mapPreview;
+  const targetName = String(mapName || "").trim();
+  if (!targetName || preview.activeRequest) return null;
+  preview.activeRequest = true;
+  preview.error = "";
+  renderLocalizationStatus();
+
+  try {
+    await ensureLocalizationRobotModel();
+    if (!ensureLocalizationMapLayer()) throw new Error("定位 3D 视图未就绪");
+    syncRobotViewerMount();
+    const response = await fetch(`/api/localization/maps/${encodeURIComponent(targetName)}/frame?t=${Date.now()}`, { cache: "no-store" });
+    const contentType = response.headers.get("Content-Type") || "";
+    if (!response.ok || contentType.includes("application/json")) {
+      const payload = contentType.includes("application/json") ? await response.json() : null;
+      throw new Error((payload && payload.detail) || `HTTP ${response.status}`);
+    }
+
+    const buffer = await response.arrayBuffer();
+    const cloud = updateLocalizationMapPointCloud(buffer);
+    if (!cloud) throw new Error("定位地图渲染失败");
+    const pointCount = Number(response.headers.get("X-Robot-Station-PointCloud-Point-Count"));
+    const sourcePointCount = Number(response.headers.get("X-Robot-Station-PointCloud-Source-Point-Count"));
+    const sizeBytes = Number(response.headers.get("X-Robot-Station-Localization-Map-Size-Bytes"));
+    const mtimeMs = Number(response.headers.get("X-Robot-Station-Localization-Map-Mtime-Ms"));
+    preview.pointCount = Number.isFinite(pointCount) ? pointCount : cloud.count;
+    preview.sourcePointCount = Number.isFinite(sourcePointCount) ? sourcePointCount : preview.pointCount;
+    preview.sizeBytes = Number.isFinite(sizeBytes) ? sizeBytes : buffer.byteLength;
+    preview.mtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
+    preview.loadedName = targetName;
+    preview.error = "";
+    updateRobotModelTransforms();
+    syncRobotViewerLayersForView();
+    renderRobotViewStatus();
+    addLog("定位", `地图点云已加载：${targetName} / ${preview.pointCount.toLocaleString("zh-CN")} 点`);
+    return cloud;
+  } catch (error) {
+    preview.error = error.message;
+    if (preview.points) preview.points.visible = false;
+    addLog("定位", `地图点云加载失败：${error.message}`);
+    return null;
+  } finally {
+    preview.activeRequest = false;
+    renderLocalizationStatus();
+  }
+}
+
+function resetLocalizationView() {
+  if (state.localization.mapPreview.bounds) {
+    frameLocalizationMapInRobotViewer();
+    return;
+  }
+  requestLocalizationMapFrame();
+}
+
+function centerLocalizationRobot() {
+  ensureLocalizationRobotModel().then(() => {
+    const robot = state.robotModel;
+    if (!robot.controls) return;
+    robot.controls.target.set(0, 0, 0.6);
+    robot.controls.distance = clamp(robot.controls.distance || 7.2, 3, 18);
+    updateRobotCamera();
+  });
 }
 
 function updateLidarPointCloud(buffer) {
@@ -7601,6 +8091,7 @@ function bindEvents() {
   $("#piperRuntimeStatus").addEventListener("click", togglePiperRuntime);
   $("#liftingRuntimeStatus").addEventListener("click", toggleLiftingRuntime);
   $("#chassisRuntimeStatus").addEventListener("click", toggleChassisRuntime);
+  $("#localizationRuntimeStatus").addEventListener("click", toggleLocalizationRuntime);
   $("#chassisKeyboardButton").addEventListener("click", toggleChassisKeyboardListening);
   $("#baseOdomResetButton").addEventListener("click", resetChassisOdometry);
   document.addEventListener("keydown", handleChassisKeyboardKeyDown);
@@ -7659,6 +8150,12 @@ function bindEvents() {
     Object.assign(state.mapping, readMappingSettings());
     renderMappingStatus();
   });
+  $("#localizationMapSelect").addEventListener("change", (event) => {
+    selectLocalizationMap(event.currentTarget.value);
+  });
+  $("#localizationRefreshMapsButton").addEventListener("click", () => fetchLocalizationMaps());
+  $("#localizationResetViewButton").addEventListener("click", resetLocalizationView);
+  $("#localizationCenterRobotButton").addEventListener("click", centerLocalizationRobot);
   $("#armCompareList").addEventListener("input", (event) => {
     const input = event.target.closest("[data-action-kind]");
     if (!input) return;
@@ -7934,6 +8431,7 @@ function init() {
   renderPiperRuntime();
   renderLiftingRuntime();
   renderChassisRuntime();
+  renderLocalizationRuntime();
   renderCameraRuntime();
   renderLidarRuntime();
   renderHistory();
@@ -7945,8 +8443,10 @@ function init() {
   refreshPlaybackStatus({ silent: true });
   renderRobotViewStatus();
   renderMappingStatus();
+  renderLocalizationStatus();
   fetchRobotModels({ silent: true });
   refreshMappingStatus({ silent: true });
+  fetchLocalizationMaps({ silent: true });
   initializeRobotViewer();
   addLog("系统", "Robot Station 前端原型已加载");
   addLog("ROS", "等待接入真实 ROS 状态");
