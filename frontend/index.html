@@ -529,7 +529,10 @@
                         <label><span>yaw</span><input id="initialPoseYawInput" type="number" step="1" value="0" inputmode="decimal" data-initial-pose-field="yawDeg"></label>
                       </form>
                     </div>
-                    <button class="secondary-button" id="initialPosePublishButton" type="button" disabled>发布初值</button>
+                    <div class="initial-pose-actions">
+                      <button class="secondary-button" id="initialPoseEditButton" type="button" aria-pressed="false" disabled>设定初值</button>
+                      <button class="secondary-button" id="initialPosePublishButton" type="button" disabled>发布初值</button>
+                    </div>
                   </section>
                 </article>
               </div>

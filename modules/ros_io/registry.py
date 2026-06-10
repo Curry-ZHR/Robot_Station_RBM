@@ -1,4 +1,5 @@
 from dataclasses import asdict, dataclass
+import os
 
 
 @dataclass(frozen=True)
@@ -284,6 +285,15 @@ WRITE_ACTIONS = {
         builder="twist",
         qos_depth=1,
         description="Publish Ranger chassis velocity commands.",
+    ),
+    "localization_initial_pose": TopicWriteSpec(
+        key="localization_initial_pose",
+        name="Localization initial pose",
+        topic=os.environ.get("LOCALIZATION_INITIAL_POSE_TOPIC", "/initialpose"),
+        message_type="geometry_msgs/msg/PoseWithCovarianceStamped",
+        builder="initial_pose",
+        qos_depth=1,
+        description="Publish an initial pose estimate for map-frame localization.",
     ),
 }
 

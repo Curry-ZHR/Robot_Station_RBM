@@ -1,7 +1,10 @@
 import math
+import os
 
 
 JOINT_NAMES = ["joint0", "joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+INITIAL_POSE_XY_VARIANCE = 0.25
+INITIAL_POSE_YAW_VARIANCE = math.radians(15.0) ** 2
 
 
 class CommandValidationError(ValueError):
@@ -198,11 +201,73 @@ def build_twist_command(payload, message_class, stamp=None):
     return message
 
 
+def _initial_pose_yaw(source):
+    for key in ("yawDeg", "yaw_deg", "yawDegrees", "thetaDeg", "theta_deg"):
+        if key in source:
+            return math.radians(_finite_number(source[key], key))
+    for key in ("yawRad", "yaw_rad", "theta", "yaw"):
+        if key in source:
+            return _finite_number(source[key], key)
+    raise CommandValidationError("Initial pose requires yawDeg or yawRad.")
+
+
+def _initial_pose_frame_id(source):
+    value = source.get("frameId", source.get("frame_id", os.environ.get("LOCALIZATION_INITIAL_POSE_FRAME", "map")))
+    frame_id = str(value or "").strip()
+    if not frame_id:
+        raise CommandValidationError("frameId must be a non-empty string.")
+    return frame_id
+
+
+def _initial_pose_covariance(source):
+    if "covariance" in source:
+        values = _number_list(source["covariance"], "covariance", expected_len=36)
+        if not all(math.isfinite(value) for value in values):
+            raise CommandValidationError("covariance must contain finite numbers.")
+        return values
+
+    values = [0.0] * 36
+    values[0] = INITIAL_POSE_XY_VARIANCE
+    values[7] = INITIAL_POSE_XY_VARIANCE
+    values[35] = INITIAL_POSE_YAW_VARIANCE
+    return values
+
+
+def build_initial_pose_command(payload, message_class, stamp=None):
+    payload = _as_payload_dict(payload)
+    pose = payload.get("pose", {})
+    if pose is not None and not isinstance(pose, dict):
+        raise CommandValidationError("pose must be a JSON object.")
+    source = {**(pose or {}), **payload}
+
+    x = _finite_number(source.get("x"), "x")
+    y = _finite_number(source.get("y"), "y")
+    z = _finite_number(source.get("z", 0.0), "z")
+    yaw = _initial_pose_yaw(source)
+
+    message = message_class()
+    if hasattr(message, "header"):
+        if stamp is not None:
+            message.header.stamp = stamp
+        message.header.frame_id = _initial_pose_frame_id(source)
+
+    message.pose.pose.position.x = x
+    message.pose.pose.position.y = y
+    message.pose.pose.position.z = z
+    message.pose.pose.orientation.x = 0.0
+    message.pose.pose.orientation.y = 0.0
+    message.pose.pose.orientation.z = math.sin(yaw / 2.0)
+    message.pose.pose.orientation.w = math.cos(yaw / 2.0)
+    message.pose.covariance = _initial_pose_covariance(source)
+    return message
+
+
 BUILDERS = {
     "joint_state": build_joint_state_command,
     "pos_cmd": build_pos_cmd,
     "bool": build_bool_command,
     "twist": build_twist_command,
+    "initial_pose": build_initial_pose_command,
 }
 
 

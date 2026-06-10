@@ -171,6 +171,18 @@ const state = {
     frequencyHz: null,
     converged: null,
     lastError: "",
+    initialPoseEditMode: false,
+    initialPosePublishing: false,
+    initialPoseLastPublishedAt: null,
+    initialPoseDrag: {
+      active: false,
+      pointerId: null,
+    },
+    initialPoseMarker: {
+      group: null,
+      arrow: null,
+      ring: null,
+    },
     initialPose: {
       x: 0,
       y: 0,
@@ -2734,6 +2746,7 @@ function bindRobotViewerControls(surface) {
   if (!surface || !controls) return;
 
   surface.addEventListener("pointerdown", (event) => {
+    if (handleInitialPosePointerDown(event, surface)) return;
     event.preventDefault();
     controls.dragging = true;
     controls.dragMode = viewerDragMode(event);
@@ -2743,6 +2756,7 @@ function bindRobotViewerControls(surface) {
   });
 
   surface.addEventListener("pointermove", (event) => {
+    if (handleInitialPosePointerMove(event, surface)) return;
     if (!controls.dragging) return;
     const dx = event.clientX - controls.lastX;
     const dy = event.clientY - controls.lastY;
@@ -2758,6 +2772,7 @@ function bindRobotViewerControls(surface) {
   });
 
   const release = (event) => {
+    if (handleInitialPosePointerRelease(event, surface)) return;
     controls.dragging = false;
     controls.dragMode = "rotate";
     if (surface.hasPointerCapture(event.pointerId)) {
@@ -3364,6 +3379,64 @@ function formatLocalizationNumber(value, digits = 2, suffix = "") {
   return parsed === null ? "--" : `${parsed.toFixed(digits)}${suffix}`;
 }
 
+function normalizeInitialPoseYawDeg(value) {
+  const parsed = localizationNumber(value);
+  if (parsed === null) return null;
+  const normalized = ((((parsed + 180) % 360) + 360) % 360) - 180;
+  return Object.is(normalized, -0) ? 0 : normalized;
+}
+
+function initialPoseMapReady() {
+  const preview = state.mapping.mapPreview;
+  return Boolean(
+    state.robotWork.mode === "localization" &&
+      state.localization.loadedMap &&
+      preview.hasFrame &&
+      preview.source === "localization",
+  );
+}
+
+function initialPoseValues() {
+  const pose = state.localization.initialPose || {};
+  const x = localizationNumber(pose.x);
+  const y = localizationNumber(pose.y);
+  const yawDeg = normalizeInitialPoseYawDeg(pose.yawDeg);
+  if (x === null || y === null || yawDeg === null) return null;
+  return {
+    x,
+    y,
+    z: 0,
+    yawDeg,
+  };
+}
+
+function initialPoseCanPublish() {
+  return Boolean(initialPoseMapReady() && initialPoseValues() && !state.localization.initialPosePublishing);
+}
+
+function resetInitialPoseDrag() {
+  state.localization.initialPoseDrag = {
+    active: false,
+    pointerId: null,
+  };
+}
+
+function setInitialPoseEditMode(enabled) {
+  const active = Boolean(enabled && initialPoseMapReady());
+  state.localization.initialPoseEditMode = active;
+  if (!active) resetInitialPoseDrag();
+  renderInitialPoseControls();
+}
+
+function initialPoseStatusText() {
+  const localization = state.localization;
+  if (!localization.loadedMap) return "待加载地图";
+  if (localization.initialPosePublishing) return "发布中";
+  if (localization.initialPoseEditMode) return "设定中";
+  if (localization.initialPoseLastPublishedAt) return `已发布 ${localization.initialPoseLastPublishedAt}`;
+  return "初值待发布";
+}
+
 function localizationMapByName(name = state.localization.selectedMap) {
   const maps = Array.isArray(state.localization.maps) ? state.localization.maps : [];
   return maps.find((item) => item && item.name === name) || null;
@@ -3599,12 +3672,148 @@ function toggleRobotModal(modalKey) {
   renderRobotModal();
 }
 
+function ensureInitialPoseMarker() {
+  const robot = state.robotModel;
+  const marker = state.localization.initialPoseMarker;
+  if (!robot.three || !robot.scene) return false;
+  const THREE = robot.three;
+
+  if (!marker.group) {
+    marker.group = new THREE.Group();
+    marker.group.name = "localization_initial_pose_marker";
+
+    const ringMaterial = new THREE.MeshBasicMaterial({
+      color: 0x2563eb,
+      transparent: true,
+      opacity: 0.92,
+      depthTest: false,
+    });
+    marker.ring = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.012, 8, 36), ringMaterial);
+    marker.ring.renderOrder = 9;
+    marker.group.add(marker.ring);
+
+    marker.arrow = new THREE.ArrowHelper(
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(0, 0, 0.04),
+      0.9,
+      0x2563eb,
+      0.22,
+      0.14,
+    );
+    marker.arrow.renderOrder = 10;
+    marker.arrow.line.renderOrder = 10;
+    marker.arrow.cone.renderOrder = 10;
+    marker.group.add(marker.arrow);
+  }
+
+  if (marker.group.parent !== robot.scene) {
+    robot.scene.add(marker.group);
+  }
+  return true;
+}
+
+function renderInitialPoseMarker() {
+  const marker = state.localization.initialPoseMarker;
+  const pose = initialPoseValues();
+  const visible = Boolean(initialPoseMapReady() && pose && ensureInitialPoseMarker());
+  if (!marker.group) return;
+  marker.group.visible = visible;
+  if (!visible) return;
+
+  const yawRad = (pose.yawDeg * Math.PI) / 180;
+  marker.group.position.set(pose.x, pose.y, 0.08);
+  marker.arrow.setDirection(new state.robotModel.three.Vector3(Math.cos(yawRad), Math.sin(yawRad), 0).normalize());
+  marker.arrow.setLength(0.9, 0.22, 0.14);
+}
+
+function initialPosePointFromPointer(event, surface) {
+  const robot = state.robotModel;
+  if (!robot.three || !robot.camera || !surface) return null;
+  const rect = surface.getBoundingClientRect();
+  const width = Math.max(rect.width, 1);
+  const height = Math.max(rect.height, 1);
+  const pointer = new robot.three.Vector2(
+    ((event.clientX - rect.left) / width) * 2 - 1,
+    -((event.clientY - rect.top) / height) * 2 + 1,
+  );
+  const raycaster = new robot.three.Raycaster();
+  const plane = new robot.three.Plane(new robot.three.Vector3(0, 0, 1), 0);
+  const point = new robot.three.Vector3();
+  robot.camera.updateMatrixWorld();
+  raycaster.setFromCamera(pointer, robot.camera);
+  return raycaster.ray.intersectPlane(plane, point) ? point : null;
+}
+
+function setInitialPosePositionFromPoint(point) {
+  if (!point) return;
+  const pose = state.localization.initialPose;
+  pose.x = point.x;
+  pose.y = point.y;
+  pose.z = 0;
+  if (normalizeInitialPoseYawDeg(pose.yawDeg) === null) pose.yawDeg = 0;
+  state.localization.lastError = "";
+}
+
+function setInitialPoseYawFromPoint(point) {
+  if (!point) return;
+  const pose = state.localization.initialPose;
+  const x = localizationNumber(pose.x);
+  const y = localizationNumber(pose.y);
+  if (x === null || y === null) return;
+  const dx = point.x - x;
+  const dy = point.y - y;
+  if (Math.hypot(dx, dy) < 0.02) return;
+  pose.yawDeg = normalizeInitialPoseYawDeg((Math.atan2(dy, dx) * 180) / Math.PI);
+}
+
+function handleInitialPosePointerDown(event, surface) {
+  if (!state.localization.initialPoseEditMode || !initialPoseMapReady() || event.button !== 0) return false;
+  event.preventDefault();
+  const point = initialPosePointFromPointer(event, surface);
+  if (!point) return true;
+  setInitialPosePositionFromPoint(point);
+  state.localization.initialPoseDrag = {
+    active: true,
+    pointerId: event.pointerId,
+  };
+  surface.setPointerCapture(event.pointerId);
+  renderLocalizationStatus();
+  return true;
+}
+
+function handleInitialPosePointerMove(event, surface) {
+  const drag = state.localization.initialPoseDrag;
+  if (!drag.active || drag.pointerId !== event.pointerId) return false;
+  event.preventDefault();
+  setInitialPoseYawFromPoint(initialPosePointFromPointer(event, surface));
+  renderInitialPoseControls();
+  renderRobotFooterStatus();
+  return true;
+}
+
+function handleInitialPosePointerRelease(event, surface) {
+  const drag = state.localization.initialPoseDrag;
+  if (!drag.active || drag.pointerId !== event.pointerId) return false;
+  event.preventDefault();
+  setInitialPoseYawFromPoint(initialPosePointFromPointer(event, surface));
+  resetInitialPoseDrag();
+  if (surface.hasPointerCapture(event.pointerId)) {
+    surface.releasePointerCapture(event.pointerId);
+  }
+  renderLocalizationStatus();
+  return true;
+}
+
 function renderInitialPoseControls() {
   const pose = state.localization.initialPose || {};
+  if (!initialPoseMapReady() && state.localization.initialPoseEditMode) {
+    state.localization.initialPoseEditMode = false;
+    resetInitialPoseDrag();
+  }
   [
     ["#initialPoseXInput", pose.x, 2],
     ["#initialPoseYInput", pose.y, 2],
-    ["#initialPoseYawInput", pose.yawDeg, 1],
+    ["#initialPoseYawInput", normalizeInitialPoseYawDeg(pose.yawDeg), 1],
   ].forEach(([selector, value, digits]) => {
     const input = $(selector);
     if (!input || document.activeElement === input) return;
@@ -3619,6 +3828,26 @@ function renderInitialPoseControls() {
     arrow.style.transform = `translate(-50%, -50%) rotate(${yaw === null ? 0 : yaw}deg)`;
     arrow.classList.toggle("is-disabled", yaw === null);
   }
+
+  const editButton = $("#initialPoseEditButton");
+  const mapReady = initialPoseMapReady();
+  if (editButton) {
+    editButton.disabled = !mapReady || state.localization.initialPosePublishing;
+    editButton.classList.toggle("is-active", state.localization.initialPoseEditMode);
+    editButton.setAttribute("aria-pressed", state.localization.initialPoseEditMode ? "true" : "false");
+    editButton.textContent = state.localization.initialPoseEditMode ? "设定中" : "设定初值";
+  }
+
+  const publishButton = $("#initialPosePublishButton");
+  if (publishButton) {
+    publishButton.disabled = !initialPoseCanPublish();
+    publishButton.textContent = state.localization.initialPosePublishing ? "发布中" : "发布初值";
+  }
+
+  const stageLabel = $(".initial-pose-stage-label");
+  if (stageLabel) stageLabel.textContent = initialPoseStatusText();
+  $("#robotViewStage")?.classList.toggle("is-initial-pose-editing", Boolean(state.localization.initialPoseEditMode && mapReady));
+  renderInitialPoseMarker();
 }
 
 function updateInitialPoseFromInputs() {
@@ -3630,7 +3859,7 @@ function updateInitialPoseFromInputs() {
   ].forEach(([selector, key]) => {
     const input = $(selector);
     if (!input) return;
-    pose[key] = localizationNumber(input.value);
+    pose[key] = key === "yawDeg" ? normalizeInitialPoseYawDeg(input.value) : localizationNumber(input.value);
   });
   pose.z = 0;
   renderInitialPoseControls();
@@ -3684,6 +3913,7 @@ function renderLocalizationStatus() {
       ["Initial y", formatLocalizationNumber(initialPose.y, 2, " m")],
       ["Initial z", "0 m"],
       ["Initial yaw", formatLocalizationNumber(initialPose.yawDeg, 1, " deg")],
+      ["Initial 发布", localization.initialPoseLastPublishedAt || "--"],
     ]
       .map(([name, value]) => `<div><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
       .join("");
@@ -3773,7 +4003,16 @@ function renderMappingStatus() {
           : "--";
 
   setStateBadge("#mappingBadge", busy ? busyLabel : meta.label, busy ? (progressMeta?.level || "warn") : meta.level);
-  setText("#mappingSummary", session?.detail || mapping.lastError || "等待创建建图会话");
+  const rawSummary = session?.detail || mapping.lastError || "等待创建建图会话";
+  const summaryNode = $("#mappingSummary");
+  if (summaryNode) {
+    const savedPackageName = String(session?.savedPackagePath || "")
+      .split(/[\\/]/)
+      .filter(Boolean)
+      .pop();
+    summaryNode.textContent = statusKey === "saved" && savedPackageName ? `地图包已保存：${savedPackageName}` : rawSummary;
+    summaryNode.title = rawSummary;
+  }
   const sessionText = $("#mappingSessionText");
   if (sessionText) {
     sessionText.textContent = session?.id || "未创建 session";
@@ -5514,6 +5753,50 @@ async function loadLocalizationMapFrame() {
     addLog("定位", localization.lastError);
   } finally {
     localization.mapLoadBusy = false;
+    renderLocalizationStatus();
+    renderRobotWorkMode();
+  }
+}
+
+async function publishInitialPose() {
+  const localization = state.localization;
+  const pose = initialPoseValues();
+  if (!initialPoseMapReady() || !pose || localization.initialPosePublishing) return;
+
+  localization.initialPosePublishing = true;
+  localization.lastError = "";
+  renderLocalizationStatus();
+
+  const payload = {
+    ...pose,
+    frameId: "map",
+    mapName: localization.loadedMap,
+  };
+
+  try {
+    const response = await fetch("/api/localization/initial-pose", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok === false) {
+      throw new Error(result.detail || result.code || `HTTP ${response.status}`);
+    }
+    localization.status = "initial-pose-published";
+    localization.initialPoseLastPublishedAt = result.publishedAt || formatTime();
+    localization.lastError = "";
+    addLog(
+      "定位",
+      `Initial pose 已发布：${pose.x.toFixed(2)}, ${pose.y.toFixed(2)}, ${pose.yawDeg.toFixed(1)} deg`,
+    );
+  } catch (error) {
+    localization.status = "error";
+    localization.lastError = `初值发布失败：${error.message}`;
+    addLog("定位", localization.lastError);
+  } finally {
+    localization.initialPosePublishing = false;
     renderLocalizationStatus();
     renderRobotWorkMode();
   }
@@ -7689,8 +7972,12 @@ function clearMappingMapPreview() {
     state.localization.mapPointCount = 0;
     state.localization.mapSizeBytes = 0;
     state.localization.mapMtimeMs = null;
+    state.localization.initialPoseEditMode = false;
+    resetInitialPoseDrag();
   }
   if (preview.points) preview.points.visible = false;
+  $("#robotViewStage")?.classList.remove("is-initial-pose-editing");
+  renderInitialPoseMarker();
   if (state.robotModel.hasModel && state.robotModel.modelRoot && !mappingFinalTransform()) {
     frameRobotModelInViewer(state.robotModel.modelRoot);
     updateRobotModelTransforms();
@@ -8143,6 +8430,8 @@ function bindEvents() {
     renderMappingStatus();
   });
   $("#initialPoseForm")?.addEventListener("input", updateInitialPoseFromInputs);
+  $("#initialPoseEditButton")?.addEventListener("click", () => setInitialPoseEditMode(!state.localization.initialPoseEditMode));
+  $("#initialPosePublishButton")?.addEventListener("click", publishInitialPose);
   $("#armCompareList").addEventListener("input", (event) => {
     const input = event.target.closest("[data-action-kind]");
     if (!input) return;

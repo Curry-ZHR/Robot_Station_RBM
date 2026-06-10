@@ -799,6 +799,22 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             status=400,
         )
 
+    def handle_localization(self, action):
+        if action in ("initial-pose", "initial_pose"):
+            payload = self.read_json_body()
+            result = get_ros_writer().publish("localization_initial_pose", payload)
+            log_action_result("Localization initial pose", result)
+            self.write_json(result, status=ros_result_status(result))
+            return
+        self.write_json(
+            {
+                "ok": False,
+                "code": "LOC-ACTION",
+                "detail": f"Unsupported localization action: {action}",
+            },
+            status=400,
+        )
+
     def handle_playback(self, action):
         manager = get_playback_manager()
         if action == "enable":
@@ -844,6 +860,10 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         lifting_action = api_tail(parsed.path, "/api/control/lifting")
         if lifting_action is not None:
             self.handle_lifting_control(lifting_action)
+            return
+        localization_action = api_tail(parsed.path, "/api/localization")
+        if localization_action is not None:
+            self.handle_localization(localization_action)
             return
         service_tail = api_tail(parsed.path, "/api/runtime/services")
         if service_tail is not None:
