@@ -153,6 +153,22 @@ READ_TOPICS = {
         stale_after_sec=0.8,
         description="Ranger chassis odometry published by ranger_base_node.",
     ),
+    "localization_pose": TopicReadSpec(
+        key="localization_pose",
+        name="Localization pose",
+        topic=os.environ.get("LOCALIZATION_POSE_TOPIC", "/localization/pose"),
+        message_type="geometry_msgs/msg/PoseStamped",
+        stale_after_sec=0.8,
+        description="Point-cloud localization estimate for base_link in the map frame.",
+    ),
+    "localization_status": TopicReadSpec(
+        key="localization_status",
+        name="Localization status",
+        topic=os.environ.get("LOCALIZATION_STATUS_TOPIC", "/localization/status"),
+        message_type="std_msgs/msg/String",
+        stale_after_sec=1.5,
+        description="Point-cloud localization status JSON.",
+    ),
     "action_chassis": TopicReadSpec(
         key="action_chassis",
         name="Dataset chassis action",

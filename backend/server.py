@@ -28,6 +28,7 @@ from modules.data_collection import get_action_mirror, shutdown_action_mirror, s
 from modules.drivers.can.can_activate import activate_can
 from modules.inference import get_inference_manager
 from modules.logger import get_logger, setup_logger
+from modules.localization import get_localization_manager, localization_result_status
 from modules.map import get_mapping_manager, mapping_result_status
 from modules.playback import load_playback_dataset, playback_result_status
 from modules.playback_manager import get_playback_manager
@@ -604,6 +605,21 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 status=404,
             )
             return
+        localization_tail = api_tail(parsed.path, "/api/localization")
+        if localization_tail is not None:
+            if localization_tail in ("", "status"):
+                result = get_localization_manager().status()
+                self.write_json(result, status=localization_result_status(result))
+                return
+            self.write_json(
+                {
+                    "ok": False,
+                    "code": "LOC-ACTION",
+                    "detail": "Localization GET path must be /api/localization/status.",
+                },
+                status=404,
+            )
+            return
         if parsed.path == "/api/playback/status":
             self.write_json(get_playback_manager().status())
             return
@@ -800,9 +816,30 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         )
 
     def handle_localization(self, action):
+        manager = get_localization_manager()
+        if action in ("", "status"):
+            result = manager.status()
+            self.write_json(result, status=localization_result_status(result))
+            return
+        if action == "start":
+            payload = self.read_json_body()
+            result = manager.start(payload)
+            log_action_result("Localization start", result)
+            self.write_json(result, status=localization_result_status(result))
+            return
+        if action == "stop":
+            result = manager.stop()
+            log_action_result("Localization stop", result)
+            self.write_json(result, status=localization_result_status(result))
+            return
+        if action == "restart":
+            result = manager.restart()
+            log_action_result("Localization restart", result)
+            self.write_json(result, status=localization_result_status(result))
+            return
         if action in ("initial-pose", "initial_pose"):
             payload = self.read_json_body()
-            result = get_ros_writer().publish("localization_initial_pose", payload)
+            result = manager.publish_initial_pose(payload)
             log_action_result("Localization initial pose", result)
             self.write_json(result, status=ros_result_status(result))
             return

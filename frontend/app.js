@@ -152,6 +152,12 @@ const state = {
   },
   localization: {
     status: "idle",
+    processStatus: "stopped",
+    running: false,
+    statusLoading: false,
+    statusTimer: null,
+    statusUpdatedAt: null,
+    statusPayload: null,
     selectedMap: "",
     maps: [],
     mapsLoading: false,
@@ -168,8 +174,10 @@ const state = {
       yawDeg: null,
     },
     fitness: null,
+    ndtFitness: null,
     frequencyHz: null,
     converged: null,
+    failedFrameCount: 0,
     lastError: "",
     initialPoseEditMode: false,
     initialPosePublishing: false,
@@ -2227,6 +2235,24 @@ function mappingPoseFromTransform(transform = mappingFinalTransform()) {
   };
 }
 
+function localizationPoseForRobotModel() {
+  const localization = state.localization || {};
+  const preview = state.mapping.mapPreview;
+  if (state.robotWork.mode !== "localization" || !localization.loadedMap || preview.source !== "localization") return null;
+  const pose = localization.pose || {};
+  const x = localizationNumber(pose.x);
+  const y = localizationNumber(pose.y);
+  const z = localizationNumber(pose.z) ?? 0;
+  const yawDeg = normalizeInitialPoseYawDeg(pose.yawDeg);
+  if (x === null || y === null || yawDeg === null) return null;
+  return {
+    x,
+    y,
+    z,
+    yaw: (yawDeg * Math.PI) / 180,
+  };
+}
+
 function mappingMapRevision(session = state.mapping.session) {
   if (!session?.tmpMapPath) return "";
   const keyframes = Array.isArray(session.keyframes) ? session.keyframes : [];
@@ -3036,7 +3062,7 @@ function frameRobotModelInViewer(modelRoot) {
   if (!THREE || !modelRoot || !robot.controls) return;
 
   modelRoot.scale.setScalar(1);
-  if (!mappingPoseFromTransform()) modelRoot.position.set(0, 0, 0);
+  if (!mappingPoseFromTransform() && !localizationPoseForRobotModel()) modelRoot.position.set(0, 0, 0);
   modelRoot.updateMatrixWorld(true);
 
   const box = new THREE.Box3().setFromObject(modelRoot);
@@ -3101,8 +3127,12 @@ function updateRobotModelTransforms() {
   });
 
   robot.modelRoot.scale.setScalar(1);
+  const localizationPose = localizationPoseForRobotModel();
   const mappingPose = mappingPoseFromTransform();
-  if (mappingPose) {
+  if (localizationPose) {
+    robot.modelRoot.position.set(localizationPose.x, localizationPose.y, Number.isFinite(localizationPose.z) ? localizationPose.z : 0);
+    robot.modelRoot.rotation.z = localizationPose.yaw;
+  } else if (mappingPose) {
     robot.modelRoot.position.set(mappingPose.x, mappingPose.y, Number.isFinite(mappingPose.z) ? mappingPose.z : 0);
     robot.modelRoot.rotation.z = mappingPose.yaw;
   } else {
@@ -3208,7 +3238,7 @@ async function loadRobotModel(key = state.robotModel.selectedKey) {
     state.robotModel.metadata = model;
     state.robotModel.loadedKey = key;
     state.robotModel.hasModel = true;
-    if (state.robotModel.poseSyncEnabled || mappingFinalTransform()) updateRobotModelTransforms();
+    if (state.robotModel.poseSyncEnabled || mappingFinalTransform() || localizationPoseForRobotModel()) updateRobotModelTransforms();
     frameRobotModelInViewer(root);
     if (state.robotModel.lidarOverlay.enabled) ensureRobotLidarOverlay();
     setRobotLoadProgress({
@@ -3479,11 +3509,202 @@ function localizationWorkSummaryText() {
 function localizationBadgeMeta() {
   const localization = state.localization;
   const maps = Array.isArray(localization.maps) ? localization.maps : [];
+  if (localization.running && localization.status === "error") return { text: "定位异常", level: "danger" };
+  if (localization.running && localization.status === "degraded") return { text: "定位退化", level: "warn" };
+  if (localization.running && localization.status === "waiting_initial_pose") return { text: "待初值", level: "warn" };
+  if (localization.running) return { text: "定位中", level: "ok" };
   if (localization.mapsLoading || localization.mapLoadBusy) return { text: "加载中", level: "warn" };
   if (localization.lastError) return { text: "异常", level: "danger" };
   if (localization.loadedMap) return { text: "地图已加载", level: "ok" };
   if (localization.selectedMap) return { text: "待加载", level: "idle" };
   return { text: maps.length ? "待选择" : "无地图", level: "idle" };
+}
+
+function localizationStatusText(stateValue = state.localization.status) {
+  const mapping = {
+    stopped: "未启动",
+    idle: "未启动",
+    starting: "启动中",
+    waiting_initial_pose: "等待初值",
+    localizing: "定位中",
+    degraded: "定位退化",
+    error: "定位异常",
+    failed: "进程异常",
+  };
+  return mapping[stateValue] || stateValue || "--";
+}
+
+function yawFromPoseData(poseData) {
+  const x = nestedNumber(poseData, ["pose", "orientation", "x"]);
+  const y = nestedNumber(poseData, ["pose", "orientation", "y"]);
+  const z = nestedNumber(poseData, ["pose", "orientation", "z"]);
+  const w = nestedNumber(poseData, ["pose", "orientation", "w"]);
+  if ([x, y, z, w].some((value) => value === null)) return null;
+  return Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
+}
+
+function poseFromLocalizationResponse(result = {}) {
+  const statusPose = result.localizationStatus?.data?.pose;
+  const poseFromStatus = {
+    x: localizationNumber(statusPose?.x),
+    y: localizationNumber(statusPose?.y),
+    z: localizationNumber(statusPose?.z) ?? 0,
+    yawDeg: localizationNumber(statusPose?.yawDeg),
+  };
+  if (poseFromStatus.x !== null && poseFromStatus.y !== null && poseFromStatus.yawDeg !== null) {
+    return poseFromStatus;
+  }
+
+  const poseData = result.pose?.data;
+  const x = nestedNumber(poseData, ["pose", "position", "x"]);
+  const y = nestedNumber(poseData, ["pose", "position", "y"]);
+  const z = nestedNumber(poseData, ["pose", "position", "z"]) ?? 0;
+  const yaw = yawFromPoseData(poseData);
+  if (x === null || y === null || yaw === null) return null;
+  return { x, y, z, yawDeg: radToDeg(yaw) };
+}
+
+function localizationCanStart() {
+  const localization = state.localization;
+  const preview = state.mapping.mapPreview;
+  return Boolean(
+    !localization.running &&
+      localization.loadedMap &&
+      localization.selectedMap === localization.loadedMap &&
+      preview.hasFrame &&
+      preview.source === "localization",
+  );
+}
+
+function applyLocalizationStatus(result = {}) {
+  const localization = state.localization;
+  const process = result.process || {};
+  const statusData = result.localizationStatus?.data || null;
+  const map = result.map || {};
+  localization.statusPayload = result;
+  localization.statusUpdatedAt = Date.now();
+  localization.running = Boolean(result.running || process.running);
+  localization.processStatus = process.status || (localization.running ? "running" : "stopped");
+  localization.status = result.state || statusData?.state || localization.processStatus || "stopped";
+  if (!localization.running && localization.status === "running") localization.status = "stopped";
+  if (map.name) {
+    localization.loadedMap = map.name;
+  }
+
+  const pose = poseFromLocalizationResponse(result);
+  if (pose) {
+    localization.pose = pose;
+    updateRobotModelTransforms();
+  }
+  localization.fitness = localizationNumber(statusData?.fitness);
+  localization.ndtFitness = localizationNumber(statusData?.ndtFitness);
+  localization.frequencyHz = localizationNumber(statusData?.frequencyHz);
+  localization.converged = typeof statusData?.converged === "boolean" ? statusData.converged : localization.converged;
+  localization.failedFrameCount = Number.isFinite(Number(statusData?.failedFrameCount)) ? Number(statusData.failedFrameCount) : 0;
+  if (!localization.running) {
+    localization.frequencyHz = null;
+    localization.converged = null;
+    localization.failedFrameCount = 0;
+  }
+  localization.lastError =
+    statusData?.lastError ||
+    process.lastError ||
+    (result.ok === false ? result.detail || result.code || "定位状态异常" : "");
+
+  renderLocalizationStatus();
+  if (state.robotWork.mode === "localization") renderRobotWorkMode();
+  scheduleLocalizationStatusPoll();
+}
+
+async function refreshLocalizationStatus(options = {}) {
+  const localization = state.localization;
+  if (localization.statusLoading) return null;
+  localization.statusLoading = true;
+  try {
+    const response = await fetch("/api/localization/status", { cache: "no-store" });
+    const result = await response.json();
+    localization.statusLoading = false;
+    applyLocalizationStatus(result);
+    return result;
+  } catch (error) {
+    localization.statusLoading = false;
+    if (!options.silent) addLog("定位", `状态刷新失败：${error.message}`);
+    return null;
+  }
+}
+
+function scheduleLocalizationStatusPoll(delayMs = null) {
+  const localization = state.localization;
+  window.clearTimeout(localization.statusTimer);
+  const shouldPoll = state.robotWork.mode === "localization" || localization.running;
+  if (!shouldPoll) {
+    localization.statusTimer = null;
+    return;
+  }
+  const delay = delayMs ?? (localization.running ? 700 : 1600);
+  localization.statusTimer = window.setTimeout(() => refreshLocalizationStatus({ silent: true }), delay);
+}
+
+async function localizationPost(action, payload = {}) {
+  const response = await fetch(`/api/localization/${action}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    cache: "no-store",
+  });
+  const result = await response.json().catch(() => ({}));
+  applyLocalizationStatus(result);
+  if (!response.ok || result.ok === false) {
+    throw new Error(result.detail || result.code || `HTTP ${response.status}`);
+  }
+  return result;
+}
+
+async function startLocalization() {
+  const localization = state.localization;
+  if (!localizationCanStart()) return;
+  localization.lastError = "";
+  localization.status = "starting";
+  localization.running = true;
+  renderLocalizationStatus();
+  try {
+    const result = await localizationPost("start", { mapName: localization.loadedMap });
+    addLog("定位", result.ok ? `定位节点已启动：${localization.loadedMap}` : `定位启动失败：${result.detail || result.code}`);
+  } catch (error) {
+    localization.running = false;
+    localization.status = "error";
+    localization.lastError = `定位启动失败：${error.message}`;
+    addLog("定位", localization.lastError);
+    renderLocalizationStatus();
+  } finally {
+    scheduleLocalizationStatusPoll(500);
+  }
+}
+
+async function stopLocalization() {
+  if (!state.localization.running) return;
+  try {
+    const result = await localizationPost("stop", {});
+    addLog("定位", result.ok ? "定位节点已停止" : `定位停止失败：${result.detail || result.code}`);
+  } catch (error) {
+    state.localization.lastError = `定位停止失败：${error.message}`;
+    addLog("定位", state.localization.lastError);
+  } finally {
+    await refreshLocalizationStatus({ silent: true });
+  }
+}
+
+async function restartLocalization() {
+  if (!state.localization.running) return;
+  try {
+    const result = await localizationPost("restart", {});
+    addLog("定位", result.ok ? "定位节点已重启" : `定位重启失败：${result.detail || result.code}`);
+  } catch (error) {
+    state.localization.lastError = `定位重启失败：${error.message}`;
+    addLog("定位", state.localization.lastError);
+  } finally {
+    scheduleLocalizationStatusPoll(500);
+  }
 }
 
 function renderLocalizationMapControls() {
@@ -3496,7 +3717,7 @@ function renderLocalizationMapControls() {
   const select = $("#localizationMapSelect");
   if (select) {
     const selectedName = selected ? selected.name : "";
-    select.disabled = localization.mapsLoading || maps.length === 0;
+    select.disabled = localization.running || localization.mapsLoading || maps.length === 0;
     select.innerHTML = maps.length
       ? maps
           .map((map) => {
@@ -3511,8 +3732,26 @@ function renderLocalizationMapControls() {
 
   const loadButton = $("#localizationLoadMapButton");
   if (loadButton) {
-    loadButton.disabled = localization.mapsLoading || localization.mapLoadBusy || !selected;
+    loadButton.disabled = localization.running || localization.mapsLoading || localization.mapLoadBusy || !selected;
     loadButton.textContent = localization.mapLoadBusy ? "加载中" : localization.loadedMap === selected?.name ? "重新加载" : "加载地图";
+  }
+
+  const startButton = $("#localizationStartButton");
+  if (startButton) {
+    startButton.disabled = !localizationCanStart() || localization.statusLoading;
+    startButton.textContent = localization.status === "starting" ? "启动中" : "开始定位";
+  }
+
+  const stopButton = $("#localizationStopButton");
+  if (stopButton) {
+    stopButton.disabled = !localization.running || localization.status === "starting";
+    stopButton.textContent = localization.running ? "停止定位" : "未启动";
+  }
+
+  const restartButton = $("#localizationRestartButton");
+  if (restartButton) {
+    restartButton.disabled = !localization.running || localization.status === "starting";
+    restartButton.textContent = "重启定位";
   }
 
   const info = $("#localizationMapInfo");
@@ -3548,6 +3787,7 @@ function renderLocalizationMapControls() {
 
 function selectLocalizationMap(name) {
   const localization = state.localization;
+  if (localization.running) return;
   const nextName = String(name || "");
   if (localization.selectedMap === nextName) return;
   localization.selectedMap = nextName;
@@ -3602,7 +3842,13 @@ function renderRobotFooterStatus() {
       poseX !== null && poseY !== null && poseYaw !== null
         ? `${poseX.toFixed(2)}, ${poseY.toFixed(2)}, ${poseYaw.toFixed(1)} deg`
         : "--";
-    const statusText = localization.mapLoadBusy ? "加载地图" : localization.loadedMap ? "地图已加载" : localizationStatusLabel(localization.converged);
+    const statusText = localization.mapLoadBusy
+      ? "加载地图"
+      : localization.running
+        ? localizationStatusText(localization.status)
+        : localization.loadedMap
+          ? "地图已加载"
+          : localizationStatusLabel(localization.converged);
     renderRobotFooterRows([
       ["地图", localization.loadedMap || localization.selectedMap || "--"],
       ["位姿", poseText],
@@ -3715,7 +3961,7 @@ function ensureInitialPoseMarker() {
 function renderInitialPoseMarker() {
   const marker = state.localization.initialPoseMarker;
   const pose = initialPoseValues();
-  const visible = Boolean(initialPoseMapReady() && pose && ensureInitialPoseMarker());
+  const visible = Boolean(state.localization.initialPoseEditMode && initialPoseMapReady() && pose && ensureInitialPoseMarker());
   if (!marker.group) return;
   marker.group.visible = visible;
   if (!visible) return;
@@ -3879,11 +4125,15 @@ function renderLocalizationStatus() {
       ? `${poseX.toFixed(2)}, ${poseY.toFixed(2)}, ${poseYaw.toFixed(1)} deg`
       : "--";
   const fitnessText = formatLocalizationNumber(localization.fitness, 5);
+  const ndtFitnessText = formatLocalizationNumber(localization.ndtFitness, 5);
   const frequencyText = frequencyHz === null ? "--" : `${frequencyHz.toFixed(1)} Hz`;
   const convergenceText = localizationStatusLabel(localization.converged);
 
   renderLocalizationMapControls();
-  setText("#localizationStatusSummary", localization.lastError || (localization.loadedMap ? "定位地图已加载，点云定位结果待接入" : "点云定位结果待接入"));
+  setText(
+    "#localizationStatusSummary",
+    localization.lastError || (localization.running ? localizationStatusText(localization.status) : "定位节点未启动"),
+  );
 
   const statusMetrics = $("#localizationStatusMetrics");
   if (statusMetrics) {
@@ -3891,7 +4141,8 @@ function renderLocalizationStatus() {
       ["地图", localization.loadedMap || localization.selectedMap || "--"],
       ["位姿", poseText],
       ["Fitness", fitnessText],
-      ["点数", localization.mapPointCount ? Math.round(localization.mapPointCount).toLocaleString("zh-CN") : "--"],
+      ["频率", frequencyText],
+      ["失败帧", String(localization.failedFrameCount || 0)],
     ]
       .map(([name, value]) => `<div class="metric-card"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
       .join("");
@@ -3905,10 +4156,14 @@ function renderLocalizationStatus() {
       ["地图", localization.loadedMap || localization.selectedMap || "--"],
       ["地图包", selectedMap?.path || "--"],
       ["地图大小", selectedMap ? formatBytes(selectedMap.sizeBytes) : "--"],
-      ["结果来源", "待接入"],
-      ["更新时间", "--"],
+      ["结果来源", localization.running ? "/localization/status" : "--"],
+      ["更新时间", localization.statusUpdatedAt ? formatTime(new Date(localization.statusUpdatedAt)) : "--"],
       ["频率", frequencyText],
       ["收敛", convergenceText],
+      ["状态", localizationStatusText(localization.status)],
+      ["NDT fitness", ndtFitnessText],
+      ["GICP fitness", fitnessText],
+      ["连续失败", String(localization.failedFrameCount || 0)],
       ["Initial x", formatLocalizationNumber(initialPose.x, 2, " m")],
       ["Initial y", formatLocalizationNumber(initialPose.y, 2, " m")],
       ["Initial z", "0 m"],
@@ -3971,6 +4226,7 @@ function setRobotWorkMode(mode) {
   if (changed && nextMode === "localization") {
     if (state.mapping.mapPreview.source === "mapping") clearMappingMapPreview();
     refreshLocalizationMaps({ silent: true });
+    refreshLocalizationStatus({ silent: true });
   }
   if (nextMode === "mapping") {
     renderMappingStatus();
@@ -5703,6 +5959,7 @@ async function loadLocalizationMapFrame() {
   const localization = state.localization;
   const mapName = localization.selectedMap;
   const selectedMap = localizationMapByName(mapName);
+  if (localization.running) return;
   if (!selectedMap || localization.mapLoadBusy) return;
 
   localization.mapLoadBusy = true;
@@ -5744,6 +6001,7 @@ async function loadLocalizationMapFrame() {
     localization.mapSizeBytes = preview.sizeBytes;
     localization.mapMtimeMs = preview.mtimeMs;
     localization.lastError = "";
+    updateRobotModelTransforms();
     renderRobotViewStatus();
     addLog("定位", `定位地图已加载：${mapName}`);
   } catch (error) {
@@ -5786,7 +6044,11 @@ async function publishInitialPose() {
     }
     localization.status = "initial-pose-published";
     localization.initialPoseLastPublishedAt = result.publishedAt || formatTime();
+    localization.initialPoseEditMode = false;
+    resetInitialPoseDrag();
     localization.lastError = "";
+    updateRobotModelTransforms();
+    refreshLocalizationStatus({ silent: true });
     addLog(
       "定位",
       `Initial pose 已发布：${pose.x.toFixed(2)}, ${pose.y.toFixed(2)}, ${pose.yawDeg.toFixed(1)} deg`,
@@ -7967,7 +8229,7 @@ function clearMappingMapPreview() {
   preview.error = "";
   preview.source = "";
   preview.mapName = "";
-  if (previousSource === "localization") {
+  if (previousSource === "localization" && !state.localization.running) {
     state.localization.loadedMap = "";
     state.localization.mapPointCount = 0;
     state.localization.mapSizeBytes = 0;
@@ -8412,6 +8674,9 @@ function bindEvents() {
   $("#mappingChassisKeyboardButton").addEventListener("click", toggleChassisKeyboardListening);
   $("#localizationMapSelect")?.addEventListener("change", (event) => selectLocalizationMap(event.currentTarget.value));
   $("#localizationLoadMapButton")?.addEventListener("click", loadLocalizationMapFrame);
+  $("#localizationStartButton")?.addEventListener("click", startLocalization);
+  $("#localizationStopButton")?.addEventListener("click", stopLocalization);
+  $("#localizationRestartButton")?.addEventListener("click", restartLocalization);
   $$("[data-robot-modal-toggle]").forEach((button) => {
     button.addEventListener("click", () => toggleRobotModal(button.dataset.robotModalToggle));
   });
@@ -8717,8 +8982,10 @@ function init() {
   refreshPlaybackStatus({ silent: true });
   renderRobotViewStatus();
   renderMappingStatus();
+  renderLocalizationStatus();
   fetchRobotModels({ silent: true });
   refreshMappingStatus({ silent: true });
+  refreshLocalizationStatus({ silent: true });
   initializeRobotViewer();
   addLog("系统", "Robot Station 前端原型已加载");
   addLog("ROS", "等待接入真实 ROS 状态");

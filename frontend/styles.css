@@ -1224,6 +1224,21 @@ body.robot-modal-open {
   white-space: nowrap;
 }
 
+.localization-run-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.localization-run-actions button {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .localization-empty-map {
   display: grid;
   gap: 3px;
@@ -6507,6 +6522,7 @@ body[data-active-view="robot-view"] .event-drawer {
   .mapping-actions.robot-work-actions,
   .localization-map-actions,
   .robot-work-panel .localization-map-actions,
+  .localization-run-actions,
   .robot-model-side-actions {
     grid-template-columns: 1fr;
   }

@@ -73,9 +73,9 @@ def test_localization_initial_pose_endpoint_publishes_ros_action(monkeypatch):
     published = []
     handler = _handler("/api/localization/initial-pose", payload)
 
-    class FakeWriter:
-        def publish(self, key, command):
-            published.append((key, command))
+    class FakeLocalizationManager:
+        def publish_initial_pose(self, command):
+            published.append(command)
             return {
                 "ok": True,
                 "code": "ROS-W-PUBLISHED",
@@ -84,12 +84,12 @@ def test_localization_initial_pose_endpoint_publishes_ros_action(monkeypatch):
             }
 
     handler.write_json = lambda response, status=200, headers=None: responses.append((response, status))
-    monkeypatch.setattr(server, "get_ros_writer", lambda: FakeWriter())
+    monkeypatch.setattr(server, "get_localization_manager", lambda: FakeLocalizationManager())
     monkeypatch.setattr(server, "log_action_result", lambda *args, **kwargs: None)
 
     server.RobotStationHandler.do_POST(handler)
 
-    assert published == [("localization_initial_pose", payload)]
+    assert published == [payload]
     assert responses == [
         (
             {
