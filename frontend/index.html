@@ -4,45 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Robot Station</title>
-    <link rel="stylesheet" href="./styles.css?v=20260605-platform-odom" />
+    <link rel="stylesheet" href="./styles.css?v=20260609-visual-refresh" />
   </head>
   <body>
-    <div class="auth-overlay" id="authOverlay" role="dialog" aria-modal="true" aria-labelledby="authTitle">
-      <form class="auth-dialog" id="authLoginForm" autocomplete="off">
-        <div class="auth-head">
-          <span class="brand-mark">RS</span>
-          <div>
-            <p class="eyebrow">Operator Login</p>
-            <h1 id="authTitle">登录 Robot Station</h1>
-          </div>
-        </div>
-        <label>
-          <span>用户</span>
-          <select id="authUsernameInput">
-            <option value="zhuzl">zhuzl</option>
-            <option value="caizj">caizj</option>
-            <option value="xiangpc">xiangpc</option>
-            <option value="liuyc">liuyc</option>
-            <option value="liuxy">liuxy</option>
-            <option value="wusr">wusr</option>
-          </select>
-        </label>
-        <label>
-          <span>密码</span>
-          <input id="authPasswordInput" type="password" placeholder="请输入密码">
-        </label>
-        <p class="auth-message" id="authMessage">请先登录后再控制机器人。</p>
-        <div class="auth-conflict" id="authConflictPanel" hidden>
-          <strong id="authConflictTitle">已有用户在线</strong>
-          <p id="authConflictDetail"></p>
-          <div class="button-group">
-            <button class="secondary-button" id="authPauseButton" type="button">暂停登录</button>
-            <button class="primary-button danger" id="authForceButton" type="button">强制登录</button>
-          </div>
-        </div>
-        <button class="primary-button" id="authLoginButton" type="submit">登录</button>
-      </form>
-    </div>
     <div class="app-shell">
       <aside class="sidebar" aria-label="主导航">
         <div class="brand">
@@ -59,12 +23,8 @@
           <button class="nav-item" data-view="platform-control">平台控制</button>
           <button class="nav-item" data-view="robot-view">整机视图</button>
           <button class="nav-item" data-view="sensors">传感器</button>
-          <button class="nav-item" data-view="localization">定位</button>
           <button class="nav-item" data-view="data-playback">数据回放</button>
-          <button class="nav-item" data-view="collection">数采</button>
           <button class="nav-item" data-view="inference">推理</button>
-          <button class="nav-item" data-view="logs">日志</button>
-          <button class="nav-item" data-view="settings">设置</button>
         </nav>
       </aside>
 
@@ -91,10 +51,6 @@
               <span>Chassis</span>
               <i aria-hidden="true"></i>
             </button>
-            <button class="status-switch is-idle" id="localizationRuntimeStatus" type="button" aria-pressed="false" title="启动或关闭 Loc">
-              <span>Loc</span>
-              <i aria-hidden="true"></i>
-            </button>
             <button class="status-switch is-idle" id="cameraRuntimeStatus" type="button" aria-pressed="false" title="启动或关闭 Camera">
               <span>Camera</span>
               <i aria-hidden="true"></i>
@@ -103,17 +59,10 @@
               <span>LiDAR</span>
               <i aria-hidden="true"></i>
             </button>
-            <span class="status-pill ok" id="estopStatus">急停释放</span>
-            <span class="status-pill idle" id="enableStatus">未使能</span>
-            <span class="status-pill ok" id="networkStatus">本机访问</span>
-            <span class="status-pill idle" id="authStatus">未登录</span>
-            <span class="status-pill task" id="taskStatus">当前任务：空闲</span>
-            <span class="status-pill danger" id="alertStatus">告警 2</span>
             <span class="status-pill clock" id="clockStatus">--:--:--</span>
           </div>
 
           <div class="top-actions">
-            <button class="icon-button" id="authLogoutButton" title="退出登录">退出</button>
             <button class="icon-button danger" id="estopButton" title="急停">急停</button>
             <button class="icon-button stop" id="stopTaskButton" title="停止当前任务">停止任务</button>
             <button class="icon-button" id="drawerToggle" title="展开或收起事件抽屉">事件</button>
@@ -134,16 +83,27 @@
                 </div>
               </div>
               <div class="self-check-overview" id="selfCheckOverview"></div>
-              <div class="self-check-metrics" id="selfCheckMetrics"></div>
-              <div class="panel">
-                <div class="panel-head">
-                  <div>
-                    <h2>检查项</h2>
-                    <p id="selfCheckSummary">未执行自检</p>
+              <div class="self-check-grid">
+                <article class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>放行检查</h2>
+                      <p id="selfCheckSummary">未执行自检</p>
+                    </div>
+                    <span class="state-badge idle" id="selfCheckBadge">未检测</span>
                   </div>
-                  <span class="state-badge idle" id="selfCheckBadge">未检测</span>
-                </div>
-                <div class="check-table" id="selfCheckTable"></div>
+                  <div class="check-table" id="selfCheckTable"></div>
+                </article>
+                <article class="panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>运行准备</h2>
+                      <p id="runtimePrepSummary">服务未全部启动时仍可继续</p>
+                    </div>
+                    <span class="state-badge idle" id="runtimePrepBadge">可选</span>
+                  </div>
+                  <div class="check-table runtime-prep-table" id="runtimePrepTable"></div>
+                </article>
               </div>
             </section>
 
@@ -210,11 +170,12 @@
                         <h2>移动底座</h2>
                         <span>状态与速度预览</span>
                       </div>
-                      <div class="device-status-line">
+                      <div class="device-status-line base-status-line">
                         <span>控制</span><strong class="status-text idle" id="baseControlText">未启动</strong>
                         <span>里程计</span><strong class="status-text idle" id="baseOdomText">未接入</strong>
+                        <span>模式</span><strong class="status-text idle" id="baseModeText">--</strong>
                       </div>
-                      <div class="metric-grid" id="deviceBaseMetrics"></div>
+                      <div class="base-speed-compare" id="deviceBaseMetrics" role="table" aria-label="底座速度指令反馈对比"></div>
                       <div class="base-odom-readout" id="baseOdomReadout" aria-label="底座里程计">
                         <div class="base-odom-head">
                           <div class="base-odom-title">
@@ -531,55 +492,6 @@
               </div>
             </section>
 
-            <section class="view" data-view-panel="collection">
-              <div class="page-head compact">
-                <div>
-                  <p class="eyebrow">自动数采</p>
-                  <h1>采集任务</h1>
-                </div>
-                <div class="button-group">
-                  <button class="primary-button" id="startCollectionButton">开始</button>
-                  <button class="secondary-button" id="pauseCollectionButton">暂停</button>
-                  <button class="secondary-button" id="finishCollectionButton">结束</button>
-                </div>
-              </div>
-              <div class="split-grid">
-                <article class="panel">
-                  <div class="panel-head">
-                    <div>
-                      <h2>任务配置</h2>
-                      <p>本地配置，暂不连接后端</p>
-                    </div>
-                    <span class="state-badge idle" id="collectionBadge">空闲</span>
-                  </div>
-                  <form class="config-form">
-                    <label>任务名称<input value="pick_and_place_trial" /></label>
-                    <label>采集模式<select><option>遥操作示教</option><option>自动巡检</option><option>混合采集</option></select></label>
-                    <label>相机选择<select><option>front_rgb + wrist_rgb</option><option>front_rgb</option><option>wrist_rgb</option></select></label>
-                    <label>保存路径<input value="/data/robot_station/episodes" /></label>
-                    <label class="check-line"><input type="checkbox" checked /> 记录 LiDAR</label>
-                    <label class="check-line"><input type="checkbox" checked /> 记录底盘与机械臂状态</label>
-                  </form>
-                </article>
-
-                <article class="panel">
-                  <div class="panel-head">
-                    <div>
-                      <h2>采集中状态</h2>
-                      <p id="collectionSummary">等待开始</p>
-                    </div>
-                    <div class="button-group">
-                      <button class="secondary-button" id="discardEpisodeButton">废弃本轮</button>
-                      <button class="secondary-button" id="markSuccessButton">标记成功</button>
-                      <button class="secondary-button" id="markFailButton">标记失败</button>
-                    </div>
-                  </div>
-                  <div class="metric-grid" id="collectionMetrics"></div>
-                  <div class="quality-strip" id="qualityStrip"></div>
-                </article>
-              </div>
-            </section>
-
             <section class="view" data-view-panel="inference">
               <div class="page-head compact">
                 <div>
@@ -700,65 +612,6 @@
               </div>
 
             </section>
-
-            <section class="view localization-view" data-view-panel="localization">
-              <div class="page-head compact">
-                <div>
-                  <p class="eyebrow">NDT + GICP</p>
-                  <h1>定位</h1>
-                </div>
-                <span class="state-badge idle" id="localizationPageBadge">未选择地图</span>
-              </div>
-
-              <article class="panel localization-map-panel">
-                <div class="panel-head">
-                  <div>
-                    <h2>地图状态</h2>
-                    <p id="localizationMapSummary">等待读取 modules/map/data</p>
-                  </div>
-                  <div class="localization-map-actions">
-                    <select id="localizationMapSelect" aria-label="定位地图选择">
-                      <option value="">选择地图</option>
-                    </select>
-                    <button class="secondary-button" id="localizationRefreshMapsButton" type="button">刷新</button>
-                  </div>
-                </div>
-                <div class="metric-grid localization-map-metrics" id="localizationMapMetrics"></div>
-              </article>
-
-              <article class="panel localization-viewer-panel">
-                <div class="panel-head">
-                  <div>
-                    <h2>地图 / URDF</h2>
-                    <p id="localizationViewerSummary">Ranger Mini v3 / 初始位姿 0, 0, 0</p>
-                  </div>
-                  <div class="localization-viewer-actions">
-                    <button class="secondary-button" id="localizationResetViewButton" type="button">重置视角</button>
-                    <button class="secondary-button" id="localizationCenterRobotButton" type="button">居中机器人</button>
-                  </div>
-                </div>
-                <div class="localization-viewer">
-                  <div class="localization-stage" id="localizationViewStage" aria-label="定位地图与机器人模型">
-                    <div class="localization-view-overlay">
-                      <strong id="localizationOverlayTitle">等待地图</strong>
-                      <span id="localizationOverlayDetail">选择保存地图后自动加载 map.pcd</span>
-                    </div>
-                  </div>
-                </div>
-              </article>
-
-              <article class="panel localization-status-panel">
-                <div class="panel-head">
-                  <div>
-                    <h2>定位状态</h2>
-                    <p id="localizationStatusSummary">真实定位服务待接入</p>
-                  </div>
-                  <span class="state-badge idle" id="localizationStatusBadge">待接入</span>
-                </div>
-                <div class="metric-grid localization-status-metrics" id="localizationStatusMetrics"></div>
-              </article>
-            </section>
-
             <section class="view" data-view-panel="data-playback">
               <div class="page-head compact">
                 <div>
@@ -816,66 +669,6 @@
               </article>
             </section>
 
-            <section class="view" data-view-panel="logs">
-              <div class="page-head compact">
-                <div>
-                  <p class="eyebrow">日志与历史</p>
-                  <h1>事件记录</h1>
-                </div>
-                <div class="filter-row" id="logFilters"></div>
-              </div>
-              <div class="split-grid">
-                <article class="panel">
-                  <div class="panel-head"><h2>实时日志</h2><span id="logCount">0 条</span></div>
-                  <div class="log-list large" id="logList"></div>
-                </article>
-                <article class="panel">
-                  <div class="panel-head"><h2>历史任务</h2><span>最近 5 条</span></div>
-                  <div class="history-list" id="historyList"></div>
-                </article>
-              </div>
-            </section>
-
-            <section class="view" data-view-panel="settings">
-              <div class="page-head compact">
-                <div>
-                  <p class="eyebrow">设置</p>
-                  <h1>设备画像</h1>
-                </div>
-                <button class="secondary-button">保存草稿</button>
-              </div>
-              <div class="split-grid">
-                <article class="panel">
-                  <div class="panel-head">
-                    <div>
-                      <h2>机器人配置</h2>
-                      <p>先作为静态画像展示</p>
-                    </div>
-                  </div>
-                  <form class="config-form">
-                    <label>机械臂<input value="AgileX Piper x2" /></label>
-                    <label>底盘<input value="AgileX mobile base" /></label>
-                    <label>CAN<input value="can_left / can_right / can_chassis" /></label>
-                    <label>默认数据目录<input value="/data/robot_station" /></label>
-                  </form>
-                </article>
-                <article class="panel">
-                  <div class="panel-head">
-                    <div>
-                      <h2>启用模块</h2>
-                      <p>页面会按画像决定显示能力</p>
-                    </div>
-                  </div>
-                  <div class="module-list">
-                    <label><input type="checkbox" checked /> 机械臂</label>
-                    <label><input type="checkbox" checked /> 底盘</label>
-                    <label><input type="checkbox" checked /> 相机</label>
-                    <label><input type="checkbox" checked /> LiDAR</label>
-                    <label><input type="checkbox" checked /> GPU 推理</label>
-                  </div>
-                </article>
-              </div>
-            </section>
           </section>
 
           <aside class="event-drawer is-open" id="eventDrawer">
@@ -887,7 +680,7 @@
               <button class="small-button" id="clearEventsButton">清空</button>
             </div>
             <div class="drawer-tabs">
-              <button class="is-active" data-drawer-tab="events">日志</button>
+              <button class="is-active" data-drawer-tab="events">事件</button>
               <button data-drawer-tab="alerts">告警</button>
               <button data-drawer-tab="steps">步骤</button>
             </div>

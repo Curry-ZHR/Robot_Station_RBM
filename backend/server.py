@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import copy
 import json
 import mimetypes
 import os
@@ -7,12 +8,10 @@ import shutil
 import threading
 import time
 from email.utils import formatdate
-from http.cookies import SimpleCookie
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from modules.auth import get_auth_manager
 from modules.control.chassis import chassis_limits, publish_chassis_velocity, reset_chassis_odometry, stop_chassis
 from modules.control.lifting import (
     clear_lifting_error,
@@ -50,8 +49,11 @@ from modules.self_check.ros_check.ros_daemon import ensure_ros_daemon
 ROOT_DIR = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = ROOT_DIR / "frontend"
 LOGGER = get_logger()
-AUTH_COOKIE = "robot_station_session"
 MODEL_ASSET_CACHE_SECONDS = int(os.environ.get("ROBOT_STATION_MODEL_ASSET_CACHE_SECONDS", "86400"))
+SELF_CHECK_HARD_BLOCKERS = {"ROS2 daemon", "CAN 接口", "磁盘空间"}
+SELF_CHECK_CACHE_LOCK = threading.Lock()
+SELF_CHECK_RUN_LOCK = threading.Lock()
+SELF_CHECK_CACHE = None
 
 
 def env_flag(name, default=True):
@@ -94,6 +96,127 @@ def log_check_result(result):
         LOGGER.warning(message)
     else:
         LOGGER.error(message)
+
+
+def summarize_self_check(results):
+    hard_blockers = [
+        result
+        for result in results
+        if result.get("name") in SELF_CHECK_HARD_BLOCKERS and result.get("status") == "错误"
+    ]
+    warnings = [
+        result
+        for result in results
+        if result.get("status") != "正常" and result not in hard_blockers
+    ]
+
+    if hard_blockers:
+        return {
+            "state": "blocked",
+            "level": "danger",
+            "label": "存在阻塞",
+            "nextAction": hard_blockers[0].get("advice") or "请处理阻塞项后重新执行自检。",
+            "blockers": [
+                {
+                    "name": result.get("name", ""),
+                    "status": result.get("status", ""),
+                    "code": result.get("code", ""),
+                    "advice": result.get("advice", ""),
+                }
+                for result in hard_blockers
+            ],
+            "warnings": [
+                {
+                    "name": result.get("name", ""),
+                    "status": result.get("status", ""),
+                    "code": result.get("code", ""),
+                    "advice": result.get("advice", ""),
+                }
+                for result in warnings
+            ],
+        }
+
+    if warnings:
+        return {
+            "state": "warn",
+            "level": "warn",
+            "label": "可继续，有警告",
+            "nextAction": warnings[0].get("advice") or "存在非阻塞警告，请按任务需要确认。",
+            "blockers": [],
+            "warnings": [
+                {
+                    "name": result.get("name", ""),
+                    "status": result.get("status", ""),
+                    "code": result.get("code", ""),
+                    "advice": result.get("advice", ""),
+                }
+                for result in warnings
+            ],
+        }
+
+    return {
+        "state": "ready",
+        "level": "ok",
+        "label": "可继续",
+        "nextAction": "放行检查已通过，可以继续后续运行。",
+        "blockers": [],
+        "warnings": [],
+    }
+
+
+def empty_self_check_status():
+    return {
+        "ok": True,
+        "code": "SELF-CHECK-IDLE",
+        "detail": "No self-check result has been cached in this backend process.",
+        "ran": False,
+        "ranAt": None,
+        "ranAtMs": None,
+        "results": [],
+        "summary": {
+            "state": "idle",
+            "level": "idle",
+            "label": "未自检",
+            "nextAction": "请执行一键检查。",
+            "blockers": [],
+            "warnings": [],
+        },
+    }
+
+
+def cached_self_check_status():
+    with SELF_CHECK_CACHE_LOCK:
+        if SELF_CHECK_CACHE is None:
+            return empty_self_check_status()
+        return copy.deepcopy(SELF_CHECK_CACHE)
+
+
+def run_self_check(auto_activate=True):
+    global SELF_CHECK_CACHE
+    with SELF_CHECK_RUN_LOCK:
+        ran_at_ms = int(time.time() * 1000)
+        results = [
+            ensure_ros_daemon(),
+            check_can_interface(auto_activate=auto_activate),
+            check_disk_space(),
+            check_gpu_status(),
+        ]
+        for result in results:
+            log_check_result(result)
+
+        payload = {
+            "ok": True,
+            "code": "SELF-CHECK-RUN",
+            "detail": "Self-check completed and cached in backend process memory.",
+            "ran": True,
+            "ranAt": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ran_at_ms / 1000)),
+            "ranAtMs": ran_at_ms,
+            "results": results,
+            "summary": summarize_self_check(results),
+        }
+        with SELF_CHECK_CACHE_LOCK:
+            SELF_CHECK_CACHE = copy.deepcopy(payload)
+        return payload
 
 
 def log_action_result(action, result):
@@ -229,18 +352,6 @@ def inference_result_status(result):
     return mapping.get(code, 500)
 
 
-def auth_result_status(result):
-    if result.get("ok"):
-        return 200
-    mapping = {
-        "AUTH-CONFLICT": 409,
-        "AUTH-INVALID": 401,
-        "AUTH-REQUIRED": 401,
-        "AUTH-REVOKED": 401,
-    }
-    return mapping.get(result.get("code", ""), 401)
-
-
 def playback_control_status(result):
     if result.get("ok"):
         return 200
@@ -271,43 +382,6 @@ def robot_model_error_status(error):
     return 500
 
 
-def release_operator_outputs(reason):
-    """Stop running tasks and hold motion outputs during operator handoff.
-
-    This deliberately does not publish Piper enable=false. Disabling torque can
-    make the arms drop; handoff only asks existing controllers to hold/stop.
-    """
-
-    LOGGER.warning("Operator session handoff: %s", reason)
-    results = {}
-    try:
-        results["inference"] = get_inference_manager().disconnect()
-    except Exception as exc:
-        results["inference"] = {"ok": False, "detail": str(exc)}
-        LOGGER.error("Inference handoff stop failed: %s", exc)
-    try:
-        results["playback"] = get_playback_manager().stop(reason=reason)
-    except Exception as exc:
-        results["playback"] = {"ok": False, "detail": str(exc)}
-        LOGGER.error("Playback handoff stop failed: %s", exc)
-    try:
-        results["piperHold"] = publish_joint_targets({"hold": True})
-    except Exception as exc:
-        results["piperHold"] = {"ok": False, "detail": str(exc)}
-        LOGGER.error("Piper handoff hold failed: %s", exc)
-    try:
-        results["chassisStop"] = stop_chassis({})
-    except Exception as exc:
-        results["chassisStop"] = {"ok": False, "detail": str(exc)}
-        LOGGER.error("Chassis handoff stop failed: %s", exc)
-    try:
-        results["liftingStop"] = stop_lifting({})
-    except Exception as exc:
-        results["liftingStop"] = {"ok": False, "detail": str(exc)}
-        LOGGER.error("Lifting handoff stop failed: %s", exc)
-    return results
-
-
 class RobotStationHandler(SimpleHTTPRequestHandler):
     server_version = "RobotStationHTTP/0.1"
 
@@ -326,84 +400,10 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
-    def auth_token(self):
-        cookie_header = self.headers.get("Cookie", "")
-        if not cookie_header:
-            return None
-        cookie = SimpleCookie()
-        try:
-            cookie.load(cookie_header)
-        except Exception:
-            return None
-        morsel = cookie.get(AUTH_COOKIE)
-        return morsel.value if morsel is not None else None
-
-    def auth_cookie_header(self, token=None, max_age=None):
-        parts = [f"{AUTH_COOKIE}={token or ''}", "Path=/", "SameSite=Lax", "HttpOnly"]
-        if max_age is not None:
-            parts.append(f"Max-Age={int(max_age)}")
-        return "; ".join(parts)
-
-    def require_operator(self):
-        ok, result = get_auth_manager().require_operator(self.auth_token())
-        if not ok:
-            self.write_json(result, status=auth_result_status(result))
-            return False
-        return True
-
-    def handle_auth_get(self, action):
-        if action in ("", "status", "heartbeat"):
-            result = get_auth_manager().status(self.auth_token())
-            self.write_json(result, status=auth_result_status(result) if not result.get("authenticated") else 200)
-            return
-        self.write_json({"ok": False, "code": "AUTH-ACTION", "detail": f"Unsupported auth action: {action}"}, status=404)
-
-    def handle_auth_post(self, action):
-        if action in ("status", "heartbeat"):
-            result = get_auth_manager().status(self.auth_token())
-            self.write_json(result, status=auth_result_status(result) if not result.get("authenticated") else 200)
-            return
-
-        if action == "login":
-            payload = self.read_json_body()
-            client = self.client_address[0] if self.client_address else ""
-            result, token = get_auth_manager().login(
-                payload.get("username"),
-                payload.get("password"),
-                force=bool(payload.get("force")),
-                client=client,
-            )
-            if result.get("ok") and result.get("code") == "AUTH-FORCED":
-                result["handoff"] = release_operator_outputs(f"forced login by {result.get('user')}")
-            headers = {}
-            if token:
-                max_age = max(3600, int(result.get("timeoutSec") or 0))
-                headers["Set-Cookie"] = self.auth_cookie_header(token, max_age=max_age)
-            self.write_json(result, status=auth_result_status(result), headers=headers)
-            return
-
-        if action == "logout":
-            status = get_auth_manager().status(self.auth_token(), touch=False)
-            result = get_auth_manager().logout(self.auth_token())
-            if status.get("authenticated"):
-                result["handoff"] = release_operator_outputs(f"logout by {status.get('user')}")
-            self.write_json(
-                result,
-                status=auth_result_status(result),
-                headers={"Set-Cookie": self.auth_cookie_header("", max_age=0)},
-            )
-            return
-
-        self.write_json({"ok": False, "code": "AUTH-ACTION", "detail": f"Unsupported auth action: {action}"}, status=404)
-
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
             self.write_json({"status": "ok"})
-            return
-        auth_action = api_tail(parsed.path, "/api/auth")
-        if auth_action is not None:
-            self.handle_auth_get(auth_action)
             return
         if parsed.path == "/api/control/lifting/limits":
             self.write_json(lifting_limits())
@@ -567,41 +567,6 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/inference/status":
             self.write_json(get_inference_manager().status())
             return
-        localization_tail = api_tail(parsed.path, "/api/localization")
-        if localization_tail is not None:
-            if localization_tail == "maps":
-                result = get_mapping_manager().list_saved_maps()
-                self.write_json(result, status=mapping_result_status(result))
-                return
-            parts = [part for part in localization_tail.split("/") if part]
-            if len(parts) == 3 and parts[0] == "maps" and parts[2] == "frame":
-                result = get_mapping_manager().read_saved_map_frame(parts[1])
-                if not result.get("ok"):
-                    self.write_json(result, status=mapping_result_status(result))
-                    return
-                self.write_binary(
-                    result["body"],
-                    result["contentType"],
-                    headers={
-                        "X-Robot-Station-PointCloud-Point-Count": str(result.get("pointCount", "")),
-                        "X-Robot-Station-PointCloud-Source-Point-Count": str(result.get("sourcePointCount", "")),
-                        "X-Robot-Station-PointCloud-Stride-Floats": str(result.get("strideFloats", "")),
-                        "X-Robot-Station-PointCloud-Fields": ",".join(result.get("fields", [])),
-                        "X-Robot-Station-Localization-Map-Name": str(result.get("mapName", "")),
-                        "X-Robot-Station-Localization-Map-Size-Bytes": str(result.get("sizeBytes", "")),
-                        "X-Robot-Station-Localization-Map-Mtime-Ms": str(result.get("mtimeMs", "")),
-                    },
-                )
-                return
-            self.write_json(
-                {
-                    "ok": False,
-                    "code": "MAP-ACTION",
-                    "detail": "Localization GET path must be /api/localization/maps or /api/localization/maps/<name>/frame.",
-                },
-                status=404,
-            )
-            return
         mapping_tail = api_tail(parsed.path, "/api/mapping")
         if mapping_tail is not None:
             if mapping_tail in ("", "status"):
@@ -639,6 +604,9 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/playback/status":
             self.write_json(get_playback_manager().status())
+            return
+        if parsed.path == "/api/self-check/status":
+            self.write_json(cached_self_check_status())
             return
         if parsed.path == "/api/self-check/ros-daemon":
             result = ensure_ros_daemon()
@@ -859,11 +827,10 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        auth_action = api_tail(parsed.path, "/api/auth")
-        if auth_action is not None:
-            self.handle_auth_post(auth_action)
-            return
-        if parsed.path.startswith("/api/") and not self.require_operator():
+        if parsed.path == "/api/self-check/run":
+            auto_activate = query_bool(parsed.query, "auto_activate", default=True)
+            result = run_self_check(auto_activate=auto_activate)
+            self.write_json(result)
             return
         if parsed.path == "/api/control/piper/joint-targets":
             self.handle_piper_joint_targets()
@@ -1101,8 +1068,6 @@ class ChassisControlHandler(RobotStationHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path.startswith("/api/") and not self.require_operator():
-            return
         chassis_action = api_tail(parsed.path, "/api/control/chassis")
         if chassis_action is None:
             self.write_json({"error": "not_found", "path": parsed.path}, status=404)
@@ -1146,8 +1111,6 @@ class LiftingControlHandler(RobotStationHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path.startswith("/api/") and not self.require_operator():
-            return
         lifting_action = api_tail(parsed.path, "/api/control/lifting")
         if lifting_action is None:
             self.write_json({"error": "not_found", "path": parsed.path}, status=404)
@@ -1188,8 +1151,6 @@ class PiperControlHandler(RobotStationHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path.startswith("/api/") and not self.require_operator():
-            return
         if parsed.path == "/api/control/piper/joint-targets":
             self.handle_piper_joint_targets()
             return

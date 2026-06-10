@@ -132,7 +132,7 @@ def check_ros_daemon(timeout_sec=2.5):
             "正常",
             "ROS2-D-OK",
             "ROS2 daemon 已运行，后端可以继续执行 ROS2 graph 查询。",
-            "可以继续执行核心节点、话题和设备检查。",
+            "可以继续执行话题和设备检查。",
             elapsed_ms=elapsed_ms,
             raw=output,
         )
@@ -193,7 +193,7 @@ def _wait_until_running(timeout_sec=4.0):
         if last_result["status"] == "正常":
             last_result["code"] = "ROS2-D-STARTED"
             last_result["detail"] = "自检已确认 ROS2 daemon 正在运行。"
-            last_result["advice"] = "可以继续执行核心节点、话题和设备检查。"
+            last_result["advice"] = "可以继续执行话题和设备检查。"
             last_result["metric"] = _metric("正常", started=True)
             last_result["startedByRobotStation"] = True
             return last_result
@@ -218,4 +218,3 @@ def ensure_ros_daemon(timeout_sec=2.5, startup_timeout_sec=4.0):
         return start_result
 
     return _wait_until_running(timeout_sec=startup_timeout_sec)
-

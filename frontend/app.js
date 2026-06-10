@@ -10,31 +10,20 @@ const state = {
     {
       level: "warn",
       title: "自检未执行",
-      detail: "开始归位、数采或推理前建议先完成一次自检。",
+      detail: "开始归位或推理前建议先完成一次自检。",
     },
   ],
   logs: [],
   selfCheckRanAt: null,
-  collectionTimer: null,
+  selfCheckSummary: null,
   inferenceTimer: null,
   homingTimer: null,
   playbackTimer: null,
-  collectionSeconds: 0,
   inferenceTicks: 0,
-  activeLogFilter: "全部",
   selfCheckResults: [],
+  runtimePrepBusy: {},
   canActivation: {
     busy: false,
-  },
-  auth: {
-    authenticated: false,
-    user: "",
-    active: null,
-    users: ["zhuzl", "caizj", "xiangpc", "liuyc", "liuxy", "wusr"],
-    busy: false,
-    conflict: null,
-    message: "请先登录后再控制机器人。",
-    messageLevel: "idle",
   },
   piperRuntime: {
     status: "stopped",
@@ -43,9 +32,6 @@ const state = {
     status: "stopped",
   },
   chassisRuntime: {
-    status: "stopped",
-  },
-  localizationRuntime: {
     status: "stopped",
   },
   cameraRuntime: {
@@ -185,29 +171,6 @@ const state = {
       points: null,
     },
   },
-  localization: {
-    maps: [],
-    mapsLoading: false,
-    selectedMapName: "",
-    selectedMap: null,
-    status: "idle",
-    lastError: "",
-    mapPreview: {
-      activeRequest: false,
-      hasFrame: false,
-      initialized: false,
-      pointCount: 0,
-      sourcePointCount: 0,
-      sizeBytes: 0,
-      mtimeMs: null,
-      loadedName: "",
-      error: "",
-      bounds: null,
-      geometry: null,
-      material: null,
-      points: null,
-    },
-  },
   armControl: {
     active: false,
     busy: false,
@@ -342,7 +305,7 @@ const state = {
 const healthItems = [
   ["机械臂", "ok", "反馈 100 Hz", 92, "未使能"],
   ["底盘", "ok", "里程计在线", 86, "速度 0.00 m/s"],
-  ["相机", "ok", "2 路在线", 90, "30 / 28 fps"],
+  ["相机", "idle", "服务状态", 0, "按需启动"],
   ["LiDAR", "ok", "点云在线", 82, "8 Hz"],
   ["存储", "warn", "剩余 128 GB", 64, "建议清理旧数据"],
   ["算力", "ok", "GPU 可用", 74, "温度 58 C"],
@@ -359,15 +322,6 @@ const selfCheckItems = [
     metric: { label: "daemon", value: "--", percent: 0, level: "idle" },
   },
   {
-    name: "核心节点",
-    status: "未检测",
-    source: "ROS",
-    code: "ROS-N-000",
-    advice: "确认任务节点和设备节点已启动。",
-    detail: "检查控制台依赖的核心节点是否在线。",
-    metric: { label: "节点", value: "--", percent: 0, level: "idle" },
-  },
-  {
     name: "CAN 接口",
     status: "未检测",
     source: "系统",
@@ -375,42 +329,6 @@ const selfCheckItems = [
     advice: "can_left/can_right/can_chassis 未就绪时先激活 CAN。",
     detail: "检查机械臂和底盘 CAN 接口是否存在、是否 UP、bitrate 是否正确。",
     metric: { label: "CAN", value: "--", percent: 0, level: "idle" },
-  },
-  {
-    name: "机械臂反馈",
-    status: "未检测",
-    source: "机械臂",
-    code: "ARM-F-000",
-    advice: "检查 Piper 电源、CAN 与反馈话题。",
-    detail: "检查关节状态、末端位姿和夹爪反馈。",
-    metric: { label: "反馈", value: "--", percent: 0, level: "idle" },
-  },
-  {
-    name: "底盘反馈",
-    status: "未检测",
-    source: "底盘",
-    code: "BASE-F-000",
-    advice: "确认底盘驱动和里程计话题。",
-    detail: "检查底盘速度反馈、里程计和驱动状态。",
-    metric: { label: "里程计", value: "--", percent: 0, level: "idle" },
-  },
-  {
-    name: "相机帧率",
-    status: "未检测",
-    source: "相机",
-    code: "CAM-F-000",
-    advice: "确认相机连接和曝光配置。",
-    detail: "检查多路相机是否在线以及帧率是否达到任务要求。",
-    metric: { label: "帧率", value: "--", percent: 0, level: "idle" },
-  },
-  {
-    name: "LiDAR 点云",
-    status: "未检测",
-    source: "LiDAR",
-    code: "LDR-P-000",
-    advice: "确认雷达供电和点云话题。",
-    detail: "检查 scan/points 话题是否持续更新。",
-    metric: { label: "频率", value: "--", percent: 0, level: "idle" },
   },
   {
     name: "磁盘空间",
@@ -432,6 +350,14 @@ const selfCheckItems = [
   },
 ];
 
+const runtimePrepItems = [
+  { key: "piper", name: "Piper", source: "机械臂", view: "device-control" },
+  { key: "lifting", name: "升降轴", source: "升降轴", view: "platform-control" },
+  { key: "chassis", name: "底盘", source: "底盘", view: "platform-control" },
+  { key: "camera", name: "Camera", source: "相机", view: "sensors" },
+  { key: "lidar", name: "LiDAR", source: "LiDAR", view: "sensors" },
+];
+
 const homingSteps = [
   "确认安全区域",
   "使能机械臂",
@@ -439,16 +365,6 @@ const homingSteps = [
   "机械臂回 home",
   "底盘停止",
   "传感器在线确认",
-];
-
-const logSources = ["全部", "系统", "ROS", "机械臂", "底盘", "升降轴", "相机", "LiDAR", "数采", "推理"];
-
-const historyItems = [
-  ["数采 episode_042", "成功", "09:42 - 09:49 / /data/robot_station/episodes/042"],
-  ["归位流程", "完成", "09:36 - 09:37 / home"],
-  ["整机自检", "警告", "09:35 / CAN 待确认，磁盘注意"],
-  ["推理任务", "停止", "昨日 18:12 / operator stop"],
-  ["数采 episode_041", "失败", "昨日 17:28 / 相机丢帧"],
 ];
 
 const playbackFileDefaults = {
@@ -632,12 +548,6 @@ const chassisRuntimeLabels = {
   unknown: { title: "Chassis 状态未知，点击刷新", level: "idle", pressed: false },
 };
 
-const localizationRuntimeLabels = {
-  stopped: { title: "Loc 未启动，选择地图后点击启动", level: "idle", pressed: false },
-  running: { title: "Loc 已开启，点击停止", level: "ok", pressed: true },
-  error: { title: "Loc 异常，点击重试", level: "danger", pressed: false },
-};
-
 const cameraRuntimeLabels = {
   stopped: { title: "Camera 未启动，点击启动", level: "idle", pressed: false },
   starting: { title: "Camera 启动中", level: "warn", pressed: false, busy: true },
@@ -675,7 +585,6 @@ const threeModuleUrl = "./vendor/three.module.min.js";
 const colladaLoaderUrl = "./vendor/ColladaLoader.js";
 const stlLoaderUrl = "./vendor/STLLoader.js";
 const urdfLoaderUrl = "./vendor/URDFLoader.js";
-const localizationDefaultModelKey = "ranger_mini_v3";
 let threeModulePromise = null;
 let threeLoaderPromise = null;
 
@@ -725,24 +634,6 @@ const chassisMotionModeLabels = {
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
-const nativeFetch = window.fetch.bind(window);
-
-window.fetch = async (input, init = {}) => {
-  const options = { ...init, credentials: init.credentials || "include" };
-  const response = await nativeFetch(input, options);
-  if (response.status === 401 && !isAuthApiRequest(input)) {
-    const result = await response.clone().json().catch(() => null);
-    if (result && typeof result.code === "string" && result.code.startsWith("AUTH-")) {
-      applyAuthStatus(result, { fromFetch: true });
-    }
-  }
-  return response;
-};
-
-function isAuthApiRequest(input) {
-  const url = typeof input === "string" ? input : String(input && input.url ? input.url : "");
-  return url.includes("/api/auth/");
-}
 
 function formatTime(date = new Date()) {
   return date.toLocaleTimeString("zh-CN", { hour12: false });
@@ -762,7 +653,7 @@ function setTask(task, owner, label) {
   state.task = task;
   state.owner = owner;
   setText("#ownerLabel", owner);
-  $("#taskStatus").textContent = `当前任务：${label}`;
+  setText("#taskStatus", `当前任务：${label}`);
   $("#drawerTask").textContent = label === "空闲" ? "当前空闲" : `当前任务：${label}`;
   renderActionLocks();
 }
@@ -779,167 +670,11 @@ function setStateBadge(selector, text, level) {
   node.className = `state-badge ${level}`;
 }
 
-function authActiveUserLabel(active = state.auth.active) {
-  if (!active || !active.user) return "无";
-  return active.client ? `${active.user} @ ${active.client}` : active.user;
-}
-
-function setAuthMessage(message, level = "idle") {
-  state.auth.message = message;
-  state.auth.messageLevel = level;
-}
-
-function lockFrontendForAuth(reason) {
-  window.clearInterval(state.homingTimer);
-  window.clearInterval(state.collectionTimer);
-  window.clearInterval(state.inferenceTimer);
-  window.clearTimeout(state.armControl.publishTimer);
-  state.armControl.active = false;
-  state.inference.looping = false;
-  const loopToggle = $("#inferenceLoopToggle");
-  if (loopToggle) loopToggle.checked = false;
-  if (state.task !== "idle") setTask("idle", "空闲", "空闲");
-  renderArmComparisons();
-  renderInferenceStatus();
-  addLog("登录", reason);
-}
-
-function populateAuthUsers(users) {
-  if (Array.isArray(users) && users.length) {
-    state.auth.users = users;
-  }
-  const select = $("#authUsernameInput");
-  if (!select) return;
-  const current = select.value || state.auth.user || state.auth.users[0] || "";
-  select.innerHTML = state.auth.users.map((user) => `<option value="${escapeHtml(user)}">${escapeHtml(user)}</option>`).join("");
-  if (state.auth.users.includes(current)) {
-    select.value = current;
-  }
-}
-
-function renderAuth() {
-  populateAuthUsers();
-  document.body.classList.toggle("auth-locked", !state.auth.authenticated);
-  const overlay = $("#authOverlay");
-  if (overlay) overlay.hidden = state.auth.authenticated;
-
-  const status = $("#authStatus");
-  if (status) {
-    status.textContent = state.auth.authenticated ? `操作者：${state.auth.user}` : `等待登录：${authActiveUserLabel()}`;
-    status.className = state.auth.authenticated ? "status-pill ok" : "status-pill warn";
-  }
-
-  const logoutButton = $("#authLogoutButton");
-  if (logoutButton) logoutButton.disabled = !state.auth.authenticated || state.auth.busy;
-
-  const loginButton = $("#authLoginButton");
-  if (loginButton) loginButton.disabled = state.auth.busy;
-
-  const message = $("#authMessage");
-  if (message) {
-    message.textContent = state.auth.message;
-    message.className = `auth-message ${state.auth.messageLevel === "error" ? "is-error" : ""}`;
-  }
-
-  const conflictPanel = $("#authConflictPanel");
-  if (conflictPanel) conflictPanel.hidden = !state.auth.conflict;
-  const conflictDetail = $("#authConflictDetail");
-  if (conflictDetail && state.auth.conflict) {
-    conflictDetail.textContent = `${authActiveUserLabel(state.auth.conflict)} 正在控制。可以暂停登录，或强制接管并让当前输出进入安全保持。`;
-  }
-
-  renderActionLocks();
-}
-
-function applyAuthStatus(result, options = {}) {
-  if (!result || typeof result !== "object") return;
-  populateAuthUsers(result.users);
-  state.auth.active = result.active || null;
-  state.auth.authenticated = Boolean(result.authenticated);
-  state.auth.user = result.authenticated ? (result.user || "") : "";
-  if (result.authenticated) {
-    state.auth.conflict = null;
-    setAuthMessage(`已登录：${state.auth.user}`, "idle");
-  } else if (result.code === "AUTH-CONFLICT") {
-    state.auth.conflict = result.active || null;
-    setAuthMessage("已有操作者在线，请选择暂停登录或强制登录。", "error");
-  } else if (result.code === "AUTH-REVOKED") {
-    state.auth.conflict = null;
-    setAuthMessage("当前登录已被其他用户接管，请重新登录。", "error");
-    if (!options.silent) lockFrontendForAuth("当前登录已被强制接管，本地控制已暂停");
-  } else {
-    state.auth.conflict = null;
-    setAuthMessage(result.detail || "请先登录后再控制机器人。", result.code === "AUTH-INVALID" ? "error" : "idle");
-  }
-  renderAuth();
-}
-
-async function refreshAuthStatus(options = {}) {
-  try {
-    const response = await fetch("/api/auth/status", { cache: "no-store" });
-    const result = await response.json().catch(() => ({}));
-    applyAuthStatus(result, { silent: options.silent });
-    return result;
-  } catch (error) {
-    if (!options.silent) {
-      setAuthMessage(`登录状态检查失败：${error.message}`, "error");
-      renderAuth();
-    }
-    return null;
-  }
-}
-
-async function submitAuthLogin(force = false) {
-  const username = String($("#authUsernameInput")?.value || "").trim();
-  const password = String($("#authPasswordInput")?.value || "");
-  if (!username || !password) {
-    setAuthMessage("请输入用户名和密码。", "error");
-    renderAuth();
-    return;
-  }
-  state.auth.busy = true;
-  state.auth.conflict = force ? state.auth.conflict : null;
-  setAuthMessage(force ? "正在强制接管..." : "正在登录...", "idle");
-  renderAuth();
-  try {
-    const response = await fetch("/api/auth/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password, force }),
-      cache: "no-store",
-    });
-    const result = await response.json().catch(() => ({}));
-    applyAuthStatus(result);
-    if (result.ok) {
-      addLog("登录", result.code === "AUTH-FORCED" ? `${username} 已强制接管控制权` : `${username} 已登录`);
-    }
-  } catch (error) {
-    setAuthMessage(`登录失败：${error.message}`, "error");
-    renderAuth();
-  } finally {
-    state.auth.busy = false;
-    renderAuth();
-  }
-}
-
-async function logoutAuth() {
-  if (!state.auth.authenticated) {
-    renderAuth();
-    return;
-  }
-  state.auth.busy = true;
-  renderAuth();
-  try {
-    const response = await fetch("/api/auth/logout", { method: "POST", cache: "no-store" });
-    const result = await response.json().catch(() => ({}));
-    applyAuthStatus(result);
-    addLog("登录", "已退出登录，机器人输出已请求安全保持");
-  } catch (error) {
-    addLog("登录", `退出登录失败：${error.message}`);
-  } finally {
-    state.auth.busy = false;
-    renderAuth();
-  }
+function setStatusPill(selector, text, level) {
+  const node = $(selector);
+  if (!node) return;
+  node.textContent = text;
+  node.className = `status-pill ${level}`;
 }
 
 function clamp(value, min, max) {
@@ -1161,13 +896,6 @@ function getChassisRuntimeLabel() {
   return chassisRuntimeLabels[state.chassisRuntime.status] || chassisRuntimeLabels.error;
 }
 
-function getLocalizationRuntimeLabel() {
-  if (!state.localization.selectedMapName && state.localizationRuntime.status !== "running") {
-    return { ...localizationRuntimeLabels.stopped, title: "请先在定位页面选择地图" };
-  }
-  return localizationRuntimeLabels[state.localizationRuntime.status] || localizationRuntimeLabels.error;
-}
-
 function getCameraRuntimeLabel() {
   return cameraRuntimeLabels[state.cameraRuntime.status] || cameraRuntimeLabels.error;
 }
@@ -1187,12 +915,14 @@ function setPiperRuntime(status) {
   renderPiperJointFeedback();
   renderInferenceStatus();
   renderActionLocks();
+  renderRuntimePrep();
 }
 
 function setLiftingRuntime(status) {
   state.liftingRuntime.status = liftingRuntimeLabels[status] ? status : "unknown";
   renderLiftingRuntime();
   renderLiftPreview();
+  renderRuntimePrep();
 }
 
 function setChassisRuntime(status) {
@@ -1202,22 +932,19 @@ function setChassisRuntime(status) {
   }
   renderChassisRuntime();
   renderDeviceBaseMetrics();
-}
-
-function setLocalizationRuntime(status) {
-  state.localizationRuntime.status = localizationRuntimeLabels[status] ? status : "error";
-  renderLocalizationRuntime();
-  renderLocalizationStatus();
+  renderRuntimePrep();
 }
 
 function setCameraRuntime(status) {
   state.cameraRuntime.status = cameraRuntimeLabels[status] ? status : "unknown";
   renderCameraRuntime();
+  renderRuntimePrep();
 }
 
 function setLidarRuntime(status) {
   state.lidarRuntime.status = lidarRuntimeLabels[status] ? status : "unknown";
   renderLidarRuntime();
+  renderRuntimePrep();
 }
 
 function showView(view) {
@@ -1238,23 +965,12 @@ function showView(view) {
     initializeRobotViewer();
     window.setTimeout(resizeRobotViewer, 0);
   }
-  if (view === "localization") {
-    fetchLocalizationMaps({ silent: true });
-    ensureLocalizationRobotModel();
-    window.setTimeout(() => {
-      syncRobotViewerMount();
-      syncRobotViewerLayersForView();
-      resizeRobotViewer();
-      renderLocalizationStatus();
-    }, 0);
-  } else {
-    window.setTimeout(() => {
-      syncRobotViewerMount();
-      syncRobotViewerLayersForView();
-      resizeRobotViewer();
-      updateRobotModelTransforms();
-    }, 0);
-  }
+  window.setTimeout(() => {
+    syncRobotViewerMount();
+    syncRobotViewerLayersForView();
+    resizeRobotViewer();
+    updateRobotModelTransforms();
+  }, 0);
 }
 
 function renderHealth() {
@@ -1288,94 +1004,164 @@ function cloneCheckItems(items) {
   }));
 }
 
-function renderSelfCheckOverview(items) {
-  const counts = items.reduce(
-    (acc, item) => {
-      acc[statusClass(item.status)] += 1;
-      return acc;
-    },
-    { ok: 0, warn: 0, danger: 0, idle: 0 },
-  );
-  const total = items.length;
-  const stateText = counts.danger
-    ? "存在阻塞"
-    : counts.warn
-      ? "有警告"
-      : counts.idle === total
-        ? "未检测"
-        : "可继续";
-  const stateLevel = counts.danger ? "danger" : counts.warn ? "warn" : counts.idle === total ? "idle" : "ok";
-  const checkedAt = state.selfCheckRanAt ? formatTime(state.selfCheckRanAt) : "--";
-
-  $("#selfCheckOverview").innerHTML = [
-    ["总体状态", stateText, stateLevel, `最近检查 ${checkedAt}`],
-    ["正常", counts.ok, "ok", `${total} 项中的通过项`],
-    ["警告", counts.warn, counts.warn ? "warn" : "idle", "需要操作员确认"],
-    ["错误", counts.danger, counts.danger ? "danger" : "idle", "会阻塞任务启动"],
-  ]
-    .map(
-      ([label, value, level, detail]) => `
-        <article class="self-summary-card ${level}">
-          <span>${label}</span>
-          <strong>${value}</strong>
-          <small>${detail}</small>
-        </article>
-      `,
-    )
-    .join("");
+function summarizeSelfCheckResults(items) {
+  const hardBlockerNames = new Set(["ROS2 daemon", "CAN 接口", "磁盘空间"]);
+  const blockers = items.filter((item) => hardBlockerNames.has(item.name) && item.status === "错误");
+  const warnings = items.filter((item) => item.status !== "正常" && !blockers.includes(item) && item.status !== "未检测");
+  if (blockers.length) {
+    return {
+      state: "blocked",
+      level: "danger",
+      label: "存在阻塞",
+      nextAction: blockers[0].advice || "请处理阻塞项后重新执行自检。",
+      blockers,
+      warnings,
+    };
+  }
+  if (warnings.length) {
+    return {
+      state: "warn",
+      level: "warn",
+      label: "可继续，有警告",
+      nextAction: warnings[0].advice || "存在非阻塞警告，请按任务需要确认。",
+      blockers: [],
+      warnings,
+    };
+  }
+  if (items.every((item) => item.status === "未检测")) {
+    return {
+      state: "idle",
+      level: "idle",
+      label: "未自检",
+      nextAction: "请执行一键检查。",
+      blockers: [],
+      warnings: [],
+    };
+  }
+  return {
+    state: "ready",
+    level: "ok",
+    label: "可继续",
+    nextAction: "放行检查已通过，可以继续后续运行。",
+    blockers: [],
+    warnings: [],
+  };
 }
 
-function renderSelfCheckMetrics(items) {
-  const metricNames = ["CAN 接口", "相机帧率", "磁盘空间", "GPU 可用性"];
-  $("#selfCheckMetrics").innerHTML = metricNames
-    .map((name) => items.find((item) => item.name === name))
-    .filter(Boolean)
-    .map((item) => {
-      const level = item.metric.level || statusClass(item.status);
-      return `
-        <article class="mini-metric ${level}">
-          <div>
-            <span>${item.metric.label}</span>
-            <strong>${item.metric.value}</strong>
-          </div>
-          <div class="mini-bar" aria-hidden="true">
-            <i style="width:${item.metric.percent}%"></i>
-          </div>
-          <small>${item.name}</small>
-        </article>
-      `;
-    })
-    .join("");
+function renderSelfCheckOverview(items) {
+  const summary = state.selfCheckSummary || summarizeSelfCheckResults(items);
+  const checkedAt = state.selfCheckRanAt ? formatTime(state.selfCheckRanAt) : "--";
+  const blockerCount = Array.isArray(summary.blockers) ? summary.blockers.length : 0;
+  const warningCount = Array.isArray(summary.warnings) ? summary.warnings.length : 0;
+  $("#selfCheckOverview").innerHTML = `
+    <article class="self-gate-card ${escapeHtml(summary.level || "idle")}">
+      <div>
+        <span>放行状态</span>
+        <strong>${escapeHtml(summary.label || "未自检")}</strong>
+        <small>${state.selfCheckRanAt ? `最近检查 ${escapeHtml(checkedAt)}` : "后端重启后需要重新检查"}</small>
+      </div>
+      <p>${escapeHtml(summary.nextAction || "请执行一键检查。")}</p>
+      <dl>
+        <div><dt>阻塞</dt><dd>${blockerCount}</dd></div>
+        <div><dt>警告</dt><dd>${warningCount}</dd></div>
+      </dl>
+    </article>
+  `;
 }
 
 function renderSelfCheck(items = selfCheckItems) {
   state.selfCheckResults = cloneCheckItems(items);
-  renderSelfCheckOverview(items);
-  renderSelfCheckMetrics(items);
+  renderSelfCheckOverview(state.selfCheckResults);
   $("#selfCheckTable").innerHTML = items
     .map((item, index) => {
       const level = statusClass(item.status);
       const checkedAt = item.checkedAt || "--";
+      const canActivate = item.name === "CAN 接口" && item.status !== "正常";
       return `
         <div
           class="check-row"
           data-check-index="${index}"
-          data-tooltip-title="${item.name}"
-          data-tooltip-code="${item.code}"
-          data-tooltip-time="${checkedAt}"
-          data-tooltip-detail="${item.detail}"
-          data-tooltip-advice="${item.advice}"
+          data-tooltip-title="${escapeHtml(item.name)}"
+          data-tooltip-code="${escapeHtml(item.code)}"
+          data-tooltip-time="${escapeHtml(checkedAt)}"
+          data-tooltip-detail="${escapeHtml(item.detail)}"
+          data-tooltip-advice="${escapeHtml(item.advice)}"
         >
-          <strong>${item.name}</strong>
-          <span class="status-text ${level}">${item.status}</span>
-          <span>${item.advice}</span>
+          <strong>${escapeHtml(item.name)}</strong>
+          <span class="status-text ${level}">${escapeHtml(item.status)}</span>
+          <span>${escapeHtml(item.advice)}</span>
           <div class="check-actions" aria-label="${item.name}操作">
-            <button data-check-action="log" data-check-index="${index}">日志</button>
+            <button data-check-action="log" data-check-index="${index}">事件</button>
+            ${canActivate ? `<button data-check-action="activate" data-check-index="${index}">激活</button>` : ""}
             <button data-check-action="retry" data-check-index="${index}">复查</button>
           </div>
         </div>
       `;
     })
+    .join("");
+  renderRuntimePrep();
+}
+
+function runtimePrepState(item) {
+  const status = state[`${item.key}Runtime`]?.status || "unknown";
+  const labelGetters = {
+    piper: getPiperRuntimeLabel,
+    lifting: getLiftingRuntimeLabel,
+    chassis: getChassisRuntimeLabel,
+    camera: getCameraRuntimeLabel,
+    lidar: getLidarRuntimeLabel,
+  };
+  const label = labelGetters[item.key]?.() || { title: "服务状态未知", level: "idle" };
+  const textByStatus = {
+    stopped: "未启动",
+    starting: "启动中",
+    running: "运行中",
+    stopping: "停止中",
+    external: "外部运行",
+    failed: "启动失败",
+    error: "异常",
+    unknown: "未知",
+  };
+  return {
+    ...item,
+    status,
+    text: textByStatus[status] || status,
+    level: label.level || "idle",
+    title: label.title || "服务状态未知",
+    busy: Boolean(label.busy || state.runtimePrepBusy[item.key]),
+    canStart: ["stopped", "failed", "error", "unknown"].includes(status),
+  };
+}
+
+function renderRuntimePrep() {
+  const table = $("#runtimePrepTable");
+  if (!table) return;
+  const entries = runtimePrepItems.map(runtimePrepState);
+  const runningCount = entries.filter((item) => item.status === "running" || item.status === "external").length;
+  const problemCount = entries.filter((item) => item.level === "danger").length;
+  const badgeLevel = problemCount ? "warn" : runningCount ? "ok" : "idle";
+  setStateBadge("#runtimePrepBadge", `${runningCount}/${entries.length} 运行`, badgeLevel);
+  setText("#runtimePrepSummary", problemCount ? "存在服务异常，但不阻塞放行" : "服务按任务需要启动，未启动不阻塞放行");
+  table.innerHTML = entries
+    .map((item, index) => `
+      <div
+        class="check-row runtime-prep-row"
+        data-runtime-index="${index}"
+        data-tooltip-title="${escapeHtml(item.name)}"
+        data-tooltip-code="SVC-${escapeHtml(item.key.toUpperCase())}"
+        data-tooltip-time="${escapeHtml(formatTime())}"
+        data-tooltip-detail="${escapeHtml(item.title)}"
+        data-tooltip-advice="服务未启动不阻塞放行；需要该设备时可在此启动或前往对应页面。"
+      >
+        <strong>${escapeHtml(item.name)}</strong>
+        <span class="status-text ${escapeHtml(item.level)}">${escapeHtml(item.text)}</span>
+        <span>${escapeHtml(item.title)}</span>
+        <div class="check-actions" aria-label="${escapeHtml(item.name)}操作">
+          ${item.canStart ? `<button data-runtime-action="start" data-runtime-key="${escapeHtml(item.key)}" ${item.busy ? "disabled" : ""}>启动</button>` : ""}
+          <button data-runtime-action="view" data-runtime-view="${escapeHtml(item.view)}">前往</button>
+        </div>
+      </div>
+    `)
     .join("");
 }
 
@@ -1393,7 +1179,7 @@ function renderAdvice() {
   const adviceList = $("#adviceList");
   if (adviceList) adviceList.innerHTML = html;
   $("#drawerAlerts").innerHTML = html;
-  $("#alertStatus").textContent = `告警 ${state.alerts.length}`;
+  setText("#alertStatus", `告警 ${state.alerts.length}`);
 }
 
 function renderHomingSteps(activeIndex = -1, failedIndex = -1) {
@@ -1421,30 +1207,6 @@ function renderHomeFlow(steps, activeIndex, progress) {
     })
     .join("");
   progressBar.style.width = `${progress}%`;
-}
-
-function renderCollectionMetrics() {
-  const frames = Math.max(0, state.collectionSeconds * 29 - 3);
-  const size = (state.collectionSeconds * 0.18).toFixed(1);
-  const dropped = state.collectionSeconds > 15 ? 4 : 0;
-  $("#collectionMetrics").innerHTML = [
-    ["录制时长", `${state.collectionSeconds}s`],
-    ["帧率", "29.4 fps"],
-    ["丢帧", `${dropped}`],
-    ["数据大小", `${size} GB`],
-    ["Episode", "043"],
-    ["样本帧", `${frames}`],
-  ]
-    .map(([label, value]) => `<div class="metric-card"><span>${label}</span><strong>${value}</strong></div>`)
-    .join("");
-
-  $("#qualityStrip").innerHTML = [
-    ["相机帧率", dropped ? "警告" : "正常", dropped ? "front_rgb 有短时丢帧。" : "帧率稳定。"],
-    ["磁盘空间", "警告", "剩余空间低于建议值。"],
-    ["时间戳", "正常", "传感器时间戳连续。"],
-  ]
-    .map(([name, status, detail]) => `<div class="quality-item"><strong>${name}</strong><span class="status-text ${statusClass(status)}">${status}</span><span>${detail}</span></div>`)
-    .join("");
 }
 
 const INFERENCE_STATUS_LABELS = {
@@ -1504,7 +1266,6 @@ function applyInferenceStatus(result) {
 
 function renderInferenceStatus() {
   const info = state.inference;
-  const locked = !state.auth.authenticated;
   const level = INFERENCE_STATUS_LEVELS[info.status] || "idle";
   setStateBadge("#inferenceBadge", INFERENCE_STATUS_LABELS[info.status] || info.status, level);
   const summary = $("#inferenceSummary");
@@ -1518,16 +1279,16 @@ function renderInferenceStatus() {
     }
   }
   const connectButton = $("#inferenceConnectButton");
-  if (connectButton) connectButton.disabled = locked || info.busy;
+  if (connectButton) connectButton.disabled = info.busy;
   const disconnectButton = $("#inferenceDisconnectButton");
-  if (disconnectButton) disconnectButton.disabled = locked || info.busy || !info.connected;
+  if (disconnectButton) disconnectButton.disabled = info.busy || !info.connected;
   const requestButton = $("#requestChunkButton");
-  if (requestButton) requestButton.disabled = locked || info.busy || !info.connected || info.looping;
+  if (requestButton) requestButton.disabled = info.busy || !info.connected || info.looping;
   const executeButton = $("#executeChunkButton");
-  if (executeButton) executeButton.disabled = locked || info.busy || !info.chunkId || info.looping;
+  if (executeButton) executeButton.disabled = info.busy || !info.chunkId || info.looping;
   const enableButton = $("#inferenceEnablePiperButton");
   if (enableButton) {
-    enableButton.disabled = locked || info.busy || state.piperEnableBusy || !piperReady();
+    enableButton.disabled = info.busy || state.piperEnableBusy || !piperReady();
     enableButton.textContent = state.piperEnableBusy ? "使能中" : "使能 Piper";
   }
   renderInferenceMetrics();
@@ -2196,8 +1957,7 @@ async function toggleArmDirectControl() {
         throw new Error("左右臂 Action 参数未就绪");
       }
       await publishPiperEnable(true, { repeat: 3, intervalMs: 80 });
-      $("#enableStatus").textContent = "已使能";
-      $("#enableStatus").className = "status-pill ok";
+      setStatusPill("#enableStatus", "已使能", "ok");
       state.armControl.active = true;
       addLog("机械臂", "已接管控制：已复制 State，拖动 Action 滑条将自动下发");
     }
@@ -2241,20 +2001,12 @@ function chassisFeedbackMeta() {
 function renderDeviceBaseMetrics() {
   const node = $("#deviceBaseMetrics");
   if (!node) return;
-  const valueFor = (key) => deviceBaseControlItems.find((entry) => entry.key === key);
-  const linear = valueFor("linear");
-  const lateral = valueFor("lateral");
-  const angular = valueFor("angular");
   const command = state.chassisControl.command || { linearX: 0, linearY: 0, angularZ: 0 };
   const system = state.chassisState.system || {};
-  const battery = state.chassisState.battery || {};
   const odom = state.chassisState.odom || {};
   const feedbackLinear = nestedNumber(odom, ["twist", "twist", "linear", "x"]);
   const feedbackLateral = nestedNumber(odom, ["twist", "twist", "linear", "y"]);
   const feedbackAngular = nestedNumber(odom, ["twist", "twist", "angular", "z"]);
-  const systemVoltage = Number(system.battery_voltage);
-  const bmsVoltage = Number(battery.voltage);
-  const voltage = Number.isFinite(bmsVoltage) ? bmsVoltage : systemVoltage;
   const motionMode = system.motion_mode !== undefined ? system.motion_mode : state.chassisState.motion?.motion_mode;
   const feedbackMeta = chassisFeedbackMeta();
   const feedbackLevel = feedbackMeta.level;
@@ -2266,23 +2018,63 @@ function renderDeviceBaseMetrics() {
   const serviceLevel = serviceExternal ? "warn" : chassisReady() ? "ok" : "idle";
   setStatusText("#baseControlText", serviceText, serviceLevel);
   setStatusText("#baseOdomText", odomText, state.chassisState.odom ? feedbackLevel : "idle");
+  const modeText = chassisMotionModeText(motionMode);
+  setStatusText("#baseModeText", modeText, modeText === "--" ? "idle" : feedbackLevel);
   $$("[data-device-drive], [data-mapping-drive]").forEach((button) => {
     const action = button.dataset.deviceDrive || button.dataset.mappingDrive;
     button.disabled = !chassisReady() && action !== "stop";
   });
   renderChassisKeyboardControl();
-  node.innerHTML = [
-    ["指令", `${command.linearX.toFixed(2)} / ${command.linearY.toFixed(2)} m/s`],
-    ["旋转", `${command.angularZ.toFixed(2)} ${angular.commandUnit}`],
-    ["反馈", feedbackLinear === null ? "--" : `${feedbackLinear.toFixed(2)} / ${(feedbackLateral || 0).toFixed(2)} m/s`],
-    ["模式", chassisMotionModeText(motionMode)],
-    ["角速", feedbackAngular === null ? "--" : `${feedbackAngular.toFixed(2)} rad/s`],
-    ["电压", Number.isFinite(voltage) ? `${voltage.toFixed(1)} V` : "--"],
-  ]
-    .map(([name, value]) => `<div class="metric-card"><span>${name}</span><strong>${value}</strong></div>`)
-    .join("");
+  const speedRows = [
+    { axis: "vx", unit: "m/s", command: Number(command.linearX) || 0, feedback: feedbackLinear, threshold: 0.03 },
+    { axis: "vy", unit: "m/s", command: Number(command.linearY) || 0, feedback: feedbackLateral, threshold: 0.03 },
+    { axis: "wz", unit: "rad/s", command: Number(command.angularZ) || 0, feedback: feedbackAngular, threshold: 0.05 },
+  ];
+  node.innerHTML = `
+    <div class="base-speed-row base-speed-head" role="row">
+      <span>轴</span>
+      <span>指令</span>
+      <span>反馈</span>
+      <span>差值</span>
+    </div>
+    ${speedRows.map(renderBaseSpeedRow).join("")}
+  `;
   renderBaseOdomReadout(odom);
   renderRobotViewStatus();
+}
+
+function formatBaseSpeedValue(value, digits = 2) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(digits) : "--";
+}
+
+function formatBaseSpeedDelta(value, digits = 2) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return `${number > 0 ? "+" : ""}${number.toFixed(digits)}`;
+}
+
+function baseSpeedDeltaLevel(delta, threshold) {
+  if (!Number.isFinite(delta)) return "idle";
+  const magnitude = Math.abs(delta);
+  if (magnitude >= threshold * 2) return "danger";
+  if (magnitude >= threshold) return "warn";
+  return "ok";
+}
+
+function renderBaseSpeedRow(row) {
+  const feedback = row.feedback === null ? null : Number(row.feedback);
+  const hasFeedback = Number.isFinite(feedback);
+  const delta = hasFeedback ? feedback - row.command : NaN;
+  const deltaLevel = baseSpeedDeltaLevel(delta, row.threshold);
+  return `
+    <div class="base-speed-row" role="row">
+      <span class="base-speed-axis"><strong>${escapeHtml(row.axis)}</strong><small>${escapeHtml(row.unit)}</small></span>
+      <span class="base-speed-value">${escapeHtml(formatBaseSpeedValue(row.command))}</span>
+      <span class="base-speed-value">${escapeHtml(hasFeedback ? formatBaseSpeedValue(feedback) : "--")}</span>
+      <span class="base-speed-value base-speed-delta" data-level="${escapeHtml(deltaLevel)}">${escapeHtml(formatBaseSpeedDelta(delta))}</span>
+    </div>
+  `;
 }
 
 function renderBaseOdomReadout(odom = state.chassisState.odom || {}) {
@@ -2395,14 +2187,6 @@ function mappingMapRevision(session = state.mapping.session) {
 
 function mappingMapVisible() {
   return Boolean(state.mapping.mapPreview.hasFrame);
-}
-
-function localizationViewActive() {
-  return document.body.dataset.activeView === "localization";
-}
-
-function localizationMapVisible() {
-  return localizationViewActive() && Boolean(state.localization.mapPreview.hasFrame);
 }
 
 function robotJointDeg(side, index, fallback = 0) {
@@ -2831,10 +2615,7 @@ async function fetchRobotModels(options = {}) {
 }
 
 function robotViewerStage() {
-  if (localizationViewActive()) {
-    return $("#localizationViewStage") || $("#robotViewStage");
-  }
-  return $("#robotViewStage") || $("#localizationViewStage");
+  return $("#robotViewStage");
 }
 
 function syncRobotViewerMount() {
@@ -2850,11 +2631,7 @@ function syncRobotViewerMount() {
 function syncRobotViewerLayersForView() {
   const mappingPreview = state.mapping.mapPreview;
   if (mappingPreview.points) {
-    mappingPreview.points.visible = !localizationViewActive() && Boolean(mappingPreview.hasFrame);
-  }
-  const localizationPreview = state.localization.mapPreview;
-  if (localizationPreview.points) {
-    localizationPreview.points.visible = localizationMapVisible();
+    mappingPreview.points.visible = Boolean(mappingPreview.hasFrame);
   }
 }
 
@@ -3016,10 +2793,7 @@ async function initializeRobotViewer() {
 
       bindRobotViewerControls(renderer.domElement);
       robot.resizeObserver = new ResizeObserver(resizeRobotViewer);
-      ["#robotViewStage", "#localizationViewStage"].forEach((selector) => {
-        const stage = $(selector);
-        if (stage) robot.resizeObserver.observe(stage);
-      });
+      robot.resizeObserver.observe(container);
       window.addEventListener("resize", resizeRobotViewer);
 
       const animate = () => {
@@ -3264,13 +3038,6 @@ function updateRobotModelTransforms() {
     }
   });
 
-  if (localizationViewActive() && state.localization.selectedMapName) {
-    robot.modelRoot.scale.setScalar(1);
-    robot.modelRoot.position.set(0, 0, 0);
-    robot.modelRoot.rotation.z = 0;
-    return;
-  }
-
   const mappingPose = mappingPoseFromTransform();
   if (mappingPose) {
     robot.modelRoot.scale.setScalar(1);
@@ -3378,7 +3145,7 @@ async function loadRobotModel(key = state.robotModel.selectedKey) {
     state.robotModel.loadedKey = key;
     state.robotModel.hasModel = true;
     frameRobotModelInViewer(root);
-    if (state.robotModel.poseSyncEnabled || mappingFinalTransform() || localizationViewActive()) updateRobotModelTransforms();
+    if (state.robotModel.poseSyncEnabled || mappingFinalTransform()) updateRobotModelTransforms();
     if (state.robotModel.lidarOverlay.enabled) ensureRobotLidarOverlay();
     setRobotLoadProgress({
       active: false,
@@ -3623,126 +3390,6 @@ function renderMappingStatus() {
   renderChassisKeyboardControl();
 }
 
-function localizationSelectedMap() {
-  return state.localization.maps.find((entry) => entry.name === state.localization.selectedMapName) || state.localization.selectedMap || null;
-}
-
-function localizationTimestampText(value) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return "--";
-  return new Date(parsed).toLocaleString("zh-CN", { hour12: false });
-}
-
-function localizationMapStateText() {
-  const localization = state.localization;
-  const preview = localization.mapPreview;
-  if (localization.mapsLoading) return "读取地图列表";
-  if (preview.activeRequest) return "加载点云";
-  if (localization.lastError || preview.error) return "异常";
-  if (preview.hasFrame) return "已显示";
-  if (localization.selectedMapName) return "待加载";
-  if (localization.maps.length) return "待选择";
-  return "无可用地图";
-}
-
-function localizationMapLevel() {
-  const localization = state.localization;
-  if (localization.mapsLoading || localization.mapPreview.activeRequest) return "warn";
-  if (localization.lastError || localization.mapPreview.error) return "danger";
-  if (localization.mapPreview.hasFrame) return "ok";
-  return "idle";
-}
-
-function renderLocalizationMapSelect() {
-  const select = $("#localizationMapSelect");
-  if (!select) return;
-  const localization = state.localization;
-  const options = localization.maps.length
-    ? [`<option value="">选择地图</option>`]
-        .concat(localization.maps.map((entry) => `<option value="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</option>`))
-        .join("")
-    : `<option value="">${localization.mapsLoading ? "读取中" : "暂无可用地图"}</option>`;
-  if (select.dataset.options !== options) {
-    select.innerHTML = options;
-    select.dataset.options = options;
-  }
-  select.value = localization.selectedMapName || "";
-  select.disabled = localization.mapsLoading || localization.maps.length === 0;
-}
-
-function renderLocalizationStatus() {
-  const localization = state.localization;
-  const preview = localization.mapPreview;
-  const selected = localizationSelectedMap();
-  const statusText = localizationMapStateText();
-  const statusLevel = localizationMapLevel();
-  const locRunning = state.localizationRuntime.status === "running";
-  const currentMap = localization.selectedMapName || "--";
-  const pointCount = preview.hasFrame ? Math.max(0, Math.round(preview.pointCount || 0)).toLocaleString("zh-CN") : "--";
-  const sourcePointCount = preview.hasFrame ? Math.max(0, Math.round(preview.sourcePointCount || preview.pointCount || 0)).toLocaleString("zh-CN") : "--";
-  const sizeBytes = preview.hasFrame ? preview.sizeBytes : selected?.sizeBytes;
-  const mtimeMs = preview.hasFrame ? preview.mtimeMs : selected?.mtimeMs;
-
-  renderLocalizationRuntime();
-  renderLocalizationMapSelect();
-  setStateBadge("#localizationPageBadge", locRunning ? "Loc 运行中" : statusText, locRunning ? "ok" : statusLevel);
-  setStateBadge("#localizationStatusBadge", locRunning ? "运行中" : "待接入", locRunning ? "ok" : "idle");
-  setText(
-    "#localizationMapSummary",
-    localization.lastError || preview.error || (selected ? `${selected.name} / ${selected.mapPath || "map.pcd"}` : "选择 modules/map/data 下的已保存地图"),
-  );
-  setText(
-    "#localizationViewerSummary",
-    preview.hasFrame
-      ? `${currentMap} / Ranger Mini v3 / 初始位姿 0, 0, 0`
-      : "Ranger Mini v3 / 初始位姿 0, 0, 0",
-  );
-  setText("#localizationStatusSummary", locRunning ? "Loc 前端入口已开启，真实定位服务待接入" : "真实定位服务待接入");
-
-  const overlayTitle = $("#localizationOverlayTitle");
-  if (overlayTitle) overlayTitle.textContent = preview.activeRequest ? "地图加载中" : preview.hasFrame ? currentMap : statusText;
-  const overlayDetail = $("#localizationOverlayDetail");
-  if (overlayDetail) {
-    overlayDetail.textContent = preview.error
-      ? preview.error
-      : preview.hasFrame
-        ? `${pointCount} 点 / 可旋转、平移、缩放`
-        : "选择保存地图后自动加载 map.pcd";
-  }
-
-  const mapMetrics = $("#localizationMapMetrics");
-  if (mapMetrics) {
-    mapMetrics.innerHTML = [
-      ["可用地图", String(localization.maps.length)],
-      ["当前地图", currentMap],
-      ["地图状态", statusText],
-      ["地图点", pointCount],
-      ["源点数", sourcePointCount],
-      ["文件大小", Number.isFinite(Number(sizeBytes)) ? formatBytes(sizeBytes) : "--"],
-      ["更新时间", localizationTimestampText(mtimeMs)],
-      ["初始位姿", "0 / 0 / 0"],
-    ]
-      .map(([name, value]) => `<div class="metric-card"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
-      .join("");
-  }
-
-  const statusMetrics = $("#localizationStatusMetrics");
-  if (statusMetrics) {
-    statusMetrics.innerHTML = [
-      ["Loc", locRunning ? "运行中" : "未启动"],
-      ["地图", currentMap],
-      ["NDT", "待接入"],
-      ["GICP", "待接入"],
-      ["Pose X/Y/Yaw", "0.00 / 0.00 / 0.0"],
-      ["匹配分数", "--"],
-      ["置信度", "--"],
-      ["最近更新", locRunning ? formatTime() : "--"],
-    ]
-      .map(([name, value]) => `<div class="metric-card"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
-      .join("");
-  }
-}
-
 function renderLiftingRuntime() {
   const label = getLiftingRuntimeLabel();
   renderStatusSwitch("#liftingRuntimeStatus", "Lifting", label.level, {
@@ -3755,15 +3402,6 @@ function renderLiftingRuntime() {
 function renderChassisRuntime() {
   const label = getChassisRuntimeLabel();
   renderStatusSwitch("#chassisRuntimeStatus", "Chassis", label.level, {
-    pressed: label.pressed,
-    busy: label.busy,
-    title: label.title,
-  });
-}
-
-function renderLocalizationRuntime() {
-  const label = getLocalizationRuntimeLabel();
-  renderStatusSwitch("#localizationRuntimeStatus", "Loc", label.level, {
     pressed: label.pressed,
     busy: label.busy,
     title: label.title,
@@ -3947,8 +3585,7 @@ function renderPiperRuntime() {
 }
 
 function renderLogs() {
-  const logs = state.activeLogFilter === "全部" ? state.logs : state.logs.filter((log) => log.source === state.activeLogFilter);
-  const html = logs
+  const html = state.logs
     .map(
       (log) => `
         <div class="log-item">
@@ -3959,48 +3596,27 @@ function renderLogs() {
       `,
     )
     .join("");
-  $("#drawerEvents").innerHTML = html || `<div class="log-item"><time>--:--</time><span class="log-source">系统</span><span>暂无事件</span></div>`;
-  $("#logList").innerHTML = html || `<div class="log-item"><time>--:--</time><span class="log-source">系统</span><span>暂无事件</span></div>`;
-  $("#logCount").textContent = `${logs.length} 条`;
-}
-
-function renderHistory() {
-  $("#historyList").innerHTML = historyItems
-    .map(
-      ([title, result, detail]) => `
-        <div class="history-item">
-          <div><strong>${title}</strong><span>${detail}</span></div>
-          <span class="status-text ${statusClass(result === "成功" || result === "完成" ? "正常" : result === "警告" ? "警告" : "错误")}">${result}</span>
-        </div>
-      `,
-    )
-    .join("");
-}
-
-function renderLogFilters() {
-  $("#logFilters").innerHTML = logSources
-    .map((source) => `<button class="${source === state.activeLogFilter ? "is-active" : ""}" data-log-filter="${source}">${source}</button>`)
-    .join("");
+  const drawerEvents = $("#drawerEvents");
+  if (drawerEvents) {
+    drawerEvents.innerHTML = html || `<div class="log-item"><time>--:--</time><span class="log-source">系统</span><span>暂无事件</span></div>`;
+  }
 }
 
 function renderActionLocks() {
   const busy = state.task !== "idle";
-  const locked = !state.auth.authenticated;
   const runtimeReady = piperReady();
   $$("[data-action]").forEach((button) => {
     const action = button.dataset.action;
-    const requiresPiper = action === "homing" || action === "collection" || action === "inference";
-    button.disabled = locked || busy || (requiresPiper && !runtimeReady);
+    const requiresPiper = action === "homing" || action === "inference";
+    button.disabled = busy || (requiresPiper && !runtimeReady);
   });
   const startHomingButton = $("#startHomingButton");
-  if (startHomingButton) startHomingButton.disabled = locked || busy || !runtimeReady;
-  const startCollectionButton = $("#startCollectionButton");
-  if (startCollectionButton) startCollectionButton.disabled = locked || busy || !runtimeReady;
+  if (startHomingButton) startHomingButton.disabled = busy || !runtimeReady;
   renderPreflight();
 }
 
 function syncClock() {
-  $("#clockStatus").textContent = formatTime();
+  setText("#clockStatus", formatTime());
 }
 
 function formatPlaybackTime(seconds) {
@@ -4260,13 +3876,13 @@ async function loadPlaybackDataset() {
     state.playback.durationSec = dataset.durationSec;
     state.playback.elapsedSec = 0;
     state.playback.currentFrameIndex = 0;
-    addLog("数采", `数据回放已加载：${dataset.name} / ${dataset.sourceType} / state ${dataset.stateDim} / action ${dataset.actionDim}`);
+    addLog("回放", `数据回放已加载：${dataset.name} / ${dataset.sourceType} / state ${dataset.stateDim} / action ${dataset.actionDim}`);
     return dataset;
   } catch (error) {
     state.playback.dataset = null;
     state.playback.loadedPath = "";
     state.playback.loadError = error.message;
-    addLog("数采", `数据回放加载失败：${error.message}`);
+    addLog("回放", `数据回放加载失败：${error.message}`);
     return null;
   } finally {
     state.playback.loading = false;
@@ -4559,7 +4175,7 @@ async function refreshPlaybackStatus(options = {}) {
     renderPlayback();
     return payload;
   } catch (error) {
-    if (!options.silent) addLog("数采", `数据回放状态同步失败：${error.message}`);
+    if (!options.silent) addLog("回放", `数据回放状态同步失败：${error.message}`);
     return null;
   }
 }
@@ -4668,15 +4284,12 @@ async function togglePlaybackRobotEnable() {
     const result = await requestPlaybackAction("enable", { enabled, repeat: 3, intervalMs: 80 });
     state.playback.robotEnabled = Boolean(result.robotEnabled);
     state.playback.status = enabled ? "idle" : "stopped";
-    if (enabled && $("#enableStatus")) {
-      $("#enableStatus").textContent = enabled ? "已使能" : "未使能";
-      $("#enableStatus").className = enabled ? "status-pill ok" : "status-pill idle";
-    }
-    addLog("数采", enabled ? "数据回放 Piper 使能已打开" : "数据回放已取消，Piper 保持使能");
+    setStatusPill("#enableStatus", enabled ? "已使能" : "未使能", enabled ? "ok" : "idle");
+    addLog("回放", enabled ? "数据回放 Piper 使能已打开" : "数据回放已取消，Piper 保持使能");
     await refreshPlaybackStatus({ silent: true });
   } catch (error) {
     state.playback.lastError = error.message;
-    addLog("数采", `数据回放使能切换失败：${error.message}`);
+    addLog("回放", `数据回放使能切换失败：${error.message}`);
   } finally {
     state.playback.busy = false;
     renderPlayback();
@@ -4685,12 +4298,12 @@ async function togglePlaybackRobotEnable() {
 
 async function startPlaybackRun() {
   if (!state.playback.robotEnabled) {
-    addLog("数采", "数据回放未启动：机器人未使能");
+    addLog("回放", "数据回放未启动：机器人未使能");
     renderPlayback();
     return;
   }
   if (!String(state.playback.path || "").trim()) {
-    addLog("数采", "数据回放未启动：未选择数据文件");
+    addLog("回放", "数据回放未启动：未选择数据文件");
     return;
   }
   if (state.playback.busy) return;
@@ -4714,12 +4327,12 @@ async function startPlaybackRun() {
     state.playback.elapsedSec = 0;
     state.playback.durationSec = Number(result.durationSec) || file.durationSec;
     state.playback.status = "running";
-    addLog("数采", `数据回放开始：${file.name} / ${formatNumber(maxJointSpeedDegS, 1)} deg/s`);
+    addLog("回放", `数据回放开始：${file.name} / ${formatNumber(maxJointSpeedDegS, 1)} deg/s`);
     setPlaybackRunning(true);
     await refreshPlaybackStatus({ silent: true });
   } catch (error) {
     state.playback.lastError = error.message;
-    addLog("数采", `数据回放启动失败：${error.message}`);
+    addLog("回放", `数据回放启动失败：${error.message}`);
   } finally {
     state.playback.busy = false;
     renderPlayback();
@@ -4735,10 +4348,10 @@ async function stopPlaybackRun() {
     await requestPlaybackAction("stop");
     setPlaybackRunning(false);
     await refreshPlaybackStatus({ silent: true });
-    addLog("数采", `数据回放停止：${file.name}`);
+    addLog("回放", `数据回放停止：${file.name}`);
   } catch (error) {
     state.playback.lastError = error.message;
-    addLog("数采", `数据回放停止失败：${error.message}`);
+    addLog("回放", `数据回放停止失败：${error.message}`);
   } finally {
     state.playback.busy = false;
     renderPlayback();
@@ -4873,34 +4486,15 @@ function fetchCanInterfaceCheck(options = {}) {
   }
   const query = params.toString();
   const path = `/api/self-check/can-interface${query ? `?${query}` : ""}`;
-  return fetchSelfCheckApi(path, selfCheckItems[2], "CAN 接口");
+  return fetchSelfCheckApi(path, selfCheckItems[1], "CAN 接口");
 }
 
 function fetchDiskSpaceCheck() {
-  return fetchSelfCheckApi("/api/self-check/disk-space", selfCheckItems[7], "磁盘空间");
+  return fetchSelfCheckApi("/api/self-check/disk-space", selfCheckItems[2], "磁盘空间");
 }
 
 function fetchGpuStatusCheck() {
-  return fetchSelfCheckApi("/api/self-check/gpu-status", selfCheckItems[8], "GPU 可用性");
-}
-
-function buildUnimplementedCheckResult(item, index, checkedAt) {
-  return {
-    ...item,
-    status: "错误",
-    advice: "该自检项尚未实现，请先实现对应 modules/self_check 检查逻辑。",
-    code: item.code.replace("000", "TODO"),
-    detail: `${item.name} 还没有接入真实自检逻辑，当前结果用于标记待开发能力。`,
-    checkedAt,
-    metric: {
-      ...item.metric,
-      value: "未实现",
-      percent: 0,
-      level: "danger",
-    },
-    implemented: false,
-    order: index,
-  };
+  return fetchSelfCheckApi("/api/self-check/gpu-status", selfCheckItems[3], "GPU 可用性");
 }
 
 function countCheckStatuses(results) {
@@ -4913,6 +4507,77 @@ function countCheckStatuses(results) {
   );
 }
 
+function selfCheckFallbackFor(result) {
+  return selfCheckItems.find((item) => item.name === result?.name) || selfCheckItems[0];
+}
+
+function normalizeSelfCheckResults(results) {
+  if (!Array.isArray(results) || !results.length) return cloneCheckItems(selfCheckItems);
+  return results.map((result) => normalizeCheckResult(result, selfCheckFallbackFor(result)));
+}
+
+function selfCheckDateFromPayload(payload) {
+  const ranAtMs = Number(payload && payload.ranAtMs);
+  if (Number.isFinite(ranAtMs) && ranAtMs > 0) return new Date(ranAtMs);
+  if (payload && payload.ranAt) {
+    const parsed = new Date(payload.ranAt);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return new Date();
+}
+
+function alertsFromSelfCheckSummary(summary) {
+  return [
+    ...((summary && summary.blockers) || []).map((item) => ({
+      level: "danger",
+      title: `${item.name} ${item.status}`,
+      detail: item.advice,
+    })),
+    ...((summary && summary.warnings) || []).map((item) => ({
+      level: "warn",
+      title: `${item.name} ${item.status}`,
+      detail: item.advice,
+    })),
+  ];
+}
+
+function applySelfCheckPayload(payload) {
+  const ran = Boolean(payload && payload.ran);
+  const results = ran ? normalizeSelfCheckResults(payload.results) : cloneCheckItems(selfCheckItems);
+  state.selfCheckRanAt = ran ? selfCheckDateFromPayload(payload) : null;
+  state.selfCheckSummary = payload?.summary || summarizeSelfCheckResults(results);
+  renderSelfCheck(results);
+  if (ran) {
+    state.alerts = alertsFromSelfCheckSummary(state.selfCheckSummary);
+    renderAdvice();
+  }
+  const rosResult = results.find((item) => item.name === "ROS2 daemon");
+  const canResult = results.find((item) => item.name === "CAN 接口");
+  if (rosResult) updateRosTopbar(rosResult);
+  if (canResult) updateCanTopbar(canResult);
+  return { ran, results, summary: state.selfCheckSummary };
+}
+
+async function fetchCachedSelfCheckStatus(options = {}) {
+  try {
+    const response = await fetch("/api/self-check/status", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    const applied = applySelfCheckPayload(payload);
+    if (!options.silent && applied.ran) {
+      addLog("系统", `已恢复后端自检缓存：${applied.summary.label}`);
+    }
+    return payload;
+  } catch (error) {
+    if (!options.silent) {
+      addLog("系统", `自检缓存读取失败：${error.message}`);
+    }
+    return null;
+  }
+}
+
 function updateRosTopbar(rosResult) {
   const level = statusClass(rosResult.status);
   renderStatusSwitch("#rosStatus", "ROS", level, {
@@ -4922,7 +4587,7 @@ function updateRosTopbar(rosResult) {
 }
 
 function currentCanCheckResult() {
-  return state.selfCheckResults.find((item) => item.name === "CAN 接口") || selfCheckItems[2];
+  return state.selfCheckResults.find((item) => item.name === "CAN 接口") || selfCheckItems[1];
 }
 
 function updateCanTopbar(canResult) {
@@ -4942,12 +4607,15 @@ function updateSingleSelfCheckResult(result) {
   const index = items.findIndex((item) => item.name === result.name);
   if (index === -1) return;
   items[index] = normalizeCheckResult(result, items[index]);
+  state.selfCheckSummary = summarizeSelfCheckResults(items);
   renderSelfCheck(items);
 }
 
 async function refreshCanInterfaceStatus(options = {}) {
   const canResult = await fetchCanInterfaceCheck({ autoActivate: false });
-  updateSingleSelfCheckResult(canResult);
+  if (options.updateSelfCheck !== false) {
+    updateSingleSelfCheckResult(canResult);
+  }
   updateCanTopbar(canResult);
   if (!options.silent) {
     addLog("系统", `CAN 状态查看：${canResult.status} / ${canResult.code}`);
@@ -5002,77 +4670,60 @@ async function activateCanInterface(item = currentCanCheckResult(), options = {}
 
 async function runSelfCheck() {
   setStateBadge("#selfCheckBadge", "检查中", "warn");
-  $("#selfCheckSummary").textContent = "正在检查设备状态";
+  state.selfCheckSummary = {
+    state: "running",
+    level: "warn",
+    label: "检查中",
+    nextAction: "正在检查并自动修复 ROS daemon 与 CAN。",
+    blockers: [],
+    warnings: [],
+  };
+  renderSelfCheck(state.selfCheckResults.length ? state.selfCheckResults : selfCheckItems);
+  $("#selfCheckSummary").textContent = "正在检查并自动修复 ROS/CAN";
   addLog("系统", "开始整机自检");
 
-  state.selfCheckRanAt = new Date();
-  const checkedAt = formatTime(state.selfCheckRanAt);
-  const [rosResult, canResult, diskResult, gpuResult] = await Promise.all([
-    fetchRosDaemonCheck(),
-    fetchCanInterfaceCheck(),
-    fetchDiskSpaceCheck(),
-    fetchGpuStatusCheck(),
-  ]);
-  const unimplementedResults = [
-    buildUnimplementedCheckResult(selfCheckItems[1], 1, checkedAt),
-    ...selfCheckItems.slice(3, 7).map((item, offset) => buildUnimplementedCheckResult(item, offset + 3, checkedAt)),
-  ];
-  const results = [
-    rosResult,
-    unimplementedResults[0],
-    canResult,
-    ...unimplementedResults.slice(1),
-    diskResult,
-    gpuResult,
-  ];
-  const counts = countCheckStatuses(results);
-  const badgeLevel = counts.danger ? "danger" : counts.warn ? "warn" : "ok";
-  const badgeText = counts.danger ? "有错误" : counts.warn ? "有警告" : "正常";
-
-  renderSelfCheck(results);
-  $("#selfCheckAge").textContent = "刚刚";
-  $("#selfCheckSummary").textContent = `自检完成：${counts.ok} 正常，${counts.warn} 警告，${counts.danger} 错误`;
-  setStateBadge("#selfCheckBadge", badgeText, badgeLevel);
-  updateRosTopbar(rosResult);
-  updateCanTopbar(canResult);
-  state.alerts = [];
-  if (rosResult.status !== "正常") {
-    state.alerts.push({
-      level: statusClass(rosResult.status),
-      title: `${rosResult.name} ${rosResult.status}`,
-      detail: rosResult.advice,
+  try {
+    const response = await fetch("/api/self-check/run?auto_activate=1", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
     });
-  }
-  [canResult, diskResult, gpuResult].forEach((result) => {
-    if (result.status !== "正常") {
-      state.alerts.push({
-        level: statusClass(result.status),
-        title: `${result.name} ${result.status}`,
-        detail: result.advice,
-      });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
     }
-  });
-  state.alerts.push({
-    level: "danger",
-    title: "存在未实现自检项",
-    detail: `${unimplementedResults.length} 个自检项暂未接入真实检查逻辑，当前统一标记为错误。`,
-  });
-  renderAdvice();
-  addLog("ROS", `ROS2 daemon 自检：${rosResult.status} / ${rosResult.code}`);
-  addLog("系统", `CAN 接口自检：${canResult.status} / ${canResult.code}`);
-  addLog("系统", `磁盘空间自检：${diskResult.status} / ${diskResult.code}`);
-  addLog("系统", `GPU 可用性自检：${gpuResult.status} / ${gpuResult.code}`);
-  addLog("系统", `整机自检完成：${counts.ok} 正常，${counts.warn} 警告，${counts.danger} 错误`);
+    const { results, summary } = applySelfCheckPayload(payload);
+    const counts = countCheckStatuses(results);
+    $("#selfCheckSummary").textContent = `自检完成：${summary.label}`;
+    setStateBadge("#selfCheckBadge", summary.label, summary.level === "danger" ? "danger" : summary.level);
+    state.alerts = alertsFromSelfCheckSummary(summary);
+    renderAdvice();
+    results.forEach((result) => addLog(result.source, `${result.name} 自检：${result.status} / ${result.code}`));
+    addLog("系统", `整机自检完成：${counts.ok} 正常，${counts.warn} 警告，${counts.danger} 错误`);
+  } catch (error) {
+    state.selfCheckSummary = {
+      state: "blocked",
+      level: "danger",
+      label: "自检失败",
+      nextAction: "请确认 Robot Station 后端服务是否运行。",
+      blockers: [],
+      warnings: [],
+    };
+    renderSelfCheck(state.selfCheckResults.length ? state.selfCheckResults : selfCheckItems);
+    $("#selfCheckSummary").textContent = `自检请求失败：${error.message}`;
+    setStateBadge("#selfCheckBadge", "请求失败", "danger");
+    addLog("系统", `整机自检请求失败：${error.message}`);
+  }
 }
 
-function rerunProblemChecks() {
+async function rerunProblemChecks() {
   const problems = state.selfCheckResults.filter((item) => item.status === "警告" || item.status === "错误");
   if (!problems.length) {
-    addLog("系统", "复查异常项：当前没有异常项");
-    return;
+    addLog("系统", "复查异常项：当前没有异常项，重新执行放行检查");
+  } else {
+    problems.forEach((item) => addLog(item.source, `复查异常项：${item.name}`));
   }
-  problems.forEach((item) => addLog(item.source, `复查异常项：${item.name}，结果仍需确认`));
-  $("#selfCheckSummary").textContent = `已复查 ${problems.length} 个异常项，建议按提示处理后再次执行一键检查`;
+  await runSelfCheck();
 }
 
 async function startHoming() {
@@ -5109,56 +4760,10 @@ async function startHoming() {
       setStateBadge("#stateBadge", "完成", "ok");
       setText("#taskSubtitle", "最近任务：归位完成");
       setText("#homingSummary", "归位完成，机器人处于准备状态");
-      $("#enableStatus").textContent = "已使能";
-      $("#enableStatus").className = "status-pill ok";
+      setStatusPill("#enableStatus", "已使能", "ok");
       addLog("系统", "归位流程完成");
     }
   }, 700);
-}
-
-async function startCollection() {
-  if (state.task !== "idle") return;
-  if (!piperReady()) {
-    addLog("数采", "采集未启动：Piper 控制节点未运行");
-    showView("device-control");
-    return;
-  }
-  const ok = await confirmAction("开始自动数采", "开始后会占用机器人控制权，并持续记录相机、LiDAR、底盘和机械臂状态。");
-  if (!ok) return;
-  state.collectionSeconds = 0;
-  setTask("collection", "数采任务", "数采中");
-  setStateBadge("#collectionBadge", "采集中", "warn");
-  setStateBadge("#stateBadge", "运行中", "warn");
-  $("#collectionSummary").textContent = "episode_043 正在采集";
-  setText("#taskSubtitle", "正在采集 episode_043");
-  renderHomeFlow(["创建 episode", "记录传感器", "监控质量", "等待结束"], 1, 35);
-  renderCollectionMetrics();
-  addLog("数采", "开始采集 episode_043");
-  window.clearInterval(state.collectionTimer);
-  state.collectionTimer = window.setInterval(() => {
-    state.collectionSeconds += 1;
-    renderCollectionMetrics();
-    renderHomeFlow(["创建 episode", "记录传感器", "监控质量", "等待结束"], 2, Math.min(92, 35 + state.collectionSeconds * 4));
-  }, 1000);
-}
-
-function pauseCollection() {
-  if (state.task !== "collection") return;
-  window.clearInterval(state.collectionTimer);
-  setTask("collection-paused", "数采任务暂停", "数采暂停");
-  setStateBadge("#collectionBadge", "暂停", "idle");
-  $("#collectionSummary").textContent = "采集已暂停";
-  addLog("数采", "采集暂停");
-}
-
-function finishCollection(result = "完成") {
-  if (state.task !== "collection" && state.task !== "collection-paused") return;
-  window.clearInterval(state.collectionTimer);
-  setTask("idle", "空闲", "空闲");
-  setStateBadge("#collectionBadge", result, result === "失败" ? "danger" : "ok");
-  $("#collectionSummary").textContent = `episode_043 ${result}`;
-  renderHomeFlow(["创建 episode", "记录传感器", "质量摘要", "采集完成"], 3, 100);
-  addLog("数采", `episode_043 ${result}`);
 }
 
 function readMappingSettings() {
@@ -5326,107 +4931,6 @@ async function resetMappingSession() {
     clearMappingMapPreview();
     renderMappingStatus();
   }
-}
-
-async function ensureLocalizationRobotModel() {
-  if (!state.robotModel.models.length) {
-    await fetchRobotModels({ silent: true });
-  }
-  const defaultModel = state.robotModel.models.find((model) => model.key === localizationDefaultModelKey) || state.robotModel.models[0] || null;
-  if (defaultModel) state.robotModel.selectedKey = defaultModel.key;
-  const initialized = await initializeRobotViewer();
-  if (!initialized) {
-    renderLocalizationStatus();
-    return null;
-  }
-  syncRobotViewerMount();
-  syncRobotViewerLayersForView();
-  if (defaultModel && (!state.robotModel.hasModel || state.robotModel.loadedKey !== defaultModel.key)) {
-    const model = await loadRobotModel(defaultModel.key);
-    syncRobotViewerMount();
-    syncRobotViewerLayersForView();
-    updateRobotModelTransforms();
-    renderLocalizationStatus();
-    return model;
-  }
-  updateRobotModelTransforms();
-  renderLocalizationStatus();
-  return state.robotModel.metadata || defaultModel;
-}
-
-async function fetchLocalizationMaps(options = {}) {
-  const localization = state.localization;
-  if (localization.mapsLoading) return null;
-  localization.mapsLoading = true;
-  localization.lastError = "";
-  renderLocalizationStatus();
-  try {
-    const response = await fetch("/api/localization/maps", { cache: "no-store" });
-    const payload = await response.json();
-    if (!response.ok || !payload.ok || !Array.isArray(payload.maps)) {
-      throw new Error(payload.detail || `HTTP ${response.status}`);
-    }
-
-    localization.maps = payload.maps;
-    const selectedStillExists = localization.maps.some((entry) => entry.name === localization.selectedMapName);
-    let nextSelected = selectedStillExists ? localization.selectedMapName : "";
-    if (!nextSelected && localization.maps.length === 1) {
-      nextSelected = localization.maps[0].name;
-    }
-    localization.mapsLoading = false;
-    localization.lastError = "";
-    if (nextSelected !== localization.selectedMapName) {
-      await selectLocalizationMap(nextSelected, { silent: options.silent });
-    } else {
-      localization.selectedMap = localizationSelectedMap();
-      renderLocalizationStatus();
-    }
-    return payload;
-  } catch (error) {
-    localization.mapsLoading = false;
-    localization.maps = [];
-    localization.lastError = error.message;
-    clearLocalizationMapPreview();
-    if (!options.silent) addLog("定位", `地图列表读取失败：${error.message}`);
-    renderLocalizationStatus();
-    return null;
-  }
-}
-
-async function selectLocalizationMap(name, options = {}) {
-  const localization = state.localization;
-  const nextName = String(name || "").trim();
-  const previousName = localization.selectedMapName;
-  localization.selectedMapName = nextName;
-  localization.selectedMap = localizationSelectedMap();
-  localization.lastError = "";
-  if (previousName !== nextName) {
-    clearLocalizationMapPreview();
-    if (state.localizationRuntime.status === "running") {
-      setLocalizationRuntime("stopped");
-      addLog("定位", "地图已切换，Loc 已停止");
-    }
-  }
-  renderLocalizationStatus();
-  if (!nextName) return null;
-  if (!options.silent && previousName !== nextName) addLog("定位", `已选择地图：${nextName}`);
-  return requestLocalizationMapFrame(nextName);
-}
-
-function toggleLocalizationRuntime() {
-  if (state.localizationRuntime.status === "running") {
-    setLocalizationRuntime("stopped");
-    addLog("定位", "Loc 已停止");
-    return;
-  }
-  if (!state.localization.selectedMapName) {
-    addLog("定位", "请先在定位页面选择地图");
-    showView("localization");
-    renderLocalizationStatus();
-    return;
-  }
-  setLocalizationRuntime("running");
-  addLog("定位", `Loc 已开启：${state.localization.selectedMapName}（真实定位服务待接入）`);
 }
 
 async function inferencePost(action, payload = {}) {
@@ -5627,8 +5131,7 @@ async function enablePiperForInference() {
   renderInferenceStatus();
   try {
     await publishPiperEnable(true, { repeat: 3, intervalMs: 80 });
-    $("#enableStatus").textContent = "已使能";
-    $("#enableStatus").className = "status-pill ok";
+    setStatusPill("#enableStatus", "已使能", "ok");
     addLog("推理", "Piper 已使能，可执行 chunk");
   } catch (error) {
     addLog("推理", `Piper 使能失败：${error.message}`);
@@ -5821,7 +5324,6 @@ async function stopCurrentTask() {
 
 function forceStopTask(reason) {
   window.clearInterval(state.homingTimer);
-  window.clearInterval(state.collectionTimer);
   window.clearInterval(state.inferenceTimer);
   window.clearTimeout(state.armControl.publishTimer);
   state.armControl.active = false;
@@ -5840,8 +5342,11 @@ function forceStopTask(reason) {
 }
 
 function triggerEmergencyStop() {
-  $("#estopStatus").textContent = "急停触发";
-  $("#estopStatus").className = "status-pill danger";
+  const estopStatus = $("#estopStatus");
+  if (estopStatus) {
+    estopStatus.textContent = "急停触发";
+    estopStatus.className = "status-pill danger";
+  }
   state.alerts.unshift({
     level: "danger",
     title: "急停已触发",
@@ -6146,6 +5651,27 @@ function toggleLidarRuntime() {
     return;
   }
   requestLidarRuntimeAction("start");
+}
+
+async function startRuntimePrepService(key) {
+  if (state.runtimePrepBusy[key]) return;
+  const actions = {
+    piper: () => requestPiperRuntimeAction("start"),
+    lifting: () => requestLiftingRuntimeAction("start"),
+    chassis: () => requestChassisRuntimeAction("start"),
+    camera: () => requestCameraRuntimeAction("start"),
+    lidar: () => requestLidarRuntimeAction("start"),
+  };
+  const action = actions[key];
+  if (!action) return;
+  state.runtimePrepBusy[key] = true;
+  renderRuntimePrep();
+  try {
+    await action();
+  } finally {
+    state.runtimePrepBusy[key] = false;
+    renderRuntimePrep();
+  }
 }
 
 function applyLiftingStatePayload(payload) {
@@ -7518,7 +7044,7 @@ function ensureMappingMapLayer() {
     robot.scene.add(preview.points);
   }
   preview.initialized = true;
-  preview.points.visible = !localizationViewActive() && preview.hasFrame;
+  preview.points.visible = preview.hasFrame;
   return true;
 }
 
@@ -7629,151 +7155,6 @@ function syncMappingMapPreview() {
   if (!state.mapping.busy && revision !== state.mapping.mapPreview.loadedRevision) {
     requestMappingMapFrame(revision);
   }
-}
-
-function ensureLocalizationMapLayer() {
-  const robot = state.robotModel;
-  const preview = state.localization.mapPreview;
-  if (!robot.three || !robot.scene) return false;
-
-  if (!preview.points) {
-    preview.geometry = new robot.three.BufferGeometry();
-    preview.material = new robot.three.PointsMaterial({
-      size: Math.max(0.014, lidarPointRadiusToMaterialSize(state.lidarCloud.pointRadius) * 0.78),
-      map: createLidarPointTexture(robot.three),
-      vertexColors: true,
-      sizeAttenuation: true,
-      transparent: true,
-      alphaTest: 0.1,
-      opacity: 0.92,
-      depthWrite: false,
-    });
-    preview.points = new robot.three.Points(preview.geometry, preview.material);
-    preview.points.name = "localization_saved_map";
-    preview.points.frustumCulled = false;
-  }
-
-  if (preview.points.parent !== robot.scene) {
-    robot.scene.add(preview.points);
-  }
-  preview.initialized = true;
-  preview.points.visible = localizationMapVisible();
-  return true;
-}
-
-function frameLocalizationMapInRobotViewer(bounds = state.localization.mapPreview.bounds) {
-  const robot = state.robotModel;
-  if (!robot.controls || !robot.three || !bounds || bounds.count <= 0) return;
-  const centerX = (bounds.minX + bounds.maxX) / 2;
-  const centerY = (bounds.minY + bounds.maxY) / 2;
-  const centerZ = (bounds.minZ + bounds.maxZ) / 2;
-  const dx = bounds.maxX - bounds.minX;
-  const dy = bounds.maxY - bounds.minY;
-  const dz = bounds.maxZ - bounds.minZ;
-  const diagonal = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  robot.controls.yaw = -2.35;
-  robot.controls.pitch = 0.86;
-  robot.controls.target.set(centerX, centerY, centerZ);
-  robot.controls.distance = clamp(diagonal * 1.25, 5, 180);
-  updateRobotCamera();
-}
-
-function updateLocalizationMapPointCloud(buffer) {
-  const robot = state.robotModel;
-  const preview = state.localization.mapPreview;
-  if (!robot.three || !ensureLocalizationMapLayer()) return null;
-
-  const cloud = buildLidarPointCloudAttributes(buffer);
-  preview.geometry.setAttribute("position", new robot.three.BufferAttribute(cloud.positions, 3));
-  preview.geometry.setAttribute("color", new robot.three.BufferAttribute(cloud.colors, 3));
-  preview.geometry.computeBoundingSphere();
-  preview.hasFrame = cloud.count > 0;
-  preview.pointCount = cloud.count;
-  preview.bounds = cloud;
-  syncRobotViewerLayersForView();
-  if (preview.hasFrame) {
-    frameLocalizationMapInRobotViewer(cloud);
-  }
-  return cloud;
-}
-
-function clearLocalizationMapPreview() {
-  const preview = state.localization.mapPreview;
-  preview.hasFrame = false;
-  preview.pointCount = 0;
-  preview.sourcePointCount = 0;
-  preview.sizeBytes = 0;
-  preview.mtimeMs = null;
-  preview.loadedName = "";
-  preview.error = "";
-  preview.bounds = null;
-  if (preview.points) preview.points.visible = false;
-}
-
-async function requestLocalizationMapFrame(mapName = state.localization.selectedMapName) {
-  const preview = state.localization.mapPreview;
-  const targetName = String(mapName || "").trim();
-  if (!targetName || preview.activeRequest) return null;
-  preview.activeRequest = true;
-  preview.error = "";
-  renderLocalizationStatus();
-
-  try {
-    await ensureLocalizationRobotModel();
-    if (!ensureLocalizationMapLayer()) throw new Error("定位 3D 视图未就绪");
-    syncRobotViewerMount();
-    const response = await fetch(`/api/localization/maps/${encodeURIComponent(targetName)}/frame?t=${Date.now()}`, { cache: "no-store" });
-    const contentType = response.headers.get("Content-Type") || "";
-    if (!response.ok || contentType.includes("application/json")) {
-      const payload = contentType.includes("application/json") ? await response.json() : null;
-      throw new Error((payload && payload.detail) || `HTTP ${response.status}`);
-    }
-
-    const buffer = await response.arrayBuffer();
-    const cloud = updateLocalizationMapPointCloud(buffer);
-    if (!cloud) throw new Error("定位地图渲染失败");
-    const pointCount = Number(response.headers.get("X-Robot-Station-PointCloud-Point-Count"));
-    const sourcePointCount = Number(response.headers.get("X-Robot-Station-PointCloud-Source-Point-Count"));
-    const sizeBytes = Number(response.headers.get("X-Robot-Station-Localization-Map-Size-Bytes"));
-    const mtimeMs = Number(response.headers.get("X-Robot-Station-Localization-Map-Mtime-Ms"));
-    preview.pointCount = Number.isFinite(pointCount) ? pointCount : cloud.count;
-    preview.sourcePointCount = Number.isFinite(sourcePointCount) ? sourcePointCount : preview.pointCount;
-    preview.sizeBytes = Number.isFinite(sizeBytes) ? sizeBytes : buffer.byteLength;
-    preview.mtimeMs = Number.isFinite(mtimeMs) ? mtimeMs : Date.now();
-    preview.loadedName = targetName;
-    preview.error = "";
-    updateRobotModelTransforms();
-    syncRobotViewerLayersForView();
-    renderRobotViewStatus();
-    addLog("定位", `地图点云已加载：${targetName} / ${preview.pointCount.toLocaleString("zh-CN")} 点`);
-    return cloud;
-  } catch (error) {
-    preview.error = error.message;
-    if (preview.points) preview.points.visible = false;
-    addLog("定位", `地图点云加载失败：${error.message}`);
-    return null;
-  } finally {
-    preview.activeRequest = false;
-    renderLocalizationStatus();
-  }
-}
-
-function resetLocalizationView() {
-  if (state.localization.mapPreview.bounds) {
-    frameLocalizationMapInRobotViewer();
-    return;
-  }
-  requestLocalizationMapFrame();
-}
-
-function centerLocalizationRobot() {
-  ensureLocalizationRobotModel().then(() => {
-    const robot = state.robotModel;
-    if (!robot.controls) return;
-    robot.controls.target.set(0, 0, 0.6);
-    robot.controls.distance = clamp(robot.controls.distance || 7.2, 3, 18);
-    updateRobotCamera();
-  });
 }
 
 function updateLidarPointCloud(buffer) {
@@ -8046,19 +7427,6 @@ function renderLidarCloudStatus() {
 }
 
 function bindEvents() {
-  $("#authLoginForm").addEventListener("submit", (event) => {
-    event.preventDefault();
-    submitAuthLogin(false);
-  });
-  $("#authForceButton").addEventListener("click", () => submitAuthLogin(true));
-  $("#authPauseButton").addEventListener("click", () => {
-    const active = authActiveUserLabel(state.auth.conflict);
-    state.auth.conflict = null;
-    setAuthMessage(`已暂停登录，等待 ${active} 退出。`, "idle");
-    renderAuth();
-  });
-  $("#authLogoutButton").addEventListener("click", logoutAuth);
-
   $$(".nav-item").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
   $$("[data-view-jump]").forEach((button) => button.addEventListener("click", () => showView(button.dataset.viewJump)));
 
@@ -8091,7 +7459,6 @@ function bindEvents() {
   $("#piperRuntimeStatus").addEventListener("click", togglePiperRuntime);
   $("#liftingRuntimeStatus").addEventListener("click", toggleLiftingRuntime);
   $("#chassisRuntimeStatus").addEventListener("click", toggleChassisRuntime);
-  $("#localizationRuntimeStatus").addEventListener("click", toggleLocalizationRuntime);
   $("#chassisKeyboardButton").addEventListener("click", toggleChassisKeyboardListening);
   $("#baseOdomResetButton").addEventListener("click", resetChassisOdometry);
   document.addEventListener("keydown", handleChassisKeyboardKeyDown);
@@ -8150,12 +7517,6 @@ function bindEvents() {
     Object.assign(state.mapping, readMappingSettings());
     renderMappingStatus();
   });
-  $("#localizationMapSelect").addEventListener("change", (event) => {
-    selectLocalizationMap(event.currentTarget.value);
-  });
-  $("#localizationRefreshMapsButton").addEventListener("click", () => fetchLocalizationMaps());
-  $("#localizationResetViewButton").addEventListener("click", resetLocalizationView);
-  $("#localizationCenterRobotButton").addEventListener("click", centerLocalizationRobot);
   $("#armCompareList").addEventListener("input", (event) => {
     const input = event.target.closest("[data-action-kind]");
     if (!input) return;
@@ -8173,12 +7534,6 @@ function bindEvents() {
   $("#jointSpeedInput").addEventListener("input", (event) => updateJointSpeedFromInput(event.currentTarget));
   const startHomingButton = $("#startHomingButton");
   if (startHomingButton) startHomingButton.addEventListener("click", startHoming);
-  $("#startCollectionButton").addEventListener("click", startCollection);
-  $("#pauseCollectionButton").addEventListener("click", pauseCollection);
-  $("#finishCollectionButton").addEventListener("click", () => finishCollection("完成"));
-  $("#discardEpisodeButton").addEventListener("click", () => finishCollection("废弃"));
-  $("#markSuccessButton").addEventListener("click", () => finishCollection("成功"));
-  $("#markFailButton").addEventListener("click", () => finishCollection("失败"));
   $("#inferenceConnectButton").addEventListener("click", connectInference);
   $("#inferenceDisconnectButton").addEventListener("click", disconnectInference);
   $("#inferenceEnablePiperButton").addEventListener("click", enablePiperForInference);
@@ -8198,7 +7553,7 @@ function bindEvents() {
       state.playback.loadError = "";
       state.playback.lastError = "";
       if (wasRunning) {
-        requestPlaybackAction("stop").catch((error) => addLog("数采", `数据回放路径变更停止失败：${error.message}`));
+        requestPlaybackAction("stop").catch((error) => addLog("回放", `数据回放路径变更停止失败：${error.message}`));
       }
       setPlaybackRunning(false);
       renderPlayback();
@@ -8228,23 +7583,21 @@ function bindEvents() {
   if (playbackStopButton) playbackStopButton.addEventListener("click", stopPlaybackRun);
   $("#stopTaskButton").addEventListener("click", stopCurrentTask);
   $("#estopButton").addEventListener("click", triggerEmergencyStop);
-  $("#alertStatus").addEventListener("mouseenter", (event) => showAlertTooltip(event.currentTarget));
-  $("#alertStatus").addEventListener("mouseleave", hideRichTooltip);
+  const alertStatus = $("#alertStatus");
+  if (alertStatus) {
+    alertStatus.addEventListener("mouseenter", (event) => showAlertTooltip(event.currentTarget));
+    alertStatus.addEventListener("mouseleave", hideRichTooltip);
+  }
 
   $$("[data-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const action = button.dataset.action;
       if (action === "self-check") {
         showView("self-check");
-        runSelfCheck();
       }
       if (action === "homing") {
         showView("homing");
         startHoming();
-      }
-      if (action === "collection") {
-        showView("collection");
-        startCollection();
       }
       if (action === "inference") {
         showView("inference");
@@ -8274,11 +7627,9 @@ function bindEvents() {
     const item = state.selfCheckResults[Number(button.dataset.checkIndex)];
     if (!item) return;
     if (button.dataset.checkAction === "log") {
-      addLog(item.source, `查看检查项日志：${item.name} / ${item.code}`);
-      state.activeLogFilter = item.source;
-      renderLogFilters();
+      addLog(item.source, `查看检查项事件：${item.name} / ${item.code}`);
       renderLogs();
-      showView("logs");
+      $("#eventDrawer")?.classList.add("is-open");
     }
     if (button.dataset.checkAction === "retry") {
       addLog(item.source, `复查检查项：${item.name}`);
@@ -8286,6 +7637,26 @@ function bindEvents() {
     }
     if (button.dataset.checkAction === "activate" && item.name === "CAN 接口") {
       activateCanInterface(item);
+    }
+  });
+  $("#runtimePrepTable").addEventListener("mouseover", (event) => {
+    const row = event.target.closest(".check-row");
+    if (!row || !$("#runtimePrepTable").contains(row)) return;
+    showCheckTooltip(row);
+  });
+  $("#runtimePrepTable").addEventListener("mouseout", (event) => {
+    const row = event.target.closest(".check-row");
+    if (!row || row.contains(event.relatedTarget)) return;
+    hideRichTooltip();
+  });
+  $("#runtimePrepTable").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-runtime-action]");
+    if (!button) return;
+    if (button.dataset.runtimeAction === "start") {
+      startRuntimePrepService(button.dataset.runtimeKey);
+    }
+    if (button.dataset.runtimeAction === "view") {
+      showView(button.dataset.runtimeView);
     }
   });
 
@@ -8401,29 +7772,19 @@ function bindEvents() {
       requestLiftingControl("init", {}, { source: "初始化升降轴", mode: "初始化/置零" });
     });
   }
-  $("#logFilters").addEventListener("click", (event) => {
-    const button = event.target.closest("[data-log-filter]");
-    if (!button) return;
-    state.activeLogFilter = button.dataset.logFilter;
-    renderLogFilters();
-    renderLogs();
-  });
 }
 
 function init() {
   const activePanel = $(".view.is-active");
   document.body.dataset.activeView = activePanel ? activePanel.dataset.viewPanel : "self-check";
   bindEvents();
-  renderAuth();
   renderHealth();
   renderSelfCheck();
   renderAdvice();
   renderHomingSteps();
-  renderCollectionMetrics();
   renderInferenceStatus();
   renderInferenceMask();
   refreshInferenceStatus();
-  refreshAuthStatus({ silent: true });
   loadInferenceChassisLimits();
   renderPreflight();
   renderDeviceBaseMetrics();
@@ -8431,11 +7792,8 @@ function init() {
   renderPiperRuntime();
   renderLiftingRuntime();
   renderChassisRuntime();
-  renderLocalizationRuntime();
   renderCameraRuntime();
   renderLidarRuntime();
-  renderHistory();
-  renderLogFilters();
   renderActionLocks();
   renderCameraFrames();
   renderLidarCloudStatus();
@@ -8443,15 +7801,14 @@ function init() {
   refreshPlaybackStatus({ silent: true });
   renderRobotViewStatus();
   renderMappingStatus();
-  renderLocalizationStatus();
   fetchRobotModels({ silent: true });
   refreshMappingStatus({ silent: true });
-  fetchLocalizationMaps({ silent: true });
   initializeRobotViewer();
   addLog("系统", "Robot Station 前端原型已加载");
   addLog("ROS", "等待接入真实 ROS 状态");
   addLog("相机", "相机压缩图预览等待图像帧");
-  refreshCanInterfaceStatus({ silent: true });
+  fetchCachedSelfCheckStatus({ silent: true });
+  refreshCanInterfaceStatus({ silent: true, updateSelfCheck: false });
   fetchPiperRuntimeStatus({ silent: true });
   fetchLiftingLimits();
   fetchLiftingRuntimeStatus({ silent: true });
@@ -8463,7 +7820,6 @@ function init() {
   fetchPiperJointStates();
   syncClock();
   window.setInterval(syncClock, 1000);
-  window.setInterval(() => refreshAuthStatus({ silent: true }), 5000);
   window.setInterval(() => runBackgroundPoll(() => fetchPiperRuntimeStatus({ silent: true })), 3000);
   window.setInterval(() => runBackgroundPoll(() => fetchLiftingRuntimeStatus({ silent: true })), 3000);
   window.setInterval(() => runBackgroundPoll(() => fetchChassisRuntimeStatus({ silent: true })), 3000);
