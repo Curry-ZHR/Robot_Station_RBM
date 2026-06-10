@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Robot Station</title>
-    <link rel="stylesheet" href="./styles.css?v=20260609-visual-refresh" />
+    <link rel="stylesheet" href="./styles.css?v=20260610-robot-workbench" />
   </head>
   <body>
     <div class="app-shell">
@@ -380,7 +380,7 @@
                 </div>
                 <div class="device-view-status robot-situation-status">
                   <span>Ranger Mini v3 / Piper x2 / 升降轴</span>
-                  <strong>当前作业：建图</strong>
+                  <strong id="robotWorkStatusText">当前作业：建图</strong>
                 </div>
               </div>
 
@@ -388,7 +388,18 @@
                 <article class="panel robot-viewport-card robot-situation-canvas">
                   <div class="robot-viewport">
                     <div class="robot-stage" id="robotViewStage" aria-label="整机状态示意">
-                      <div class="robot-layer-toolbar" aria-label="整机视口图层">
+                      <div class="robot-stage-toolbar robot-stage-toolbar-left" aria-label="整机模型加载">
+                        <div class="robot-model-quick-row">
+                          <select id="robotModelSelect" aria-label="整机模型选择"></select>
+                          <button class="secondary-button" id="robotModelLoadButton" type="button">加载</button>
+                        </div>
+                        <div class="robot-stage-status-row">
+                          <span class="state-badge idle" id="robotModelBadge">模型待接入</span>
+                          <button class="robot-modal-trigger" data-robot-modal-toggle="model-load" type="button" aria-expanded="false">模型加载详情</button>
+                        </div>
+                        <p id="robotModelDetail">等待模型资源接入</p>
+                      </div>
+                      <div class="robot-layer-toolbar robot-stage-toolbar-right" aria-label="整机视口图层">
                         <button class="secondary-button pose-sync-button" id="robotPoseSyncButton" type="button" aria-pressed="false">姿态同步</button>
                         <button class="secondary-button robot-lidar-button" id="robotLidarToggleButton" type="button" aria-pressed="false">LiDAR</button>
                       </div>
@@ -404,43 +415,31 @@
                 <article class="panel mapping-panel robot-work-panel">
                   <div class="panel-head robot-work-head">
                     <div>
-                      <h2>当前作业：建图</h2>
+                      <h2 id="robotWorkTitle">建图作业</h2>
                       <p id="mappingSummary">等待创建建图会话</p>
                     </div>
                     <span class="state-badge idle" id="mappingBadge">未开始</span>
                   </div>
 
-                  <div class="mapping-actions robot-work-actions">
-                    <button class="secondary-button" id="mappingStartButton" type="button">新建</button>
-                    <button class="primary-button" id="mappingCaptureButton" type="button" disabled>采集点云</button>
-                    <button class="secondary-button" id="mappingSaveButton" type="button" disabled>保存</button>
-                    <button class="secondary-button" id="mappingDeleteLastButton" type="button" disabled>删除上一帧</button>
-                    <button class="icon-button stop" id="mappingResetButton" type="button" disabled>重置</button>
+                  <div class="segmented robot-work-mode-tabs" id="robotWorkModeTabs" role="tablist" aria-label="整机作业切换">
+                    <button class="is-active" data-robot-work-mode="mapping" type="button" role="tab" aria-selected="true">建图</button>
+                    <button data-robot-work-mode="localization" type="button" role="tab" aria-selected="false">定位</button>
                   </div>
 
-                  <section class="robot-side-section robot-model-section">
-                    <div class="section-title compact-title">
-                      <h2>模型状态</h2>
-                      <span id="robotModelDetail">等待模型资源接入</span>
-                    </div>
-                    <div class="robot-model-actions robot-model-side-actions">
-                      <select id="robotModelSelect" aria-label="整机模型选择"></select>
-                      <button class="secondary-button" id="robotModelLoadButton" type="button">加载</button>
-                      <span class="state-badge idle" id="robotModelBadge">模型待接入</span>
-                    </div>
-                    <div class="robot-load-progress" id="robotLoadProgress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-                      <div class="robot-load-progress-head">
-                        <span id="robotLoadProgressText">等待加载</span>
-                        <strong id="robotLoadProgressValue">0%</strong>
-                      </div>
-                      <div class="robot-load-track" aria-hidden="true">
-                        <span id="robotLoadProgressBar"></span>
-                      </div>
-                      <small id="robotLoadProgressDetail">选择模型后点击加载</small>
-                    </div>
-                  </section>
+                  <div class="mapping-actions robot-work-actions" data-work-content="mapping">
+                    <button class="primary-button" id="mappingCaptureButton" type="button" disabled>采集点云</button>
+                    <button class="secondary-button" id="mappingStartButton" type="button">新建</button>
+                    <button class="secondary-button" id="mappingSaveButton" type="button" disabled>保存</button>
+                    <button class="secondary-button" id="mappingDeleteLastButton" type="button" disabled>删除上一帧</button>
+                    <button class="secondary-button" id="mappingResetButton" type="button" disabled>重置</button>
+                  </div>
 
-                  <section class="robot-side-section mapping-drive-section">
+                  <div class="robot-modal-entry-row" data-work-content="mapping">
+                    <button class="secondary-button" data-robot-modal-toggle="mapping-config" type="button" aria-expanded="false">采集参数</button>
+                    <button class="secondary-button" data-robot-modal-toggle="mapping-details" type="button" aria-expanded="false">建图详情</button>
+                  </div>
+
+                  <section class="robot-side-section mapping-drive-section" data-work-content="mapping">
                     <div class="section-title compact-title robot-section-row">
                       <div>
                         <h2>建图驾驶</h2>
@@ -471,37 +470,121 @@
                         <span></span>
                       </div>
                     </div>
-                    <details class="robot-collapse mapping-speed-collapse">
-                      <summary>
+                    <div class="mapping-speed-panel">
+                      <div class="mapping-speed-headline">
                         <span>速度设置</span>
                         <small id="mappingSpeedSummary">低速点动</small>
-                      </summary>
+                      </div>
                       <div class="base-control-panel mapping-base-control-panel" id="mappingBaseControlPanel"></div>
-                    </details>
+                    </div>
                   </section>
 
-                  <details class="robot-side-section robot-collapse mapping-config-section">
-                    <summary>
-                      <span>采集参数</span>
-                      <small id="mappingConfigSummary">10 frames / /rslidar_points / /odom / base_link</small>
-                    </summary>
-                    <form class="config-form mapping-config-form" id="mappingConfigForm" autocomplete="off">
-                      <label><span class="field-label">采集帧数<em>frames</em></span><input id="mappingFrameCountInput" type="number" min="1" max="200" step="1" value="10" inputmode="numeric"></label>
-                      <label><span class="field-label">点云 topic<em>filtered</em></span><input id="mappingCloudTopicInput" type="text" value="/rslidar_points"></label>
-                      <label><span class="field-label">里程计 topic<em>odom</em></span><input id="mappingOdomTopicInput" type="text" value="/odom"></label>
-                      <label><span class="field-label">base frame<em>TF</em></span><input id="mappingBaseFrameInput" type="text" value="base_link"></label>
-                    </form>
-                  </details>
+                  <section class="robot-side-section localization-map-section" data-work-content="localization" hidden>
+                    <div class="section-title compact-title">
+                      <h2>地图选择</h2>
+                      <span id="localizationMapSummary">地图列表接口未接入</span>
+                    </div>
+                    <div class="localization-map-actions">
+                      <select id="localizationMapSelect" aria-label="定位地图选择" disabled>
+                        <option value="">地图列表待接入</option>
+                      </select>
+                      <button class="secondary-button" id="localizationLoadMapButton" type="button" disabled>加载地图</button>
+                    </div>
+                    <div class="localization-empty-map" id="localizationMapInfo">
+                      <strong>暂无地图源</strong>
+                      <span>等待保存地图列表与点云读取接口</span>
+                    </div>
+                  </section>
 
-                  <details class="robot-side-section robot-collapse mapping-status-section">
-                    <summary>
-                      <span>建图详情</span>
-                      <small id="mappingSessionText">未创建 session</small>
-                    </summary>
-                    <div class="mapping-detail-list" id="mappingDetailList"></div>
-                    <div class="mapping-log" id="mappingKeyframeList"></div>
-                  </details>
+                  <section class="robot-side-section localization-status-section" data-work-content="localization" hidden>
+                    <div class="section-title compact-title robot-section-row">
+                      <div>
+                        <h2>定位状态</h2>
+                        <span id="localizationStatusSummary">点云定位结果待接入</span>
+                      </div>
+                      <button class="secondary-button robot-section-link" data-robot-modal-toggle="localization-advanced" type="button" aria-label="定位高级信息" aria-expanded="false">高级信息</button>
+                    </div>
+                    <div class="metric-grid localization-status-metrics" id="localizationStatusMetrics"></div>
+                  </section>
+
+                  <section class="robot-side-section initial-pose-section" data-work-content="localization" hidden>
+                    <div class="section-title compact-title">
+                      <h2>Initial Pose</h2>
+                      <span id="initialPoseZText">XY 平面 / Z=0</span>
+                    </div>
+                    <div class="initial-pose-layout">
+                      <div class="initial-pose-stage" id="initialPoseStage" aria-label="Initial pose 箭头工具">
+                        <div class="initial-pose-grid" aria-hidden="true"></div>
+                        <div class="initial-pose-axis x" aria-hidden="true">X</div>
+                        <div class="initial-pose-axis y" aria-hidden="true">Y</div>
+                        <div class="initial-pose-arrow is-disabled" aria-hidden="true">
+                          <span class="initial-pose-arrow-shaft"></span>
+                          <span class="initial-pose-arrow-head"></span>
+                        </div>
+                        <span class="initial-pose-stage-label">待接入地图点云</span>
+                      </div>
+                      <form class="initial-pose-form" id="initialPoseForm" autocomplete="off">
+                        <label><span>x</span><input id="initialPoseXInput" type="number" step="0.01" value="0" inputmode="decimal" data-initial-pose-field="x"></label>
+                        <label><span>y</span><input id="initialPoseYInput" type="number" step="0.01" value="0" inputmode="decimal" data-initial-pose-field="y"></label>
+                        <label><span>yaw</span><input id="initialPoseYawInput" type="number" step="1" value="0" inputmode="decimal" data-initial-pose-field="yawDeg"></label>
+                      </form>
+                    </div>
+                    <button class="secondary-button" id="initialPosePublishButton" type="button" disabled>发布初值</button>
+                  </section>
                 </article>
+              </div>
+
+              <div class="robot-work-modal" id="robotWorkModal" hidden>
+                <div class="robot-work-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="robotWorkModalTitle">
+                  <div class="robot-work-modal-head">
+                    <div>
+                      <p id="robotWorkModalKicker">整机视图</p>
+                      <h2 id="robotWorkModalTitle">详情</h2>
+                    </div>
+                    <button class="icon-button robot-work-modal-close" id="robotWorkModalClose" type="button" aria-label="关闭">×</button>
+                  </div>
+                  <div class="robot-work-modal-body">
+                    <section class="robot-modal-panel mapping-config-section" data-robot-modal-panel="mapping-config" hidden>
+                      <div class="robot-modal-subhead">
+                        <span>当前参数</span>
+                        <strong id="mappingConfigSummary">10 frames / /rslidar_points / /odom / base_link</strong>
+                      </div>
+                      <form class="config-form mapping-config-form" id="mappingConfigForm" autocomplete="off">
+                        <label><span class="field-label">采集帧数<em>frames</em></span><input id="mappingFrameCountInput" type="number" min="1" max="200" step="1" value="10" inputmode="numeric"></label>
+                        <label><span class="field-label">点云 topic<em>filtered</em></span><input id="mappingCloudTopicInput" type="text" value="/rslidar_points"></label>
+                        <label><span class="field-label">里程计 topic<em>odom</em></span><input id="mappingOdomTopicInput" type="text" value="/odom"></label>
+                        <label><span class="field-label">base frame<em>TF</em></span><input id="mappingBaseFrameInput" type="text" value="base_link"></label>
+                      </form>
+                    </section>
+
+                    <section class="robot-modal-panel mapping-status-section" data-robot-modal-panel="mapping-details" hidden>
+                      <div class="robot-modal-subhead">
+                        <span>Session</span>
+                        <strong id="mappingSessionText">未创建 session</strong>
+                      </div>
+                      <div class="mapping-detail-list" id="mappingDetailList"></div>
+                      <div class="mapping-log" id="mappingKeyframeList"></div>
+                    </section>
+
+                    <section class="robot-modal-panel robot-model-detail-section" data-robot-modal-panel="model-load" hidden>
+                      <div class="mapping-detail-list robot-resource-list" id="robotResourceList"></div>
+                      <div class="robot-load-progress" id="robotLoadProgress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                        <div class="robot-load-progress-head">
+                          <span id="robotLoadProgressText">等待加载</span>
+                          <strong id="robotLoadProgressValue">0%</strong>
+                        </div>
+                        <div class="robot-load-track" aria-hidden="true">
+                          <span id="robotLoadProgressBar"></span>
+                        </div>
+                        <small id="robotLoadProgressDetail">选择模型后点击加载</small>
+                      </div>
+                    </section>
+
+                    <section class="robot-modal-panel localization-advanced-section" data-robot-modal-panel="localization-advanced" hidden>
+                      <div class="mapping-detail-list localization-detail-list" id="localizationDetailList"></div>
+                    </section>
+                  </div>
+                </div>
               </div>
             </section>
 
@@ -724,6 +807,6 @@
 
     <div class="rich-tooltip" id="richTooltip" role="tooltip" aria-hidden="true"></div>
 
-    <script src="./app.js?v=20260605-platform-odom"></script>
+    <script src="./app.js?v=20260610-robot-workbench"></script>
   </body>
 </html>

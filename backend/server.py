@@ -573,31 +573,33 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 result = get_mapping_manager().status()
                 self.write_json(result, status=mapping_result_status(result))
                 return
+            if mapping_tail == "maps":
+                result = get_mapping_manager().list_saved_maps()
+                self.write_json(result, status=mapping_result_status(result))
+                return
             if mapping_tail == "map/frame":
                 result = get_mapping_manager().read_map_frame()
                 if not result.get("ok"):
                     self.write_json(result, status=mapping_result_status(result))
                     return
-                self.write_binary(
-                    result["body"],
-                    result["contentType"],
-                    headers={
-                        "X-Robot-Station-PointCloud-Point-Count": str(result.get("pointCount", "")),
-                        "X-Robot-Station-PointCloud-Source-Point-Count": str(result.get("sourcePointCount", "")),
-                        "X-Robot-Station-PointCloud-Stride-Floats": str(result.get("strideFloats", "")),
-                        "X-Robot-Station-PointCloud-Fields": ",".join(result.get("fields", [])),
-                        "X-Robot-Station-Mapping-Session-Id": str(result.get("sessionId", "")),
-                        "X-Robot-Station-Mapping-Capture-Count": str(result.get("captureCount", "")),
-                        "X-Robot-Station-Mapping-Map-Size-Bytes": str(result.get("sizeBytes", "")),
-                        "X-Robot-Station-Mapping-Map-Mtime-Ms": str(result.get("mtimeMs", "")),
-                    },
-                )
+                self.write_point_cloud_frame(result)
+                return
+            if mapping_tail.startswith("maps/") and mapping_tail.endswith("/frame"):
+                map_name = mapping_tail[len("maps/") : -len("/frame")]
+                result = get_mapping_manager().read_saved_map_frame(map_name)
+                if not result.get("ok"):
+                    self.write_json(result, status=mapping_result_status(result))
+                    return
+                self.write_point_cloud_frame(result)
                 return
             self.write_json(
                 {
                     "ok": False,
                     "code": "MAP-ACTION",
-                    "detail": "Mapping GET path must be /api/mapping/status or /api/mapping/map/frame.",
+                    "detail": (
+                        "Mapping GET path must be /api/mapping/status, /api/mapping/maps, "
+                        "/api/mapping/map/frame, or /api/mapping/maps/<name>/frame."
+                    ),
                 },
                 status=404,
             )
@@ -953,6 +955,22 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             self.send_header(key, value)
         self.end_headers()
         self.wfile.write(body)
+
+    def write_point_cloud_frame(self, result, status=200, headers=None):
+        frame_headers = {
+            "X-Robot-Station-PointCloud-Point-Count": str(result.get("pointCount", "")),
+            "X-Robot-Station-PointCloud-Source-Point-Count": str(result.get("sourcePointCount", "")),
+            "X-Robot-Station-PointCloud-Stride-Floats": str(result.get("strideFloats", "")),
+            "X-Robot-Station-PointCloud-Fields": ",".join(result.get("fields", [])),
+            "X-Robot-Station-Mapping-Map-Size-Bytes": str(result.get("sizeBytes", "")),
+            "X-Robot-Station-Mapping-Map-Mtime-Ms": str(result.get("mtimeMs", "")),
+        }
+        if result.get("sessionId"):
+            frame_headers["X-Robot-Station-Mapping-Session-Id"] = str(result.get("sessionId", ""))
+        if result.get("captureCount") is not None:
+            frame_headers["X-Robot-Station-Mapping-Capture-Count"] = str(result.get("captureCount", ""))
+        frame_headers.update(headers or {})
+        self.write_binary(result["body"], result["contentType"], status=status, headers=frame_headers)
 
     def write_file(self, path, content_type, status=200, headers=None):
         stat_result = path.stat()
