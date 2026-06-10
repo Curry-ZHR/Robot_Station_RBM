@@ -373,83 +373,77 @@
             </section>
 
             <section class="view robot-view" data-view-panel="robot-view">
-              <div class="page-head compact robot-page-head">
+              <div class="page-head compact robot-page-head robot-situation-head">
                 <div>
                   <p class="eyebrow">整机视图</p>
-                  <h1>机器人状态视图</h1>
+                  <h1>整机态势</h1>
                 </div>
-                <div class="device-view-status">
-                  <strong>Ranger Mini v3 / 升降轴 / Piper x2</strong>
+                <div class="device-view-status robot-situation-status">
+                  <span>Ranger Mini v3 / Piper x2 / 升降轴</span>
+                  <strong>当前作业：建图</strong>
                 </div>
               </div>
 
-              <div class="robot-view-grid">
-                <article class="panel robot-viewport-card">
-                  <div class="panel-head">
-                    <div>
-                      <h2>整机模型</h2>
-                      <p id="robotModelDetail">等待模型资源接入</p>
-                    </div>
-                    <div class="robot-model-actions">
-                      <select id="robotModelSelect" aria-label="整机模型选择"></select>
-                      <button class="secondary-button" id="robotModelLoadButton" type="button">加载</button>
-                      <button class="secondary-button pose-sync-button" id="robotPoseSyncButton" type="button" aria-pressed="false">姿态同步</button>
-                      <button class="secondary-button robot-lidar-button" id="robotLidarToggleButton" type="button" aria-pressed="false">LiDAR</button>
-                      <span class="state-badge idle" id="robotModelBadge">模型待接入</span>
-                    </div>
-                  </div>
-                  <div class="robot-load-progress" id="robotLoadProgress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-                    <div class="robot-load-progress-head">
-                      <span id="robotLoadProgressText">等待加载</span>
-                      <strong id="robotLoadProgressValue">0%</strong>
-                    </div>
-                    <div class="robot-load-track" aria-hidden="true">
-                      <span id="robotLoadProgressBar"></span>
-                    </div>
-                    <small id="robotLoadProgressDetail">选择模型后点击加载</small>
-                  </div>
+              <div class="robot-view-grid robot-situation-grid">
+                <article class="panel robot-viewport-card robot-situation-canvas">
                   <div class="robot-viewport">
                     <div class="robot-stage" id="robotViewStage" aria-label="整机状态示意">
+                      <div class="robot-layer-toolbar" aria-label="整机视口图层">
+                        <button class="secondary-button pose-sync-button" id="robotPoseSyncButton" type="button" aria-pressed="false">姿态同步</button>
+                        <button class="secondary-button robot-lidar-button" id="robotLidarToggleButton" type="button" aria-pressed="false">LiDAR</button>
+                      </div>
                       <div class="robot-view-overlay">
                         <strong id="robotOverlayTitle">前端视图已就绪</strong>
                         <span id="robotOverlayDetail">URDF 与 mesh 加载接口未接入</span>
                       </div>
                     </div>
                   </div>
+                  <div class="metric-grid mapping-metrics robot-map-status-strip" id="mappingMetrics"></div>
                 </article>
-                <article class="panel mapping-panel">
-                  <div class="panel-head">
+
+                <article class="panel mapping-panel robot-work-panel">
+                  <div class="panel-head robot-work-head">
                     <div>
-                      <h2>点云建图</h2>
+                      <h2>当前作业：建图</h2>
                       <p id="mappingSummary">等待创建建图会话</p>
                     </div>
-                    <div class="mapping-actions">
-                      <span class="state-badge idle" id="mappingBadge">未开始</span>
-                      <button class="secondary-button" id="mappingStartButton" type="button">新建</button>
-                      <button class="primary-button" id="mappingCaptureButton" type="button" disabled>采集点云</button>
-                      <button class="secondary-button" id="mappingSaveButton" type="button" disabled>保存</button>
-                      <button class="secondary-button" id="mappingDeleteLastButton" type="button" disabled>删除上一帧</button>
-                      <button class="icon-button stop" id="mappingResetButton" type="button" disabled>重置</button>
-                    </div>
+                    <span class="state-badge idle" id="mappingBadge">未开始</span>
                   </div>
 
-                  <div class="mapping-layout">
-                    <section class="mapping-section mapping-config-section">
-                      <div class="section-title compact-title">
-                        <h2>采集参数</h2>
-                        <span>静止采集多帧后自动拼接</span>
-                      </div>
-                      <form class="config-form mapping-config-form" id="mappingConfigForm" autocomplete="off">
-                        <label><span class="field-label">采集帧数<em>frames</em></span><input id="mappingFrameCountInput" type="number" min="1" max="200" step="1" value="10" inputmode="numeric"></label>
-                        <label><span class="field-label">点云 topic<em>filtered</em></span><input id="mappingCloudTopicInput" type="text" value="/rslidar_points"></label>
-                        <label><span class="field-label">里程计 topic<em>odom</em></span><input id="mappingOdomTopicInput" type="text" value="/odom"></label>
-                        <label><span class="field-label">base frame<em>TF</em></span><input id="mappingBaseFrameInput" type="text" value="base_link"></label>
-                      </form>
-                    </section>
+                  <div class="mapping-actions robot-work-actions">
+                    <button class="secondary-button" id="mappingStartButton" type="button">新建</button>
+                    <button class="primary-button" id="mappingCaptureButton" type="button" disabled>采集点云</button>
+                    <button class="secondary-button" id="mappingSaveButton" type="button" disabled>保存</button>
+                    <button class="secondary-button" id="mappingDeleteLastButton" type="button" disabled>删除上一帧</button>
+                    <button class="icon-button stop" id="mappingResetButton" type="button" disabled>重置</button>
+                  </div>
 
-                    <section class="mapping-section mapping-drive-section">
-                      <div class="section-title compact-title">
-                        <h2>移动底座</h2>
+                  <section class="robot-side-section robot-model-section">
+                    <div class="section-title compact-title">
+                      <h2>模型状态</h2>
+                      <span id="robotModelDetail">等待模型资源接入</span>
+                    </div>
+                    <div class="robot-model-actions robot-model-side-actions">
+                      <select id="robotModelSelect" aria-label="整机模型选择"></select>
+                      <button class="secondary-button" id="robotModelLoadButton" type="button">加载</button>
+                      <span class="state-badge idle" id="robotModelBadge">模型待接入</span>
+                    </div>
+                    <div class="robot-load-progress" id="robotLoadProgress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                      <div class="robot-load-progress-head">
+                        <span id="robotLoadProgressText">等待加载</span>
+                        <strong id="robotLoadProgressValue">0%</strong>
+                      </div>
+                      <div class="robot-load-track" aria-hidden="true">
+                        <span id="robotLoadProgressBar"></span>
+                      </div>
+                      <small id="robotLoadProgressDetail">选择模型后点击加载</small>
+                    </div>
+                  </section>
+
+                  <section class="robot-side-section mapping-drive-section">
+                    <div class="section-title compact-title robot-section-row">
+                      <div>
+                        <h2>建图驾驶</h2>
                         <span>与平台控制共用限速和指令通路</span>
                       </div>
                       <button
@@ -461,33 +455,52 @@
                       >
                         键盘监听
                       </button>
-                      <div class="base-drive-cluster mapping-drive-cluster">
-                        <button class="base-rotate-button rotate-left" data-mapping-drive="left" title="左旋" aria-label="左旋">↺</button>
-                        <button class="base-rotate-button rotate-right" data-mapping-drive="right" title="右旋" aria-label="右旋">↻</button>
-                        <div class="drive-pad compact-drive-pad base-drive-pad">
-                          <span></span>
-                          <button data-mapping-drive="forward" title="前进" aria-label="前进">↑</button>
-                          <span></span>
-                          <button data-mapping-drive="strafe-left" title="向左横移" aria-label="向左横移">←</button>
-                          <button data-mapping-drive="stop" title="停止" aria-label="停止">●</button>
-                          <button data-mapping-drive="strafe-right" title="向右横移" aria-label="向右横移">→</button>
-                          <span></span>
-                          <button data-mapping-drive="backward" title="后退" aria-label="后退">↓</button>
-                          <span></span>
-                        </div>
+                    </div>
+                    <div class="base-drive-cluster mapping-drive-cluster">
+                      <button class="base-rotate-button rotate-left" data-mapping-drive="left" title="左旋" aria-label="左旋">↺</button>
+                      <button class="base-rotate-button rotate-right" data-mapping-drive="right" title="右旋" aria-label="右旋">↻</button>
+                      <div class="drive-pad compact-drive-pad base-drive-pad">
+                        <span></span>
+                        <button data-mapping-drive="forward" title="前进" aria-label="前进">↑</button>
+                        <span></span>
+                        <button data-mapping-drive="strafe-left" title="向左横移" aria-label="向左横移">←</button>
+                        <button data-mapping-drive="stop" title="停止" aria-label="停止">●</button>
+                        <button data-mapping-drive="strafe-right" title="向右横移" aria-label="向右横移">→</button>
+                        <span></span>
+                        <button data-mapping-drive="backward" title="后退" aria-label="后退">↓</button>
+                        <span></span>
                       </div>
+                    </div>
+                    <details class="robot-collapse mapping-speed-collapse">
+                      <summary>
+                        <span>速度设置</span>
+                        <small id="mappingSpeedSummary">低速点动</small>
+                      </summary>
                       <div class="base-control-panel mapping-base-control-panel" id="mappingBaseControlPanel"></div>
-                    </section>
+                    </details>
+                  </section>
 
-                    <section class="mapping-section mapping-status-section">
-                      <div class="section-title compact-title">
-                        <h2>建图状态</h2>
-                        <span id="mappingSessionText">未创建 session</span>
-                      </div>
-                      <div class="metric-grid mapping-metrics" id="mappingMetrics"></div>
-                      <div class="mapping-log" id="mappingKeyframeList"></div>
-                    </section>
-                  </div>
+                  <details class="robot-side-section robot-collapse mapping-config-section">
+                    <summary>
+                      <span>采集参数</span>
+                      <small id="mappingConfigSummary">10 frames / /rslidar_points / /odom / base_link</small>
+                    </summary>
+                    <form class="config-form mapping-config-form" id="mappingConfigForm" autocomplete="off">
+                      <label><span class="field-label">采集帧数<em>frames</em></span><input id="mappingFrameCountInput" type="number" min="1" max="200" step="1" value="10" inputmode="numeric"></label>
+                      <label><span class="field-label">点云 topic<em>filtered</em></span><input id="mappingCloudTopicInput" type="text" value="/rslidar_points"></label>
+                      <label><span class="field-label">里程计 topic<em>odom</em></span><input id="mappingOdomTopicInput" type="text" value="/odom"></label>
+                      <label><span class="field-label">base frame<em>TF</em></span><input id="mappingBaseFrameInput" type="text" value="base_link"></label>
+                    </form>
+                  </details>
+
+                  <details class="robot-side-section robot-collapse mapping-status-section">
+                    <summary>
+                      <span>建图详情</span>
+                      <small id="mappingSessionText">未创建 session</small>
+                    </summary>
+                    <div class="mapping-detail-list" id="mappingDetailList"></div>
+                    <div class="mapping-log" id="mappingKeyframeList"></div>
+                  </details>
                 </article>
               </div>
             </section>

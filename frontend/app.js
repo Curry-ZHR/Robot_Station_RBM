@@ -962,6 +962,7 @@ function showView(view) {
   }
   if (view === "robot-view") {
     fetchRobotModels({ silent: true });
+    refreshMappingStatus({ silent: true });
     initializeRobotViewer();
     window.setTimeout(resizeRobotViewer, 0);
   }
@@ -3309,10 +3310,24 @@ function renderMappingStatus() {
   const keyframes = Array.isArray(session?.keyframes) ? session.keyframes : [];
   const lastResult = session?.lastResult || null;
   const mapPreview = mapping.mapPreview;
+  const registration = lastResult?.registration || {};
+  const mapState = mapPreview.activeRequest
+    ? "加载中"
+    : mapPreview.error
+      ? "异常"
+      : mapPreview.hasFrame
+        ? "已显示"
+        : session?.tmpMapPath
+          ? "待加载"
+          : "--";
 
   setStateBadge("#mappingBadge", busy ? busyLabel : meta.label, busy ? (progressMeta?.level || "warn") : meta.level);
   setText("#mappingSummary", session?.detail || mapping.lastError || "等待创建建图会话");
-  setText("#mappingSessionText", session ? `${session.id} / ${session.sessionDir || ""}` : "未创建 session");
+  const sessionText = $("#mappingSessionText");
+  if (sessionText) {
+    sessionText.textContent = session?.id || "未创建 session";
+    sessionText.title = session?.sessionDir ? `${session.id}\n${session.sessionDir}` : "";
+  }
 
   const frameInput = $("#mappingFrameCountInput");
   if (frameInput && document.activeElement !== frameInput) frameInput.value = String(mapping.frameCount || 10);
@@ -3322,6 +3337,10 @@ function renderMappingStatus() {
   if (odomInput && document.activeElement !== odomInput) odomInput.value = mapping.odomTopic || "/odom";
   const baseInput = $("#mappingBaseFrameInput");
   if (baseInput && document.activeElement !== baseInput) baseInput.value = mapping.baseFrame || "base_link";
+  const configSummary = $("#mappingConfigSummary");
+  if (configSummary) {
+    configSummary.textContent = `${mapping.frameCount || 10} frames / ${mapping.cloudTopic || "/rslidar_points"} / ${mapping.odomTopic || "/odom"} / ${mapping.baseFrame || "base_link"}`;
+  }
 
   const startButton = $("#mappingStartButton");
   if (startButton) {
@@ -3344,23 +3363,10 @@ function renderMappingStatus() {
 
   const metrics = $("#mappingMetrics");
   if (metrics) {
-    const registration = lastResult?.registration || {};
-    const mapState = mapPreview.activeRequest
-      ? "加载中"
-      : mapPreview.error
-        ? "异常"
-        : mapPreview.hasFrame
-          ? "已显示"
-          : session?.tmpMapPath
-            ? "待加载"
-            : "--";
     metrics.innerHTML = [
       ["Keyframes", String(keyframes.length)],
-      ["点云", mapping.cloudTopic || "--"],
-      ["里程计", mapping.odomTopic || "--"],
       ["阶段", busy ? busyLabel : registration.stage || statusKey],
       ["Fitness", Number.isFinite(Number(registration.fitness)) ? Number(registration.fitness).toFixed(5) : "--"],
-      ["地图", mapState],
       ["地图点", mapPreview.hasFrame ? Math.max(0, Math.round(mapPreview.pointCount || 0)).toLocaleString("zh-CN") : "--"],
       ["地图大小", mapPreview.hasFrame ? formatBytes(mapPreview.sizeBytes) : "--"],
     ]
@@ -3368,8 +3374,26 @@ function renderMappingStatus() {
       .join("");
   }
 
+  const detailList = $("#mappingDetailList");
+  if (detailList) {
+    detailList.innerHTML = [
+      ["点云 topic", mapping.cloudTopic || "--"],
+      ["里程计 topic", mapping.odomTopic || "--"],
+      ["base frame", mapping.baseFrame || "--"],
+      ["地图", mapState],
+      ["session", session?.id || "--"],
+    ]
+      .map(([name, value]) => `<div><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
+      .join("");
+  }
+
   const list = $("#mappingKeyframeList");
+  const statusSection = $(".mapping-status-section");
+  const showStatusSection = Boolean(session || keyframes.length || mapping.lastError || mapPreview.hasFrame || mapPreview.error);
+  if (statusSection) statusSection.hidden = !showStatusSection;
   if (list) {
+    const showEmptyState = Boolean(session?.lastError);
+    list.hidden = !keyframes.length && !showEmptyState;
     list.innerHTML = keyframes.length
       ? keyframes
           .map((keyframe) => {
@@ -3384,7 +3408,9 @@ function renderMappingStatus() {
             `;
           })
           .join("")
-      : `<div class="mapping-keyframe-empty">${escapeHtml(session?.lastError || "暂无 keyframe")}</div>`;
+      : showEmptyState
+        ? `<div class="mapping-keyframe-empty">${escapeHtml(session.lastError)}</div>`
+        : "";
   }
 
   renderChassisKeyboardControl();
@@ -3537,6 +3563,15 @@ function renderLiftPreview() {
   renderRobotViewStatus();
 }
 
+function renderMappingSpeedSummary() {
+  const summary = $("#mappingSpeedSummary");
+  if (!summary) return;
+  const compactLabels = { linear: "vx", lateral: "vy", angular: "wz" };
+  summary.textContent = deviceBaseControlItems
+    .map((item) => `${compactLabels[item.key] || item.label} ${formatCommandSpeed(item)}`)
+    .join(" / ");
+}
+
 function renderBaseControlPanel(selector) {
   const baseNode = $(selector);
   if (baseNode) {
@@ -3566,6 +3601,7 @@ function renderBaseControlPanel(selector) {
       })
       .join("");
   }
+  if (selector === "#mappingBaseControlPanel") renderMappingSpeedSummary();
 }
 
 function renderDeviceControls() {
@@ -7704,6 +7740,7 @@ function bindEvents() {
     input.setAttribute("aria-valuetext", formatCommandSpeed(item));
     const preview = row?.querySelector("strong");
     if (preview) preview.textContent = formatCommandSpeed(item);
+    renderMappingSpeedSummary();
     renderBaseControlPanel(event.currentTarget.id === "deviceBaseControlPanel" ? "#mappingBaseControlPanel" : "#deviceBaseControlPanel");
     renderDeviceBaseMetrics();
     if (state.chassisControl.activeDrive) {

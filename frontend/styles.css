@@ -691,6 +691,360 @@ body[data-active-view="robot-view"] .workbench {
   border-radius: 8px;
 }
 
+/* Robot situation view: primary canvas + compact operation rail */
+.robot-situation-head {
+  min-height: 46px;
+  margin-bottom: 10px;
+}
+
+.robot-situation-head h1 {
+  font-size: 22px;
+}
+
+.robot-situation-status {
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 3px;
+  text-align: right;
+}
+
+.robot-situation-status span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.robot-situation-status strong {
+  font-size: 13px;
+}
+
+.robot-view-grid.robot-situation-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+  grid-template-rows: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 12px;
+  min-height: 0;
+  height: clamp(540px, calc(100vh - 154px), 760px);
+}
+
+.robot-situation-canvas {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.robot-situation-canvas .robot-viewport {
+  min-height: 0;
+}
+
+.robot-situation-canvas .robot-stage {
+  min-height: 0;
+  height: 100%;
+}
+
+.robot-layer-toolbar {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: calc(100% - 24px);
+}
+
+.robot-layer-toolbar .secondary-button {
+  min-height: 32px;
+  padding: 0 12px;
+  border-color: rgba(148, 163, 184, 0.36);
+  background: rgba(15, 23, 42, 0.76);
+  color: #e5e7eb;
+  box-shadow: 0 10px 28px rgba(2, 6, 23, 0.2);
+  backdrop-filter: blur(10px);
+}
+
+.robot-layer-toolbar .pose-sync-button.is-active {
+  border-color: rgba(16, 185, 129, 0.62);
+  background: rgba(6, 78, 59, 0.86);
+  color: #d1fae5;
+}
+
+.robot-layer-toolbar .robot-lidar-button.is-active {
+  border-color: rgba(56, 189, 248, 0.68);
+  background: rgba(12, 74, 110, 0.86);
+  color: #e0f2fe;
+}
+
+.robot-layer-toolbar .robot-lidar-button.is-warn {
+  border-color: rgba(245, 158, 11, 0.72);
+  background: rgba(120, 53, 15, 0.86);
+  color: #fef3c7;
+}
+
+.robot-layer-toolbar .robot-lidar-button.is-danger {
+  border-color: rgba(248, 113, 113, 0.72);
+  background: rgba(127, 29, 29, 0.86);
+  color: #fee2e2;
+}
+
+.metric-grid.robot-map-status-strip {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.robot-map-status-strip .metric-card {
+  min-height: 58px;
+  padding: 8px 10px;
+}
+
+.robot-work-panel {
+  display: grid;
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+  padding-bottom: 14px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.robot-work-head {
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.robot-work-head .state-badge {
+  flex: 0 0 auto;
+}
+
+.mapping-actions.robot-work-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  justify-content: stretch;
+  gap: 8px;
+  min-width: 0;
+}
+
+.robot-work-actions button {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.robot-work-actions #mappingStartButton {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.robot-work-actions #mappingResetButton {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.robot-work-actions #mappingCaptureButton {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+
+.robot-work-actions #mappingSaveButton {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.robot-work-actions #mappingDeleteLastButton {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+.robot-work-actions #mappingResetButton {
+  min-width: 0;
+}
+
+.robot-side-section {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e7edf4;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.robot-side-section .section-title {
+  min-width: 0;
+}
+
+.robot-side-section .section-title h2 {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.robot-side-section .section-title span {
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.robot-model-side-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+}
+
+.robot-model-side-actions select {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+.robot-model-side-actions .state-badge {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.robot-model-section .robot-load-progress {
+  margin: 0;
+  padding: 9px 10px;
+}
+
+.robot-section-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  width: 100%;
+}
+
+.robot-section-row > div,
+.robot-section-row h2,
+.robot-section-row span {
+  min-width: 0;
+}
+
+.mapping-drive-section {
+  justify-items: stretch;
+}
+
+.mapping-drive-section .mapping-keyboard-button {
+  width: auto;
+  min-height: 28px;
+  padding: 0 10px;
+}
+
+.mapping-drive-section .mapping-drive-cluster {
+  min-height: 116px;
+}
+
+.mapping-speed-collapse .mapping-base-control-panel {
+  width: 100%;
+  margin-top: 9px;
+}
+
+.robot-collapse {
+  min-width: 0;
+}
+
+.robot-collapse > summary {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.robot-collapse > summary::-webkit-details-marker {
+  display: none;
+}
+
+.robot-collapse > summary::after {
+  justify-self: end;
+  color: var(--muted);
+  content: "展开";
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.robot-collapse[open] > summary::after {
+  content: "收起";
+}
+
+.robot-collapse > summary span {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.robot-collapse > summary small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mapping-config-section .mapping-config-form {
+  margin-top: 10px;
+}
+
+.mapping-status-section .mapping-detail-list {
+  margin-top: 10px;
+}
+
+.mapping-detail-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.mapping-detail-list > div {
+  display: block;
+  min-height: 42px;
+  padding: 7px 8px;
+  border: 1px solid #e7edf4;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.mapping-detail-list span,
+.mapping-detail-list strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mapping-detail-list span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mapping-detail-list strong {
+  margin-top: 3px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.mapping-detail-list > div:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+.robot-work-panel .mapping-log {
+  max-height: 72px;
+}
+
+.robot-work-panel .mapping-keyframe-empty {
+  min-height: 34px;
+  padding: 8px;
+}
+
 .localization-view.is-active {
   display: grid;
   gap: 12px;
@@ -5447,5 +5801,82 @@ body[data-active-view="robot-view"] .event-drawer {
 
   .compare-value {
     grid-template-columns: 44px minmax(64px, 1fr) minmax(78px, auto) minmax(84px, auto);
+  }
+}
+
+@media (max-width: 1240px) {
+  .robot-view-grid.robot-situation-grid {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .robot-situation-canvas .robot-stage {
+    min-height: 440px;
+    height: clamp(440px, 58vh, 620px);
+  }
+
+  .robot-work-panel {
+    overflow: visible;
+  }
+}
+
+@media (max-width: 760px) {
+  .robot-situation-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .robot-situation-status {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .metric-grid.robot-map-status-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .mapping-actions.robot-work-actions,
+  .robot-model-side-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .robot-work-actions #mappingStartButton,
+  .robot-work-actions #mappingCaptureButton,
+  .robot-work-actions #mappingSaveButton,
+  .robot-work-actions #mappingDeleteLastButton,
+  .robot-work-actions #mappingResetButton {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .robot-section-row {
+    grid-template-columns: 1fr;
+  }
+
+  .mapping-detail-list {
+    grid-template-columns: 1fr;
+  }
+
+  .mapping-detail-list > div:last-child:nth-child(odd) {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 520px) {
+  .robot-situation-canvas .robot-stage {
+    min-height: 340px;
+    height: 58vh;
+  }
+
+  .robot-layer-toolbar {
+    left: 10px;
+    right: 10px;
+    justify-content: flex-start;
+  }
+
+  .robot-layer-toolbar .secondary-button {
+    min-height: 30px;
+    padding: 0 10px;
+    font-size: 12px;
   }
 }
