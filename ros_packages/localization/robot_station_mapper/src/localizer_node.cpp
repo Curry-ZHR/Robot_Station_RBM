@@ -1,6 +1,7 @@
 #include <Eigen/Dense>
 
 #include <pcl/common/transforms.h>
+#include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -28,6 +29,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <iomanip>
 #include <limits>
@@ -46,8 +48,10 @@ using Clock = std::chrono::steady_clock;
 
 #ifdef ROBOT_STATION_USE_FAST_GICP_CUDA
 constexpr const char * kRegistrationBackend = "gpu";
+constexpr bool kUseNdtWhenTracking = false;
 #else
 constexpr const char * kRegistrationBackend = "cpu";
+constexpr bool kUseNdtWhenTracking = true;
 #endif
 
 struct LocalizerOptions
@@ -62,6 +66,8 @@ struct LocalizerOptions
   std::string base_frame = "base_link";
   int max_failed_frames = 3;
   int min_source_points = 50;
+  double voxel_leaf = 0.08;
+  bool use_ndt_when_tracking = kUseNdtWhenTracking;
   double ndt_resolution = 0.5;
   int ndt_max_iterations = 40;
   double ndt_step_size = 0.1;
@@ -87,16 +93,19 @@ struct CloudFrame
   std::string cloud_frame;
   rclcpp::Time stamp;
   std::uint64_t sequence = 0;
+  int raw_source_points = 0;
 };
 
 struct RegistrationResult
 {
   bool ok = false;
+  bool used_ndt = false;
   bool ndt_converged = false;
   bool gicp_converged = false;
   double ndt_fitness = std::numeric_limits<double>::quiet_NaN();
   double fitness = std::numeric_limits<double>::quiet_NaN();
   int source_points = 0;
+  int raw_source_points = 0;
   Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
 };
 
@@ -215,6 +224,27 @@ CloudT::Ptr cleanCloud(const CloudT & input)
   return output;
 }
 
+CloudT::Ptr downsampleCloud(const CloudT::ConstPtr & input, const double leaf)
+{
+  auto output = std::make_shared<CloudT>();
+  if (!input || input->empty()) {
+    return output;
+  }
+  if (leaf <= 0.0) {
+    *output = *input;
+    return output;
+  }
+  pcl::VoxelGrid<PointT> voxel;
+  const float leaf_f = static_cast<float>(leaf);
+  voxel.setInputCloud(input);
+  voxel.setLeafSize(leaf_f, leaf_f, leaf_f);
+  voxel.filter(*output);
+  output->width = static_cast<std::uint32_t>(output->points.size());
+  output->height = 1;
+  output->is_dense = true;
+  return output;
+}
+
 std::string normalizeFrame(const std::string & frame)
 {
   std::string text = frame;
@@ -280,6 +310,8 @@ private:
     declare_parameter<std::string>("base_frame", options_.base_frame);
     declare_parameter<int>("max_failed_frames", options_.max_failed_frames);
     declare_parameter<int>("min_source_points", options_.min_source_points);
+    declare_parameter<double>("voxel_leaf", options_.voxel_leaf);
+    declare_parameter<bool>("use_ndt_when_tracking", options_.use_ndt_when_tracking);
     declare_parameter<double>("ndt_resolution", options_.ndt_resolution);
     declare_parameter<int>("ndt_max_iterations", options_.ndt_max_iterations);
     declare_parameter<double>("ndt_step_size", options_.ndt_step_size);
@@ -308,6 +340,8 @@ private:
       std::max(1, static_cast<int>(get_parameter("max_failed_frames").as_int()));
     options_.min_source_points =
       std::max(1, static_cast<int>(get_parameter("min_source_points").as_int()));
+    options_.voxel_leaf = std::max(0.0, get_parameter("voxel_leaf").as_double());
+    options_.use_ndt_when_tracking = get_parameter("use_ndt_when_tracking").as_bool();
     options_.ndt_resolution = std::max(0.05, get_parameter("ndt_resolution").as_double());
     options_.ndt_max_iterations =
       std::max(1, static_cast<int>(get_parameter("ndt_max_iterations").as_int()));
@@ -338,9 +372,17 @@ private:
       enterErrorLocked("map_load_failed", "Failed to load non-empty PCD map.", true);
       return;
     }
-    map_cloud_ = cleanCloud(*loaded);
+    auto cleaned_map = cleanCloud(*loaded);
+    raw_map_points_ = static_cast<int>(cleaned_map->points.size());
+    map_cloud_ = downsampleCloud(cleaned_map, options_.voxel_leaf);
     if (!map_cloud_ || map_cloud_->empty()) {
       enterErrorLocked("map_load_failed", "Map PCD has no valid points.", true);
+      return;
+    }
+    try {
+      configureRegistrationLocked();
+    } catch (const std::exception & exc) {
+      enterErrorLocked("registration_init_failed", exc.what(), true);
       return;
     }
     state_ = "waiting_initial_pose";
@@ -348,8 +390,44 @@ private:
     map_points_ = static_cast<int>(map_cloud_->points.size());
     last_error_.clear();
     RCLCPP_INFO(
-      get_logger(), "Loaded localization map %s with %d points using %s backend",
-      options_.map_path.c_str(), map_points_, options_.registration_backend.c_str());
+      get_logger(),
+      "Loaded localization map %s with %d/%d points using %s backend voxel_leaf=%.3f use_ndt_when_tracking=%s",
+      options_.map_path.c_str(), map_points_, raw_map_points_,
+      options_.registration_backend.c_str(), options_.voxel_leaf,
+      options_.use_ndt_when_tracking ? "true" : "false");
+  }
+
+  void configureRegistrationLocked()
+  {
+#ifdef ROBOT_STATION_USE_FAST_GICP_CUDA
+    ndt_.reset(new fast_gicp::NDTCuda<PointT, PointT>());
+    ndt_->setInputTarget(map_cloud_);
+    ndt_->setResolution(options_.ndt_resolution);
+    ndt_->setMaximumIterations(options_.ndt_max_iterations);
+    ndt_->setTransformationEpsilon(options_.ndt_transformation_epsilon);
+
+    gicp_.reset(new fast_gicp::FastVGICPCuda<PointT, PointT>());
+    gicp_->setInputTarget(map_cloud_);
+    gicp_->setResolution(options_.gicp_max_correspondence);
+    gicp_->setMaximumIterations(options_.gicp_max_iterations);
+    gicp_->setMaxCorrespondenceDistance(options_.gicp_max_correspondence);
+    gicp_->setTransformationEpsilon(options_.gicp_transformation_epsilon);
+    gicp_->setEuclideanFitnessEpsilon(options_.gicp_euclidean_fitness_epsilon);
+#else
+    ndt_.reset(new pcl::NormalDistributionsTransform<PointT, PointT>());
+    ndt_->setInputTarget(map_cloud_);
+    ndt_->setResolution(options_.ndt_resolution);
+    ndt_->setMaximumIterations(options_.ndt_max_iterations);
+    ndt_->setStepSize(options_.ndt_step_size);
+    ndt_->setTransformationEpsilon(options_.ndt_transformation_epsilon);
+
+    gicp_.reset(new pcl::GeneralizedIterativeClosestPoint<PointT, PointT>());
+    gicp_->setInputTarget(map_cloud_);
+    gicp_->setMaximumIterations(options_.gicp_max_iterations);
+    gicp_->setMaxCorrespondenceDistance(options_.gicp_max_correspondence);
+    gicp_->setTransformationEpsilon(options_.gicp_transformation_epsilon);
+    gicp_->setEuclideanFitnessEpsilon(options_.gicp_euclidean_fitness_epsilon);
+#endif
   }
 
   void onCloud(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg)
@@ -379,20 +457,22 @@ private:
     CloudT pcl_cloud;
     pcl::fromROSMsg(working, pcl_cloud);
     auto cleaned = cleanCloud(pcl_cloud);
-    if (!cleaned || static_cast<int>(cleaned->points.size()) < options_.min_source_points) {
+    auto filtered = downsampleCloud(cleaned, options_.voxel_leaf);
+    if (!filtered || static_cast<int>(filtered->points.size()) < options_.min_source_points) {
       recordFrameFailure(
         "cloud_too_few_points",
-        "Point cloud has fewer valid points than min_source_points.");
+        "Point cloud has fewer valid points than min_source_points after filtering.");
       return;
     }
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
       latest_cloud_ = CloudFrame{
-        cleaned, normalizeFrame(working.header.frame_id), rclcpp::Time(msg->header.stamp),
-        ++cloud_sequence_};
+        filtered, normalizeFrame(working.header.frame_id), rclcpp::Time(msg->header.stamp),
+        ++cloud_sequence_, static_cast<int>(cleaned->points.size())};
       last_cloud_frame_ = latest_cloud_->cloud_frame;
-      last_source_points_ = static_cast<int>(cleaned->points.size());
+      last_raw_source_points_ = latest_cloud_->raw_source_points;
+      last_source_points_ = static_cast<int>(filtered->points.size());
       if (last_error_ == "cloud_tf_missing" || last_error_ == "cloud_too_few_points") {
         last_error_.clear();
       }
@@ -427,8 +507,14 @@ private:
       std::lock_guard<std::mutex> lock(mutex_);
       last_pose_ = transform2D(position.x, position.y, yaw);
       initialized_ = true;
+      tracking_ready_ = false;
       failed_frame_count_ = 0;
       processed_sequence_ = 0;
+      last_used_ndt_ = false;
+      last_ndt_converged_ = false;
+      last_gicp_converged_ = false;
+      last_ndt_fitness_ = std::numeric_limits<double>::quiet_NaN();
+      last_fitness_ = std::numeric_limits<double>::quiet_NaN();
       state_ = "localizing";
       last_error_.clear();
       error_detail_.clear();
@@ -444,9 +530,13 @@ private:
       ++failed_frame_count_;
       last_error_ = code;
       error_detail_ = detail;
+      if (code == "registration_failed") {
+        tracking_ready_ = false;
+      }
       if (failed_frame_count_ >= options_.max_failed_frames) {
         state_ = "error";
         initialized_ = false;
+        tracking_ready_ = false;
       } else if (initialized_) {
         state_ = "degraded";
       }
@@ -459,6 +549,7 @@ private:
     while (rclcpp::ok()) {
       CloudFrame frame;
       Eigen::Matrix4f initial_guess = Eigen::Matrix4f::Identity();
+      bool use_ndt = true;
       {
         std::unique_lock<std::mutex> lock(mutex_);
         condition_.wait(lock, [this]() {
@@ -472,84 +563,64 @@ private:
         frame = latest_cloud_.value();
         processed_sequence_ = frame.sequence;
         initial_guess = last_pose_;
+        use_ndt = options_.use_ndt_when_tracking || !tracking_ready_ || failed_frame_count_ > 0;
       }
-
       const auto started_at = Clock::now();
-      RegistrationResult result = registerFrame(frame, initial_guess);
+      RegistrationResult result = registerFrame(frame, initial_guess, use_ndt);
       const double elapsed_sec =
         std::chrono::duration<double>(Clock::now() - started_at).count();
       finishRegistration(frame, result, elapsed_sec);
     }
   }
 
-  RegistrationResult registerFrame(const CloudFrame & frame, const Eigen::Matrix4f & initial_guess)
+  RegistrationResult registerFrame(
+    const CloudFrame & frame, const Eigen::Matrix4f & initial_guess, const bool use_ndt)
   {
     RegistrationResult result;
     result.source_points = static_cast<int>(frame.cloud->points.size());
-    if (!map_cloud_ || map_cloud_->empty() || !frame.cloud || frame.cloud->empty()) {
+    result.raw_source_points = frame.raw_source_points;
+    if (!map_cloud_ || map_cloud_->empty() || !frame.cloud || frame.cloud->empty() || !ndt_ ||
+      !gicp_)
+    {
       return result;
     }
 
-#ifdef ROBOT_STATION_USE_FAST_GICP_CUDA
-    fast_gicp::NDTCuda<PointT, PointT> ndt;
-    ndt.setInputSource(frame.cloud);
-    ndt.setInputTarget(map_cloud_);
-    ndt.setResolution(options_.ndt_resolution);
-    ndt.setMaximumIterations(options_.ndt_max_iterations);
-    ndt.setTransformationEpsilon(options_.ndt_transformation_epsilon);
-    CloudT ndt_output;
-    ndt.align(ndt_output, initial_guess);
-    result.ndt_converged = ndt.hasConverged();
-    result.ndt_fitness = ndt.getFitnessScore();
-    Eigen::Matrix4f gicp_guess = ndt.hasConverged() ? ndt.getFinalTransformation() : initial_guess;
+    result = runRegistration(frame, initial_guess, use_ndt);
+    if (!result.ok && !use_ndt) {
+      result = runRegistration(frame, initial_guess, true);
+    }
+    return result;
+  }
+
+  RegistrationResult runRegistration(
+    const CloudFrame & frame, const Eigen::Matrix4f & initial_guess, const bool use_ndt)
+  {
+    RegistrationResult result;
+    result.source_points = static_cast<int>(frame.cloud->points.size());
+    result.raw_source_points = frame.raw_source_points;
+    Eigen::Matrix4f gicp_guess = initial_guess;
+    if (use_ndt) {
+      result.used_ndt = true;
+      ndt_->setInputSource(frame.cloud);
+      CloudT ndt_output;
+      ndt_->align(ndt_output, initial_guess);
+      result.ndt_converged = ndt_->hasConverged();
+      result.ndt_fitness = ndt_->getFitnessScore();
+      gicp_guess = ndt_->hasConverged() ? ndt_->getFinalTransformation() : initial_guess;
+    }
     if (!matrixFinite(gicp_guess)) {
       gicp_guess = initial_guess;
     }
 
-    fast_gicp::FastVGICPCuda<PointT, PointT> gicp;
-    gicp.setInputSource(frame.cloud);
-    gicp.setInputTarget(map_cloud_);
-    gicp.setResolution(options_.gicp_max_correspondence);
-    gicp.setMaximumIterations(options_.gicp_max_iterations);
-    gicp.setMaxCorrespondenceDistance(options_.gicp_max_correspondence);
-    gicp.setTransformationEpsilon(options_.gicp_transformation_epsilon);
-    gicp.setEuclideanFitnessEpsilon(options_.gicp_euclidean_fitness_epsilon);
     CloudT aligned;
-    gicp.align(aligned, gicp_guess);
-    result.gicp_converged = gicp.hasConverged();
-    result.fitness = gicp.getFitnessScore();
-    result.transform = gicp.getFinalTransformation();
-#else
-    pcl::NormalDistributionsTransform<PointT, PointT> ndt;
-    ndt.setInputSource(frame.cloud);
-    ndt.setInputTarget(map_cloud_);
-    ndt.setResolution(options_.ndt_resolution);
-    ndt.setMaximumIterations(options_.ndt_max_iterations);
-    ndt.setStepSize(options_.ndt_step_size);
-    ndt.setTransformationEpsilon(options_.ndt_transformation_epsilon);
-    CloudT ndt_output;
-    ndt.align(ndt_output, initial_guess);
-    result.ndt_converged = ndt.hasConverged();
-    result.ndt_fitness = ndt.getFitnessScore();
-    Eigen::Matrix4f gicp_guess = ndt.hasConverged() ? ndt.getFinalTransformation() : initial_guess;
-    if (!matrixFinite(gicp_guess)) {
-      gicp_guess = initial_guess;
-    }
-
-    pcl::GeneralizedIterativeClosestPoint<PointT, PointT> gicp;
-    gicp.setInputSource(frame.cloud);
-    gicp.setInputTarget(map_cloud_);
-    gicp.setMaximumIterations(options_.gicp_max_iterations);
-    gicp.setMaxCorrespondenceDistance(options_.gicp_max_correspondence);
-    gicp.setTransformationEpsilon(options_.gicp_transformation_epsilon);
-    gicp.setEuclideanFitnessEpsilon(options_.gicp_euclidean_fitness_epsilon);
-    CloudT aligned;
-    gicp.align(aligned, gicp_guess);
-    result.gicp_converged = gicp.hasConverged();
-    result.fitness = gicp.getFitnessScore();
-    result.transform = gicp.getFinalTransformation();
-#endif
-    result.ok = result.ndt_converged && result.gicp_converged && matrixFinite(result.transform);
+    gicp_->setInputSource(frame.cloud);
+    gicp_->align(aligned, gicp_guess);
+    result.gicp_converged = gicp_->hasConverged();
+    result.fitness = gicp_->getFitnessScore();
+    result.transform = gicp_->getFinalTransformation();
+    result.ok =
+      (!result.used_ndt || result.ndt_converged) && result.gicp_converged &&
+      matrixFinite(result.transform);
     if (result.ok) {
       const Pose2D pose = poseFromMatrix2D(result.transform);
       result.transform = transform2D(pose.x, pose.y, pose.yaw);
@@ -561,20 +632,25 @@ private:
     const CloudFrame & frame, const RegistrationResult & result, const double elapsed_sec)
   {
     if (!result.ok) {
-      recordFrameFailure("registration_failed", "NDT/GICP did not converge.");
+      recordFrameFailure(
+        "registration_failed",
+        result.used_ndt ? "NDT/GICP did not converge." : "FastVGICP did not converge.");
       return;
     }
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
       last_pose_ = result.transform;
+      last_used_ndt_ = result.used_ndt;
       last_ndt_converged_ = result.ndt_converged;
       last_gicp_converged_ = result.gicp_converged;
       last_ndt_fitness_ = result.ndt_fitness;
       last_fitness_ = result.fitness;
+      last_raw_source_points_ = result.raw_source_points;
       last_source_points_ = result.source_points;
       last_cloud_frame_ = frame.cloud_frame;
       failed_frame_count_ = 0;
+      tracking_ready_ = true;
       state_ = "localizing";
       last_error_.clear();
       error_detail_.clear();
@@ -626,6 +702,7 @@ private:
     if (fatal) {
       map_loaded_ = false;
       initialized_ = false;
+      tracking_ready_ = false;
     }
   }
 
@@ -646,8 +723,15 @@ private:
     out << "\"frameId\":" << jsonString(options_.map_frame) << ",";
     out << "\"baseFrame\":" << jsonString(options_.base_frame) << ",";
     out << "\"cloudFrame\":" << jsonString(last_cloud_frame_) << ",";
+    out << "\"rawSourcePoints\":" << last_raw_source_points_ << ",";
     out << "\"sourcePoints\":" << last_source_points_ << ",";
+    out << "\"rawMapPoints\":" << raw_map_points_ << ",";
     out << "\"mapPoints\":" << map_points_ << ",";
+    out << "\"voxelLeaf\":" << jsonNumber(options_.voxel_leaf) << ",";
+    out << "\"trackingReady\":" << (tracking_ready_ ? "true" : "false") << ",";
+    out << "\"useNdtWhenTracking\":"
+        << (options_.use_ndt_when_tracking ? "true" : "false") << ",";
+    out << "\"usedNdt\":" << (last_used_ndt_ ? "true" : "false") << ",";
     out << "\"ndtConverged\":" << (last_ndt_converged_ ? "true" : "false") << ",";
     out << "\"gicpConverged\":" << (last_gicp_converged_ ? "true" : "false") << ",";
     out << "\"ndtFitness\":" << jsonNumber(last_ndt_fitness_) << ",";
@@ -672,6 +756,15 @@ private:
   LocalizerOptions options_;
   CloudT::Ptr map_cloud_;
   int map_points_ = 0;
+  int raw_map_points_ = 0;
+
+#ifdef ROBOT_STATION_USE_FAST_GICP_CUDA
+  std::unique_ptr<fast_gicp::NDTCuda<PointT, PointT>> ndt_;
+  std::unique_ptr<fast_gicp::FastVGICPCuda<PointT, PointT>> gicp_;
+#else
+  std::unique_ptr<pcl::NormalDistributionsTransform<PointT, PointT>> ndt_;
+  std::unique_ptr<pcl::GeneralizedIterativeClosestPoint<PointT, PointT>> gicp_;
+#endif
 
   std::mutex mutex_;
   std::condition_variable condition_;
@@ -680,6 +773,7 @@ private:
 
   bool map_loaded_ = false;
   bool initialized_ = false;
+  bool tracking_ready_ = false;
   std::optional<CloudFrame> latest_cloud_;
   std::uint64_t cloud_sequence_ = 0;
   std::uint64_t processed_sequence_ = 0;
@@ -689,8 +783,10 @@ private:
   std::string last_error_;
   std::string error_detail_;
   std::string last_cloud_frame_;
+  int last_raw_source_points_ = 0;
   int last_source_points_ = 0;
   int failed_frame_count_ = 0;
+  bool last_used_ndt_ = false;
   bool last_ndt_converged_ = false;
   bool last_gicp_converged_ = false;
   double last_ndt_fitness_ = std::numeric_limits<double>::quiet_NaN();

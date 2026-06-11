@@ -104,6 +104,8 @@ def test_localization_manager_start_resolves_saved_map_and_builds_command(tmp_pa
     assert commands[0][:4] == ["localizer", "--ros-args", "-p", f"map_path:={map_path}"]
     assert "map_name:=lab_map" in commands[0]
     assert "base_frame:=base_link" in commands[0]
+    assert "voxel_leaf:=0.08" in commands[0]
+    assert "use_ndt_when_tracking:=true" in commands[0]
     assert result["process"]["running"] is True
 
 
@@ -127,6 +129,46 @@ def test_localization_manager_start_uses_gpu_backend_command(tmp_path, monkeypat
     assert result["backend"] == "gpu"
     assert result["map"]["settings"]["backend"] == "gpu"
     assert commands[0][:4] == ["python3", "--ros-args", "-p", f"map_path:={map_path}"]
+    assert "voxel_leaf:=0.08" in commands[0]
+    assert "use_ndt_when_tracking:=false" in commands[0]
+
+
+def test_localization_manager_start_passes_localization_tuning(tmp_path, monkeypatch):
+    map_path = tmp_path / "lab_map" / "map.pcd"
+    map_path.parent.mkdir()
+    map_path.write_text("pcd", encoding="utf-8")
+    commands = []
+
+    def fake_popen(command, **kwargs):
+        commands.append(command)
+        return FakeProcess()
+
+    monkeypatch.setattr("modules.localization.manager.get_mapping_manager", lambda: FakeMappingManager(map_path))
+    monkeypatch.setattr("modules.localization.manager.subprocess.Popen", fake_popen)
+
+    manager = LocalizationManager(localizer_command=("localizer",), gpu_localizer_command=("python3",))
+    result = manager.start(
+        {
+            "mapName": "lab_map",
+            "backend": "gpu",
+            "voxelLeafM": 0.12,
+            "useNdtWhenTracking": True,
+            "ndtResolutionM": 0.8,
+            "ndtMaxIterations": 18,
+            "gicpMaxCorrespondenceM": 0.35,
+            "gicpMaxIterations": 16,
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["map"]["settings"]["voxelLeafM"] == 0.12
+    assert result["map"]["settings"]["useNdtWhenTracking"] is True
+    assert "voxel_leaf:=0.12" in commands[0]
+    assert "use_ndt_when_tracking:=true" in commands[0]
+    assert "ndt_resolution:=0.8" in commands[0]
+    assert "ndt_max_iterations:=18" in commands[0]
+    assert "gicp_max_correspondence:=0.35" in commands[0]
+    assert "gicp_max_iterations:=16" in commands[0]
 
 
 def test_localization_manager_rejects_unknown_backend(tmp_path, monkeypatch):

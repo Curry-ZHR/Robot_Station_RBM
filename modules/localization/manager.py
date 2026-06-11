@@ -88,6 +88,27 @@ def _safe_int(value, default, minimum, maximum):
     return max(minimum, min(maximum, parsed))
 
 
+def _safe_float(value, default, minimum, maximum):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def _safe_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 class LocalizationManager:
     def __init__(self, localizer_command=None, gpu_localizer_command=None):
         self.localizer_commands = {
@@ -296,8 +317,9 @@ class LocalizationManager:
         return _result(False, "LOC-MAP", f"Saved map not found: {map_name}")
 
     def _settings_from_payload(self, payload):
+        backend = _clean_backend(payload.get("backend"), "cpu")
         return {
-            "backend": _clean_backend(payload.get("backend"), "cpu"),
+            "backend": backend,
             "cloudTopic": _clean_topic(payload.get("cloudTopic"), "/rslidar_points"),
             "initialPoseTopic": _clean_topic(payload.get("initialPoseTopic"), "/initialpose"),
             "poseTopic": _clean_topic(payload.get("poseTopic"), "/localization/pose"),
@@ -306,6 +328,20 @@ class LocalizationManager:
             "baseFrame": str(payload.get("baseFrame") or "base_link").strip() or "base_link",
             "maxFailedFrames": _safe_int(payload.get("maxFailedFrames"), 3, 1, 20),
             "minSourcePoints": _safe_int(payload.get("minSourcePoints"), 50, 1, 100000),
+            "voxelLeafM": _safe_float(payload.get("voxelLeafM"), 0.08, 0.0, 0.50),
+            "useNdtWhenTracking": _safe_bool(
+                payload.get("useNdtWhenTracking"),
+                default=(backend != "gpu"),
+            ),
+            "ndtResolutionM": _safe_float(payload.get("ndtResolutionM"), 0.5, 0.05, 5.0),
+            "ndtMaxIterations": _safe_int(payload.get("ndtMaxIterations"), 40, 1, 100),
+            "gicpMaxCorrespondenceM": _safe_float(
+                payload.get("gicpMaxCorrespondenceM"),
+                0.20,
+                0.02,
+                2.0,
+            ),
+            "gicpMaxIterations": _safe_int(payload.get("gicpMaxIterations"), 50, 1, 100),
         }
 
     def _build_command(self, map_entry, settings):
@@ -332,6 +368,18 @@ class LocalizationManager:
             f"max_failed_frames:={settings['maxFailedFrames']}",
             "-p",
             f"min_source_points:={settings['minSourcePoints']}",
+            "-p",
+            f"voxel_leaf:={settings['voxelLeafM']}",
+            "-p",
+            f"use_ndt_when_tracking:={str(settings['useNdtWhenTracking']).lower()}",
+            "-p",
+            f"ndt_resolution:={settings['ndtResolutionM']}",
+            "-p",
+            f"ndt_max_iterations:={settings['ndtMaxIterations']}",
+            "-p",
+            f"gicp_max_correspondence:={settings['gicpMaxCorrespondenceM']}",
+            "-p",
+            f"gicp_max_iterations:={settings['gicpMaxIterations']}",
         ]
 
     def _command_for_backend(self, backend):
