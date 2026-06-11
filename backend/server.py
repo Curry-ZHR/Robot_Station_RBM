@@ -43,6 +43,7 @@ from modules.ros_io import (
 )
 from modules.runtime import get_service_manager, shutdown_services
 from modules.self_check.can_check.can_status import check_can_interface
+from modules.state_machine import get_state_machine_executor, get_state_machine_store, state_machine_result_status
 from modules.self_check.disk_check.disk_space import check_disk_space
 from modules.self_check.gpu_check.gpu_status import check_gpu_status
 from modules.self_check.ros_check.ros_daemon import ensure_ros_daemon
@@ -664,6 +665,30 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 status=404,
             )
             return
+        state_machine_tail = api_tail(parsed.path, "/api/state-machine")
+        if state_machine_tail is not None:
+            store = get_state_machine_store()
+            if state_machine_tail == "states":
+                result = store.list_states()
+                self.write_json(result, status=state_machine_result_status(result))
+                return
+            if state_machine_tail == "graphs":
+                result = store.list_graphs()
+                self.write_json(result, status=state_machine_result_status(result))
+                return
+            if state_machine_tail == "run/status":
+                result = get_state_machine_executor().status()
+                self.write_json(result, status=state_machine_result_status(result))
+                return
+            self.write_json(
+                {
+                    "ok": False,
+                    "code": "SM-ACTION",
+                    "detail": "State machine GET path must be /api/state-machine/states, /api/state-machine/graphs, or /api/state-machine/run/status.",
+                },
+                status=404,
+            )
+            return
         if parsed.path == "/api/playback/status":
             self.write_json(get_playback_manager().status())
             return
@@ -958,6 +983,33 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             status=400,
         )
 
+    def handle_state_machine(self, action):
+        store = get_state_machine_store()
+        executor = get_state_machine_executor()
+        handlers = {
+            "states/save": store.save_state,
+            "states/delete": store.delete_state,
+            "graphs/save": store.save_graph,
+            "graphs/delete": store.delete_graph,
+            "run/start": executor.start,
+            "run/stop": lambda payload: executor.stop(),
+        }
+        handler = handlers.get(action)
+        if handler is None:
+            self.write_json(
+                {
+                    "ok": False,
+                    "code": "SM-ACTION",
+                    "detail": f"Unsupported state machine action: {action}",
+                },
+                status=400,
+            )
+            return
+        payload = self.read_json_body()
+        result = handler(payload)
+        log_action_result(f"State machine {action}", result)
+        self.write_json(result, status=state_machine_result_status(result))
+
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/self-check/run":
@@ -1019,6 +1071,10 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         navigation_action = api_tail(parsed.path, "/api/navigation")
         if navigation_action is not None:
             self.handle_navigation(navigation_action)
+            return
+        state_machine_action = api_tail(parsed.path, "/api/state-machine")
+        if state_machine_action is not None:
+            self.handle_state_machine(state_machine_action)
             return
         if parsed.path == "/api/playback/load":
             payload = self.read_json_body()

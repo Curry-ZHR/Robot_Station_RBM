@@ -372,6 +372,10 @@ body[data-active-view="robot-view"] .workbench {
   grid-template-columns: minmax(0, 1fr);
 }
 
+body[data-active-view="state-machine"] .workbench {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 body.robot-modal-open {
   overflow: hidden;
 }
@@ -2656,6 +2660,11 @@ body[data-active-view="robot-view"] .event-drawer {
   display: none;
 }
 
+body[data-active-view="state-machine"] .event-drawer,
+body[data-active-view="state-machine"] #drawerToggle {
+  display: none;
+}
+
 .drawer-head {
   display: flex;
   align-items: center;
@@ -3259,6 +3268,625 @@ body[data-active-view="robot-view"] .event-drawer {
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
   line-height: 1.6;
+}
+
+.state-machine-layout {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.state-machine-page-head,
+.state-machine-canvas-head {
+  align-items: center;
+}
+
+.state-machine-actions,
+.state-machine-graph-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.state-machine-palette,
+.state-machine-canvas-panel {
+  min-width: 0;
+}
+
+.state-machine-node-library {
+  display: grid;
+  gap: 8px;
+}
+
+.state-machine-library-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.state-machine-library-item > button[data-sm-library-id] {
+  display: grid;
+  min-width: 0;
+  min-height: 56px;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+  text-align: left;
+}
+
+.state-machine-library-item > button[data-sm-library-id]:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.state-machine-library-item strong,
+.state-machine-node-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-machine-library-item span,
+.state-machine-node-copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-machine-library-remove {
+  width: 26px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.state-machine-library-remove:hover {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: var(--danger);
+}
+
+.state-machine-library-empty {
+  padding: 10px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.state-machine-task-add {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.state-machine-task-add:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.state-machine-graph-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.state-machine-name-field,
+.state-machine-graph-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.state-machine-name-field input,
+.state-machine-graph-field select {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+}
+
+.state-machine-canvas {
+  display: grid;
+  min-height: 560px;
+  align-content: start;
+  gap: 8px;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    linear-gradient(#f8fafc, #f8fafc) padding-box,
+    repeating-linear-gradient(0deg, rgba(148, 163, 184, 0.12) 0 1px, transparent 1px 32px),
+    repeating-linear-gradient(90deg, rgba(148, 163, 184, 0.12) 0 1px, transparent 1px 32px);
+}
+
+.state-machine-node {
+  --node-accent: #64748b;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--node-accent);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.state-machine-node.is-navigation {
+  --node-accent: #0f766e;
+}
+
+.state-machine-node.is-wait {
+  --node-accent: #b45309;
+}
+
+.state-machine-node.is-inference {
+  --node-accent: #2563eb;
+}
+
+.state-machine-node.is-arm {
+  --node-accent: #be123c;
+}
+
+.state-machine-node.is-check {
+  --node-accent: #15803d;
+}
+
+.state-machine-node.is-selected {
+  border-color: color-mix(in srgb, var(--node-accent), #ffffff 35%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--node-accent), transparent 82%);
+}
+
+.state-machine-node.is-running {
+  background: #f0fdf4;
+}
+
+.state-machine-node.is-complete {
+  background: #f8fafc;
+}
+
+.state-machine-node-main {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.state-machine-node-index {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--node-accent), #ffffff 84%);
+  color: var(--node-accent);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.state-machine-node-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.state-machine-node-status {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #eef2f7;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.state-machine-node.is-running .state-machine-node-status {
+  background: #dcfce7;
+  color: var(--ok);
+}
+
+.state-machine-node.is-complete .state-machine-node-status {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.state-machine-node-tools {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.state-machine-node-tools button {
+  min-height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.state-machine-edge {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.state-machine-edge span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: var(--text);
+}
+
+.state-machine-edge strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-machine-edge.is-end span {
+  background: #fee2e2;
+  color: var(--danger);
+}
+
+.state-machine-task-group {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.state-machine-task-group-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.state-machine-task-group-title > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.state-machine-task-group-title strong {
+  font-size: 13px;
+}
+
+.state-machine-task-group-title span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.state-machine-task-buttons {
+  display: grid;
+  gap: 7px;
+}
+
+.state-machine-canvas-help {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.state-machine-canvas-help span {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.state-machine-canvas {
+  display: block;
+  min-height: 620px;
+  max-height: 68vh;
+  align-content: initial;
+  overflow: auto;
+  background:
+    linear-gradient(#f8fafc, #f8fafc) padding-box,
+    repeating-linear-gradient(0deg, rgba(100, 116, 139, 0.13) 0 1px, transparent 1px 40px),
+    repeating-linear-gradient(90deg, rgba(100, 116, 139, 0.13) 0 1px, transparent 1px 40px);
+}
+
+.state-machine-workspace {
+  position: relative;
+  min-width: 980px;
+  min-height: 620px;
+}
+
+.state-machine-edge-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Keep the layer transparent to clicks; only the hit path and the delete
+     button opt back in, so nodes behind edges stay clickable. */
+  pointer-events: none;
+}
+
+.state-machine-edge-visible {
+  fill: none;
+  stroke: #94a3b8;
+  stroke-width: 2;
+}
+
+.state-machine-edge-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 16;
+  pointer-events: stroke;
+}
+
+.state-machine-edge-line marker path {
+  fill: #94a3b8;
+}
+
+.state-machine-edge-line.is-taken .state-machine-edge-visible,
+.state-machine-edge-line.is-active .state-machine-edge-visible {
+  stroke: #16a34a;
+  stroke-width: 3;
+}
+
+.state-machine-edge-line.is-taken marker path,
+.state-machine-edge-line.is-active marker path {
+  fill: #16a34a;
+}
+
+.state-machine-edge-line:hover .state-machine-edge-visible {
+  stroke: #475569;
+  stroke-width: 3;
+}
+
+.state-machine-edge-delete {
+  pointer-events: all;
+  cursor: pointer;
+  opacity: 0.45;
+}
+
+.state-machine-edge-line:hover .state-machine-edge-delete,
+.state-machine-edge-delete:hover {
+  opacity: 1;
+}
+
+.state-machine-edge-delete circle {
+  fill: #ffffff;
+  stroke: #cbd5e1;
+  stroke-width: 1.5;
+}
+
+.state-machine-edge-delete:hover circle {
+  fill: #fef2f2;
+  stroke: #fca5a5;
+}
+
+.state-machine-edge-delete text {
+  fill: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  user-select: none;
+}
+
+.state-machine-edge-delete:hover text {
+  fill: var(--danger);
+}
+
+.state-machine-edge-label {
+  paint-order: stroke;
+  stroke: #f8fafc;
+  stroke-width: 5px;
+  fill: #b45309;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.state-machine-node {
+  position: absolute;
+  gap: 7px;
+  padding: 9px;
+  box-shadow: 0 10px 18px rgba(15, 23, 42, 0.08);
+}
+
+.state-machine-node.is-start {
+  --node-accent: #2563eb;
+}
+
+.state-machine-node.is-end {
+  --node-accent: #b91c1c;
+}
+
+.state-machine-node.is-grasp {
+  --node-accent: #be123c;
+}
+
+.state-machine-node.is-connecting {
+  outline: 3px solid color-mix(in srgb, var(--node-accent), transparent 72%);
+  outline-offset: 2px;
+}
+
+.state-machine-node-drag {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--muted);
+  cursor: grab;
+}
+
+.state-machine-node-main {
+  grid-template-columns: 1fr;
+  gap: 2px;
+  padding-right: 28px;
+}
+
+.state-machine-node-main strong,
+.state-machine-node-main small,
+.state-machine-node-kicker {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-machine-node-kicker {
+  color: var(--node-accent);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.state-machine-node-footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.state-machine-node-outputs {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-machine-node-tools {
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+}
+
+.state-machine-node-tools:empty {
+  display: none;
+}
+
+.state-machine-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.state-machine-modal[hidden] {
+  display: none !important;
+}
+
+.state-machine-modal-dialog {
+  display: grid;
+  width: min(520px, calc(100vw - 36px));
+  max-height: 80vh;
+  overflow: auto;
+  border: 1px solid #dbe5ef;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 26px 80px rgba(15, 23, 42, 0.24);
+}
+
+.state-machine-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid #e7edf4;
+}
+
+.state-machine-modal-head p,
+.state-machine-modal-head h2 {
+  margin: 0;
+}
+
+.state-machine-modal-head p {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.state-machine-modal-head h2 {
+  margin-top: 3px;
+  color: var(--text);
+  font-size: 18px;
+}
+
+.state-machine-modal-close {
+  width: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-color: #d8e0ea;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.state-machine-modal-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 14px 16px 4px;
+}
+
+.state-machine-modal-form .state-machine-modal-title-field {
+  grid-column: 1 / -1;
+}
+
+.state-machine-modal-actions {
+  justify-content: flex-end;
+  padding: 12px 16px 16px;
 }
 
 /* Remote inference page polish */
@@ -6350,6 +6978,12 @@ body[data-active-view="robot-view"] .event-drawer {
 
 }
 
+@media (max-width: 1320px) {
+  .state-machine-layout {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 1100px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -6361,11 +6995,20 @@ body[data-active-view="robot-view"] .event-drawer {
   }
 
   .nav-list {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .nav-item {
     text-align: center;
+  }
+
+  .state-machine-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .state-machine-graph-bar {
+    grid-template-columns: 1fr;
+    align-items: stretch;
   }
 
   .event-drawer {
@@ -6392,6 +7035,27 @@ body[data-active-view="robot-view"] .event-drawer {
     text-align: center;
   }
 
+  .state-machine-page-head {
+    align-items: flex-start;
+  }
+
+  .state-machine-actions {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .state-machine-actions button {
+    flex: 1 1 140px;
+  }
+
+  .state-machine-canvas {
+    min-height: 420px;
+  }
+
+  .state-machine-node-tools {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .workbench {
     grid-template-columns: 1fr;
   }
@@ -6412,6 +7076,24 @@ body[data-active-view="robot-view"] .event-drawer {
   .preview-card div {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .topbar {
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 10px 14px;
+  }
+
+  .status-cluster {
+    flex: 0 0 auto;
+    width: 100%;
+    align-content: flex-start;
+    gap: 6px;
+  }
+
+  .top-actions {
+    width: 100%;
+    justify-content: flex-end;
   }
 
   .safety-strip,
@@ -6666,6 +7348,26 @@ body[data-active-view="robot-view"] .event-drawer {
     text-align: left;
   }
 
+  .robot-work-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+  }
+
+  .robot-work-mode-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .robot-work-mode-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .robot-work-mode-tabs button {
+    flex: 0 0 max(88px, 33.333%);
+    padding: 0 10px;
+  }
+
   .metric-grid.robot-map-status-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -6688,6 +7390,14 @@ body[data-active-view="robot-view"] .event-drawer {
   .robot-work-actions #mappingResetButton {
     grid-column: auto;
     grid-row: auto;
+  }
+
+  .mapping-actions.robot-work-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .robot-work-actions #mappingCaptureButton {
+    grid-column: 1 / -1;
   }
 
   .robot-section-row {
@@ -6718,14 +7428,58 @@ body[data-active-view="robot-view"] .event-drawer {
 }
 
 @media (max-width: 520px) {
+  .status-switch,
+  .status-pill.clock {
+    flex: 1 1 96px;
+    min-width: 0;
+  }
+
+  .status-switch {
+    grid-template-columns: minmax(0, auto) 30px;
+    gap: 6px;
+    min-height: 28px;
+    padding: 0 5px 0 9px;
+  }
+
+  .status-switch span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .status-switch i {
+    width: 28px;
+    height: 18px;
+  }
+
+  .status-switch i::before {
+    top: 3px;
+    left: 3px;
+    width: 12px;
+    height: 12px;
+  }
+
+  .status-switch.is-on i::before {
+    left: 13px;
+  }
+
+  .top-actions .icon-button {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0 8px;
+  }
+
   .robot-situation-canvas .robot-stage {
     min-height: 340px;
     height: 58vh;
   }
 
   .robot-layer-toolbar {
+    position: absolute;
+    top: 132px;
+    z-index: 4;
     left: 10px;
     right: 10px;
+    max-width: calc(100% - 20px);
     justify-content: flex-start;
   }
 
@@ -6739,5 +7493,31 @@ body[data-active-view="robot-view"] .event-drawer {
     left: 10px;
     width: calc(100% - 20px);
     min-width: 0;
+  }
+
+  .robot-view-overlay {
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    max-width: none;
+  }
+}
+
+@media (max-width: 860px) {
+  .state-machine-node-main {
+    grid-template-columns: 1fr;
+  }
+
+  .state-machine-node-status {
+    grid-column: auto;
+    width: auto;
+  }
+
+  .state-machine-node-tools {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .state-machine-workspace {
+    min-width: 900px;
   }
 }

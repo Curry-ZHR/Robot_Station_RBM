@@ -219,6 +219,55 @@ const state = {
     failedAt: null,
     lastError: "",
   },
+  stateMachine: {
+    name: "未命名状态机",
+    selectedId: "sm_start",
+    connectingFromId: "",
+    draggingNode: null,
+    library: [],
+    libraryLoaded: false,
+    graphs: [],
+    selectedGraphId: "",
+    modal: null,
+    draftSyncTimer: null,
+    runTimer: null,
+    realRun: {
+      active: false,
+      status: "idle",
+      pollTimer: null,
+    },
+    run: {
+      active: false,
+      status: "idle",
+      currentId: null,
+      completedIds: [],
+      activeEdge: null,
+      edgePath: [],
+      path: [],
+      startedAt: null,
+      completedAt: null,
+    },
+    nodes: [
+      {
+        id: "sm_start",
+        type: "start",
+        title: "Start",
+        x: 70,
+        y: 250,
+        params: {},
+        outgoingIds: [],
+      },
+      {
+        id: "sm_end",
+        type: "end",
+        title: "End",
+        x: 760,
+        y: 250,
+        params: {},
+        outgoingIds: [],
+      },
+    ],
+  },
   localization: {
     status: "idle",
     processStatus: "stopped",
@@ -760,6 +809,102 @@ const robotWorkModalMeta = {
   "navigation-details": { title: "导航详情", kicker: "导航作业", mode: "navigation" },
 };
 
+const stateMachineDraftStorageKey = "robotStation.stateMachineDraft.v1";
+const stateMachineDraftGraphId = "__draft__";
+const stateMachineDraftSyncDelayMs = 800;
+const stateMachineRunDelayMs = 900;
+const stateMachineCanvasSize = {
+  width: 980,
+  height: 620,
+};
+const stateMachineNodeSize = {
+  width: 168,
+  height: 94,
+};
+const stateMachineSystemTypes = {
+  start: {
+    label: "起始",
+    summary: "固定起始状态，不执行任务",
+  },
+  end: {
+    label: "终止",
+    summary: "固定终止状态，不执行任务",
+  },
+};
+const stateMachineTaskTypes = {
+  navigation: {
+    label: "导航",
+    summary: "移动到底盘目标点",
+    fields: [
+      { key: "targetName", label: "目标名称", type: "text", placeholder: "工作台 / 货架 A" },
+      { key: "x", label: "x", type: "number", step: "0.01", unit: "m" },
+      { key: "y", label: "y", type: "number", step: "0.01", unit: "m" },
+      { key: "yawDeg", label: "yaw", type: "number", step: "1", unit: "deg" },
+      {
+        key: "mode",
+        label: "导航模式",
+        type: "select",
+        options: [
+          { value: "lateral", label: "横向优先" },
+          { value: "omni", label: "全向" },
+        ],
+      },
+    ],
+  },
+  grasp: {
+    label: "抓取",
+    summary: "推理抓取或末端位姿抓取",
+    fields: [
+      {
+        key: "graspMethod",
+        label: "抓取方式",
+        type: "select",
+        refresh: true,
+        options: [
+          { value: "inference", label: "推理抓取" },
+          { value: "auto", label: "自动抓取（末端位姿）" },
+        ],
+      },
+      { key: "leftTarget", label: "左臂目标", type: "text", placeholder: "留空表示左臂不参与" },
+      { key: "rightTarget", label: "右臂目标", type: "text", placeholder: "留空表示右臂不参与" },
+      {
+        key: "prompt",
+        label: "抓取提示",
+        type: "text",
+        placeholder: "grasp the item",
+        showWhen: { key: "graspMethod", value: "inference" },
+      },
+      {
+        key: "leftPose",
+        label: "左臂末端位姿",
+        type: "text",
+        placeholder: "x, y, z, roll, pitch, yaw",
+        showWhen: { key: "graspMethod", value: "auto" },
+      },
+      {
+        key: "rightPose",
+        label: "右臂末端位姿",
+        type: "text",
+        placeholder: "x, y, z, roll, pitch, yaw",
+        showWhen: { key: "graspMethod", value: "auto" },
+      },
+    ],
+  },
+  wait: {
+    label: "等待",
+    summary: "延时或等待稳定",
+    fields: [
+      { key: "durationSec", label: "等待时长", type: "number", step: "0.1", min: "0", unit: "s" },
+      { key: "reason", label: "等待原因", type: "text", placeholder: "等待底盘稳定" },
+    ],
+  },
+};
+const stateMachineTaskTypeDefaults = {
+  navigation: { targetName: "", x: 0, y: 0, yawDeg: 0, mode: "lateral" },
+  grasp: { graspMethod: "inference", leftTarget: "", rightTarget: "", prompt: "", leftPose: "", rightPose: "" },
+  wait: { durationSec: 1, reason: "" },
+};
+
 const chassisMotionModeLabels = {
   0: "阿克曼",
   1: "蟹行",
@@ -1096,6 +1241,11 @@ function showView(view) {
   if (view === "data-playback") {
     renderPlayback();
   }
+  if (view === "state-machine") {
+    renderStateMachine();
+    refreshStateMachineLibrary({ silent: true });
+    refreshStateMachineGraphs({ silent: true });
+  }
   if (view === "robot-view") {
     fetchRobotModels({ silent: true });
     refreshMappingStatus({ silent: true });
@@ -1108,6 +1258,1232 @@ function showView(view) {
     resizeRobotViewer();
     updateRobotModelTransforms();
   }, 0);
+}
+
+function cloneStateMachineValue(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function stateMachineNodeById(id) {
+  return state.stateMachine.nodes.find((node) => node.id === id) || null;
+}
+
+function stateMachineSelectedNode() {
+  return stateMachineNodeById(state.stateMachine.selectedId);
+}
+
+function stateMachineTaskMeta(taskType) {
+  return stateMachineTaskTypes[taskType] || stateMachineTaskTypes.navigation;
+}
+
+function stateMachineLibraryById(libraryId) {
+  return state.stateMachine.library.find((entry) => entry.id === libraryId) || null;
+}
+
+function stateMachineLibraryForTask(taskType) {
+  return state.stateMachine.library.filter((entry) => entry.taskType === taskType);
+}
+
+async function stateMachineApiGet(path) {
+  const response = await fetch(`/api/state-machine/${path}`, { cache: "no-store" });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.detail || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function stateMachineApiPost(path, body = {}) {
+  const response = await fetch(`/api/state-machine/${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.detail || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+async function refreshStateMachineLibrary(options = {}) {
+  try {
+    const payload = await stateMachineApiGet("states");
+    state.stateMachine.library = Array.isArray(payload.states) ? payload.states : [];
+    state.stateMachine.libraryLoaded = true;
+    renderStateMachine();
+  } catch (error) {
+    if (!options.silent) addLog("状态机", `状态库加载失败：${error.message}`);
+  }
+}
+
+async function refreshStateMachineGraphs(options = {}) {
+  try {
+    const payload = await stateMachineApiGet("graphs");
+    state.stateMachine.graphs = Array.isArray(payload.graphs) ? payload.graphs : [];
+    if (!state.stateMachine.graphs.some((graph) => graph.id === state.stateMachine.selectedGraphId)) {
+      state.stateMachine.selectedGraphId =
+        state.stateMachine.graphs.find((graph) => graph.id !== stateMachineDraftGraphId)?.id || "";
+    }
+    renderStateMachine();
+  } catch (error) {
+    if (!options.silent) addLog("状态机", `流程列表加载失败：${error.message}`);
+  }
+}
+
+function stateMachineNodeMeta(node) {
+  if (!node) return { label: "--", summary: "" };
+  if (node.type === "start" || node.type === "end") return stateMachineSystemTypes[node.type];
+  return stateMachineTaskMeta(node.taskType);
+}
+
+function createStateMachineSystemNode(type) {
+  return {
+    id: type === "end" ? "sm_end" : "sm_start",
+    type,
+    title: type === "end" ? "End" : "Start",
+    x: type === "end" ? 760 : 70,
+    y: 250,
+    params: {},
+    outgoingIds: [],
+  };
+}
+
+function stateMachineDefaultTaskPosition() {
+  const count = state.stateMachine.nodes.filter((node) => node.type === "task").length;
+  return {
+    x: 260 + (count % 3) * 210,
+    y: 110 + (Math.floor(count / 3) % 3) * 150,
+  };
+}
+
+function clampStateMachineNodePosition(position) {
+  const maxX = stateMachineCanvasSize.width - stateMachineNodeSize.width - 20;
+  const maxY = stateMachineCanvasSize.height - stateMachineNodeSize.height - 20;
+  return {
+    x: clamp(Number(position?.x) || 0, 20, maxX),
+    y: clamp(Number(position?.y) || 0, 20, maxY),
+  };
+}
+
+function createStateMachineNodeFromLibrary(entry, position = null) {
+  const point = clampStateMachineNodePosition(position || stateMachineDefaultTaskPosition());
+  return {
+    id: `sm_node_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    type: "task",
+    taskType: entry.taskType,
+    libraryId: entry.id,
+    title: entry.title,
+    x: point.x,
+    y: point.y,
+    params: cloneStateMachineValue(entry.params || {}),
+    outgoingIds: [],
+  };
+}
+
+function legacyStateMachineTaskType(type) {
+  if (stateMachineTaskTypes[type]) return type;
+  if (type === "inference" || type === "arm") return "grasp";
+  if (type === "check") return "wait";
+  return "navigation";
+}
+
+function normalizeStateMachineNode(node, index) {
+  const id = String(node?.id || `sm_node_${index}_${Date.now()}`);
+  const position = clampStateMachineNodePosition({
+    x: Number.isFinite(Number(node?.x)) ? Number(node.x) : 240 + (index % 4) * 190,
+    y: Number.isFinite(Number(node?.y)) ? Number(node.y) : 100 + Math.floor(index / 4) * 140,
+  });
+  const outgoingIds = Array.isArray(node?.outgoingIds)
+    ? node.outgoingIds.map(String)
+    : node?.nextId
+      ? [String(node.nextId)]
+      : [];
+
+  if (node?.type === "start" || id === "sm_start") {
+    return {
+      id: "sm_start",
+      type: "start",
+      title: "Start",
+      x: position.x,
+      y: position.y,
+      params: {},
+      outgoingIds,
+    };
+  }
+  if (node?.type === "end" || id === "sm_end") {
+    return {
+      id: "sm_end",
+      type: "end",
+      title: "End",
+      x: position.x,
+      y: position.y,
+      params: {},
+      outgoingIds: [],
+    };
+  }
+
+  const taskType = legacyStateMachineTaskType(node?.taskType || node?.type);
+  const params = {
+    ...cloneStateMachineValue(stateMachineTaskTypeDefaults[taskType] || {}),
+    ...(node && typeof node.params === "object" && node.params ? node.params : {}),
+  };
+  return {
+    id,
+    type: "task",
+    taskType,
+    libraryId: String(node?.libraryId || ""),
+    title: String(node?.title || stateMachineTaskMeta(taskType).label),
+    x: position.x,
+    y: position.y,
+    params,
+    outgoingIds,
+  };
+}
+
+function normalizeStateMachineNodes(nodes) {
+  const rawNodes = Array.isArray(nodes) ? nodes : [];
+  const normalized = rawNodes.map((node, index) => normalizeStateMachineNode(node, index));
+  const byId = new Map();
+  normalized.forEach((node) => {
+    if (!byId.has(node.id)) byId.set(node.id, node);
+  });
+  if (!byId.has("sm_start")) byId.set("sm_start", createStateMachineSystemNode("start"));
+  if (!byId.has("sm_end")) byId.set("sm_end", createStateMachineSystemNode("end"));
+
+  const result = Array.from(byId.values());
+  const ids = new Set(result.map((node) => node.id));
+  result.forEach((node) => {
+    node.outgoingIds = node.type === "end"
+      ? []
+      : Array.from(new Set((node.outgoingIds || []).filter((id) => ids.has(id) && id !== node.id && id !== "sm_start")));
+  });
+  return result;
+}
+
+function ensureStateMachineGraph() {
+  state.stateMachine.nodes = normalizeStateMachineNodes(state.stateMachine.nodes);
+  if (!stateMachineNodeById(state.stateMachine.selectedId)) state.stateMachine.selectedId = "sm_start";
+  if (!stateMachineNodeById(state.stateMachine.connectingFromId)) state.stateMachine.connectingFromId = "";
+}
+
+function stateMachineSnapshot() {
+  ensureStateMachineGraph();
+  return {
+    version: 2,
+    name: state.stateMachine.name || "未命名状态机",
+    semantics: {
+      multipleOutgoing: "random",
+      fixedStates: ["sm_start", "sm_end"],
+    },
+    canvas: { ...stateMachineCanvasSize },
+    nodes: state.stateMachine.nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      taskType: node.taskType || null,
+      libraryId: node.libraryId || null,
+      title: node.title,
+      x: node.x,
+      y: node.y,
+      params: cloneStateMachineValue(node.params || {}),
+      outgoingIds: [...(node.outgoingIds || [])],
+    })),
+  };
+}
+
+function saveStateMachineDraft() {
+  try {
+    localStorage.setItem(stateMachineDraftStorageKey, JSON.stringify(stateMachineSnapshot()));
+  } catch (error) {
+    console.warn("Failed to save state machine draft", error);
+  }
+  scheduleStateMachineDraftSync();
+}
+
+function scheduleStateMachineDraftSync() {
+  window.clearTimeout(state.stateMachine.draftSyncTimer);
+  state.stateMachine.draftSyncTimer = window.setTimeout(async () => {
+    try {
+      const snapshot = stateMachineSnapshot();
+      await stateMachineApiPost("graphs/save", {
+        id: stateMachineDraftGraphId,
+        name: snapshot.name,
+        nodes: snapshot.nodes,
+      });
+    } catch (error) {
+      console.warn("Failed to sync state machine draft to backend", error);
+    }
+  }, stateMachineDraftSyncDelayMs);
+}
+
+function applyStateMachineSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || !Array.isArray(snapshot.nodes)) return false;
+  state.stateMachine.name = String(snapshot.name || "未命名状态机");
+  state.stateMachine.nodes = normalizeStateMachineNodes(snapshot.nodes);
+  state.stateMachine.selectedId = stateMachineNodeById(snapshot.selectedId)?.id || "sm_start";
+  return true;
+}
+
+function loadStateMachineState() {
+  let hadLocalDraft = false;
+  try {
+    const draft = JSON.parse(localStorage.getItem(stateMachineDraftStorageKey) || "null");
+    hadLocalDraft = applyStateMachineSnapshot(draft);
+  } catch (error) {
+    console.warn("Failed to load state machine draft", error);
+  }
+  ensureStateMachineGraph();
+  return hadLocalDraft;
+}
+
+async function restoreStateMachineDraftFromBackend() {
+  try {
+    const payload = await stateMachineApiGet("graphs");
+    state.stateMachine.graphs = Array.isArray(payload.graphs) ? payload.graphs : [];
+    if (!state.stateMachine.selectedGraphId) {
+      state.stateMachine.selectedGraphId =
+        state.stateMachine.graphs.find((graph) => graph.id !== stateMachineDraftGraphId)?.id || "";
+    }
+    const draft = state.stateMachine.graphs.find((graph) => graph.id === stateMachineDraftGraphId);
+    if (draft && applyStateMachineSnapshot(draft)) {
+      ensureStateMachineGraph();
+      try {
+        localStorage.setItem(stateMachineDraftStorageKey, JSON.stringify(stateMachineSnapshot()));
+      } catch (error) {
+        console.warn("Failed to cache state machine draft", error);
+      }
+    }
+    renderStateMachine();
+  } catch (error) {
+    console.warn("Failed to restore state machine draft from backend", error);
+  }
+}
+
+function resetStateMachineRun() {
+  window.clearTimeout(state.stateMachine.runTimer);
+  state.stateMachine.runTimer = null;
+  state.stateMachine.run = {
+    active: false,
+    status: "idle",
+    currentId: null,
+    completedIds: [],
+    activeEdge: null,
+    edgePath: [],
+    path: [],
+    startedAt: null,
+    completedAt: null,
+  };
+}
+
+function mutateStateMachine(options = {}) {
+  if (!options.keepRun) stopStateMachinePreview({ quiet: true });
+  ensureStateMachineGraph();
+  saveStateMachineDraft();
+  renderStateMachine();
+}
+
+function addStateMachineTaskNode(libraryId, position = null) {
+  const entry = stateMachineLibraryById(libraryId);
+  if (!entry) return;
+  const node = createStateMachineNodeFromLibrary(entry, position);
+  state.stateMachine.nodes.push(node);
+  state.stateMachine.selectedId = node.id;
+  addLog("状态机", `已添加 ${stateMachineTaskMeta(node.taskType).label}状态：${node.title}`);
+  mutateStateMachine();
+}
+
+function deleteStateMachineNode(id) {
+  const node = stateMachineNodeById(id);
+  if (!node || node.type !== "task") return;
+  state.stateMachine.nodes.forEach((item) => {
+    item.outgoingIds = (item.outgoingIds || []).filter((targetId) => targetId !== id);
+  });
+  state.stateMachine.nodes = state.stateMachine.nodes.filter((item) => item.id !== id);
+  state.stateMachine.selectedId = "sm_start";
+  addLog("状态机", `已删除任务 state：${node.title}`);
+  mutateStateMachine();
+}
+
+function duplicateStateMachineNode(id) {
+  const node = stateMachineNodeById(id);
+  if (!node || node.type !== "task") return;
+  const point = clampStateMachineNodePosition({ x: node.x + 44, y: node.y + 44 });
+  const copy = {
+    ...cloneStateMachineValue(node),
+    id: `sm_node_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    title: `${node.title} 副本`,
+    x: point.x,
+    y: point.y,
+    outgoingIds: [],
+  };
+  state.stateMachine.nodes.push(copy);
+  state.stateMachine.selectedId = copy.id;
+  addLog("状态机", `已复制任务 state：${node.title}`);
+  mutateStateMachine();
+}
+
+function connectStateMachineNodes(fromId, toId, options = {}) {
+  const source = stateMachineNodeById(fromId);
+  const target = stateMachineNodeById(toId);
+  if (!source || !target || source.id === target.id || source.type === "end" || target.type === "start") return false;
+  source.outgoingIds = Array.isArray(source.outgoingIds) ? source.outgoingIds : [];
+  if (!source.outgoingIds.includes(target.id)) {
+    source.outgoingIds.push(target.id);
+    addLog("状态机", `${source.title} → ${target.title}`);
+  }
+  if (!options.keepConnecting) state.stateMachine.connectingFromId = "";
+  state.stateMachine.selectedId = target.id;
+  mutateStateMachine();
+  return true;
+}
+
+function disconnectStateMachineNodes(fromId, toId) {
+  const source = stateMachineNodeById(fromId);
+  const target = stateMachineNodeById(toId);
+  if (!source) return;
+  source.outgoingIds = (source.outgoingIds || []).filter((id) => id !== toId);
+  addLog("状态机", `已移除连线：${source.title} → ${target?.title || toId}`);
+  mutateStateMachine();
+}
+
+function updateStateMachineName(value) {
+  state.stateMachine.name = String(value || "").trim() || "未命名状态机";
+  saveStateMachineDraft();
+  renderStateMachine();
+}
+
+function parseStateMachineParamValue(input) {
+  if (input.type === "number") {
+    if (input.value === "") return null;
+    const parsed = Number(input.value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return input.value;
+}
+
+function stateMachineParamSummary(node) {
+  if (!node) return "--";
+  if (node.type === "start") return "固定起始项";
+  if (node.type === "end") return "固定终止项";
+  const params = node.params || {};
+  if (node.taskType === "navigation") {
+    const target = params.targetName || "目标点";
+    const x = Number(params.x);
+    const y = Number(params.y);
+    const yaw = Number(params.yawDeg);
+    const pose = [x, y, yaw].every(Number.isFinite) ? `${x.toFixed(2)}, ${y.toFixed(2)}, ${yaw.toFixed(1)} deg` : "pose 未完整";
+    return `${target} / ${pose}`;
+  }
+  if (node.taskType === "grasp") {
+    const method = params.graspMethod === "auto" ? "自动(位姿)" : "推理";
+    const arms = [
+      params.leftTarget ? `左:${params.leftTarget}` : "",
+      params.rightTarget ? `右:${params.rightTarget}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ") || "未配置目标";
+    return `${method} / ${arms}`;
+  }
+  if (node.taskType === "wait") return `${params.durationSec ?? 0}s / ${params.reason || "等待"}`;
+  return stateMachineTaskMeta(node.taskType).summary;
+}
+
+function stateMachineRunState(node) {
+  const run = state.stateMachine.run;
+  if (run.currentId === node.id) return { label: "运行中", className: "is-running" };
+  if (run.completedIds.includes(node.id)) return { label: "完成", className: "is-complete" };
+  return { label: node.type === "task" ? "待执行" : "固定", className: "is-pending" };
+}
+
+function stateMachineNodeCenter(node) {
+  return {
+    x: node.x + stateMachineNodeSize.width / 2,
+    y: node.y + stateMachineNodeSize.height / 2,
+  };
+}
+
+const stateMachineSideNormals = {
+  left: { x: -1, y: 0 },
+  right: { x: 1, y: 0 },
+  top: { x: 0, y: -1 },
+  bottom: { x: 0, y: 1 },
+};
+
+function stateMachineAnchorPoint(node, side, gap = 0) {
+  const width = stateMachineNodeSize.width;
+  const height = stateMachineNodeSize.height;
+  if (side === "left") return { x: node.x - gap, y: node.y + height / 2 };
+  if (side === "right") return { x: node.x + width + gap, y: node.y + height / 2 };
+  if (side === "top") return { x: node.x + width / 2, y: node.y - gap };
+  return { x: node.x + width / 2, y: node.y + height + gap };
+}
+
+function stateMachineEdgeGeometry(source, target) {
+  const sourceCenter = stateMachineNodeCenter(source);
+  const targetCenter = stateMachineNodeCenter(target);
+  const dx = targetCenter.x - sourceCenter.x;
+  const dy = targetCenter.y - sourceCenter.y;
+  // Attach to the side facing the other node so the curve (and the arrow head)
+  // stays outside the cards instead of getting covered by them.
+  let sourceSide;
+  let targetSide;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    sourceSide = dx >= 0 ? "right" : "left";
+    targetSide = dx >= 0 ? "left" : "right";
+  } else {
+    sourceSide = dy >= 0 ? "bottom" : "top";
+    targetSide = dy >= 0 ? "top" : "bottom";
+  }
+  const start = stateMachineAnchorPoint(source, sourceSide, 2);
+  const end = stateMachineAnchorPoint(target, targetSide, 9);
+  const reach = clamp(Math.hypot(end.x - start.x, end.y - start.y) * 0.45, 40, 170);
+  const sourceNormal = stateMachineSideNormals[sourceSide];
+  const targetNormal = stateMachineSideNormals[targetSide];
+  const c1 = { x: start.x + sourceNormal.x * reach, y: start.y + sourceNormal.y * reach };
+  const c2 = { x: end.x + targetNormal.x * reach, y: end.y + targetNormal.y * reach };
+  const mid = {
+    x: (start.x + 3 * c1.x + 3 * c2.x + end.x) / 8,
+    y: (start.y + 3 * c1.y + 3 * c2.y + end.y) / 8,
+  };
+  return {
+    path: `M ${start.x} ${start.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${end.x} ${end.y}`,
+    mid,
+  };
+}
+
+function renderStateMachineEdges() {
+  const sm = state.stateMachine;
+  const edgePathKeys = new Set((sm.run.edgePath || []).map((edge) => `${edge.from}->${edge.to}`));
+  const activeEdgeKey = sm.run.activeEdge ? `${sm.run.activeEdge.from}->${sm.run.activeEdge.to}` : "";
+  const edges = [];
+  sm.nodes.forEach((source) => {
+    const outgoing = Array.isArray(source.outgoingIds) ? source.outgoingIds : [];
+    outgoing.forEach((targetId) => {
+      const target = stateMachineNodeById(targetId);
+      if (!target) return;
+      const key = `${source.id}->${target.id}`;
+      const geometry = stateMachineEdgeGeometry(source, target);
+      const randomLabel = outgoing.length > 1
+        ? `<text x="${geometry.mid.x}" y="${geometry.mid.y - 16}" class="state-machine-edge-label">random</text>`
+        : "";
+      edges.push(`
+        <g class="state-machine-edge-line ${edgePathKeys.has(key) ? "is-taken" : ""} ${activeEdgeKey === key ? "is-active" : ""}">
+          <path class="state-machine-edge-hit" d="${geometry.path}"></path>
+          <path class="state-machine-edge-visible" d="${geometry.path}" marker-end="url(#stateMachineArrow)"></path>
+          ${randomLabel}
+          <g
+            class="state-machine-edge-delete"
+            data-sm-edge-from="${escapeHtml(source.id)}"
+            data-sm-edge-to="${escapeHtml(target.id)}"
+            role="button"
+            aria-label="删除连线"
+          >
+            <circle cx="${geometry.mid.x}" cy="${geometry.mid.y}" r="9"></circle>
+            <text x="${geometry.mid.x}" y="${geometry.mid.y + 1}">×</text>
+          </g>
+        </g>
+      `);
+    });
+  });
+  return `
+    <svg class="state-machine-edge-layer" viewBox="0 0 ${stateMachineCanvasSize.width} ${stateMachineCanvasSize.height}">
+      <defs>
+        <marker id="stateMachineArrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 z"></path>
+        </marker>
+      </defs>
+      ${edges.join("")}
+    </svg>
+  `;
+}
+
+function renderStateMachineNodeCard(node) {
+  const meta = stateMachineNodeMeta(node);
+  const selected = state.stateMachine.selectedId === node.id;
+  const connecting = state.stateMachine.connectingFromId === node.id;
+  const runState = stateMachineRunState(node);
+  const outgoing = Array.isArray(node.outgoingIds) ? node.outgoingIds : [];
+  const nodeClass = node.type === "task" ? `is-${node.taskType}` : `is-${node.type}`;
+  const canConnect = node.type !== "end";
+  const outputText = node.type === "end"
+    ? "无出口"
+    : outgoing.length > 1
+      ? `${outgoing.length} 个随机出口`
+      : outgoing.length === 1
+        ? "1 个出口"
+        : "未连接";
+  return `
+    <div
+      class="state-machine-node ${nodeClass} ${selected ? "is-selected" : ""} ${connecting ? "is-connecting" : ""} ${runState.className}"
+      data-sm-node-id="${escapeHtml(node.id)}"
+      style="left:${node.x}px; top:${node.y}px; width:${stateMachineNodeSize.width}px; min-height:${stateMachineNodeSize.height}px;"
+    >
+      <button class="state-machine-node-drag" type="button" data-sm-drag-handle="${escapeHtml(node.id)}" title="拖动">⠿</button>
+      <button class="state-machine-node-main" type="button" data-sm-select="${escapeHtml(node.id)}">
+        <span class="state-machine-node-kicker">${escapeHtml(meta.label)}</span>
+        <strong>${escapeHtml(node.title)}</strong>
+        <small>${escapeHtml(stateMachineParamSummary(node))}</small>
+      </button>
+      <div class="state-machine-node-footer">
+        <span class="state-machine-node-status">${escapeHtml(runState.label)}</span>
+        <span class="state-machine-node-outputs">${escapeHtml(outputText)}</span>
+      </div>
+      <div class="state-machine-node-tools" aria-label="state 操作">
+        ${canConnect ? `<button type="button" data-sm-connect-from="${escapeHtml(node.id)}">${connecting ? "选择目标" : "连线"}</button>` : ""}
+        ${node.type === "task" ? `<button type="button" data-sm-edit="${escapeHtml(node.id)}">编辑</button>` : ""}
+        ${node.type === "task" ? `<button type="button" data-sm-duplicate="${escapeHtml(node.id)}">复制</button>` : ""}
+        ${node.type === "task" ? `<button type="button" data-sm-delete="${escapeHtml(node.id)}">删除</button>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderStateMachineModalField(field, value) {
+  const label = `${field.label}${field.unit ? ` (${field.unit})` : ""}`;
+  const fieldValue = value ?? "";
+  if (field.type === "select") {
+    const options = (field.options || [])
+      .map((option) => `<option value="${escapeHtml(option.value)}" ${String(fieldValue) === String(option.value) ? "selected" : ""}>${escapeHtml(option.label)}</option>`)
+      .join("");
+    return `
+      <label>
+        <span class="field-label">${escapeHtml(label)}</span>
+        <select data-sm-modal-field="${escapeHtml(field.key)}">${options}</select>
+      </label>
+    `;
+  }
+  return `
+    <label>
+      <span class="field-label">${escapeHtml(label)}</span>
+      <input
+        data-sm-modal-field="${escapeHtml(field.key)}"
+        type="${field.type === "number" ? "number" : "text"}"
+        value="${escapeHtml(fieldValue)}"
+        ${field.step ? `step="${escapeHtml(field.step)}"` : ""}
+        ${field.min ? `min="${escapeHtml(field.min)}"` : ""}
+        ${field.placeholder ? `placeholder="${escapeHtml(field.placeholder)}"` : ""}
+        ${field.type === "number" ? "inputmode=\"decimal\"" : ""}
+      >
+    </label>
+  `;
+}
+
+function stateMachineModalVisibleFields(taskType, params) {
+  return (stateMachineTaskMeta(taskType).fields || []).filter((field) => {
+    if (!field.showWhen) return true;
+    return String(params?.[field.showWhen.key] ?? "") === String(field.showWhen.value);
+  });
+}
+
+function renderStateMachineModalForm() {
+  const config = state.stateMachine.modal;
+  const form = $("#stateMachineModalForm");
+  if (!config || !form) return;
+  const fields = stateMachineModalVisibleFields(config.taskType, config.params);
+  form.innerHTML = `
+    <label class="state-machine-modal-title-field">
+      <span class="field-label">状态名</span>
+      <input data-sm-modal-field="__title" type="text" value="${escapeHtml(config.title || "")}" placeholder="例如：靠近货柜">
+    </label>
+    ${fields.map((field) => renderStateMachineModalField(field, config.params?.[field.key])).join("")}
+  `;
+}
+
+function openStateMachineModal(config) {
+  state.stateMachine.modal = config;
+  const modal = $("#stateMachineModal");
+  if (!modal) return;
+  const meta = stateMachineTaskMeta(config.taskType);
+  setText("#stateMachineModalKicker", `${meta.label} / ${meta.summary}`);
+  setText("#stateMachineModalTitle", config.mode === "edit-node" ? "编辑状态" : "新建状态");
+  renderStateMachineModalForm();
+  modal.hidden = false;
+  window.setTimeout(() => $("#stateMachineModalForm [data-sm-modal-field='__title']")?.focus(), 0);
+}
+
+function handleStateMachineModalChange(event) {
+  const config = state.stateMachine.modal;
+  const target = event.target;
+  if (!config || !target?.dataset?.smModalField) return;
+  const values = readStateMachineModalValues();
+  if (values) {
+    config.title = values.title;
+    config.params = { ...config.params, ...values.params };
+  }
+  const field = (stateMachineTaskMeta(config.taskType).fields || []).find((item) => item.key === target.dataset.smModalField);
+  if (field?.refresh) renderStateMachineModalForm();
+}
+
+function closeStateMachineModal() {
+  state.stateMachine.modal = null;
+  const modal = $("#stateMachineModal");
+  if (modal) modal.hidden = true;
+}
+
+function readStateMachineModalValues() {
+  const form = $("#stateMachineModalForm");
+  if (!form) return null;
+  const titleInput = form.querySelector("[data-sm-modal-field='__title']");
+  const title = String(titleInput?.value || "").trim();
+  const params = {};
+  form.querySelectorAll("[data-sm-modal-field]").forEach((input) => {
+    const key = input.dataset.smModalField;
+    if (key === "__title") return;
+    params[key] = parseStateMachineParamValue(input);
+  });
+  return { title, params };
+}
+
+async function submitStateMachineModal() {
+  const config = state.stateMachine.modal;
+  if (!config) return;
+  const values = readStateMachineModalValues();
+  if (!values) return;
+  if (!values.title) {
+    addLog("状态机", "状态名不能为空");
+    $("#stateMachineModalForm [data-sm-modal-field='__title']")?.focus();
+    return;
+  }
+  // Merge over the modal params so values of fields hidden by the current
+  // graspMethod selection are preserved instead of dropped.
+  const params = { ...config.params, ...values.params };
+
+  if (config.mode === "edit-node") {
+    const node = stateMachineNodeById(config.nodeId);
+    if (node && node.type === "task") {
+      node.title = values.title;
+      node.params = params;
+      addLog("状态机", `状态已更新：${node.title}`);
+      mutateStateMachine();
+    }
+    closeStateMachineModal();
+    return;
+  }
+
+  try {
+    const payload = await stateMachineApiPost("states/save", {
+      taskType: config.taskType,
+      title: values.title,
+      params,
+    });
+    if (payload.state) {
+      const existingIndex = state.stateMachine.library.findIndex((entry) => entry.id === payload.state.id);
+      if (existingIndex >= 0) {
+        state.stateMachine.library.splice(existingIndex, 1, payload.state);
+      } else {
+        state.stateMachine.library.push(payload.state);
+      }
+    }
+    addLog("状态机", `状态已保存到状态库：${values.title}`);
+    closeStateMachineModal();
+    renderStateMachine();
+  } catch (error) {
+    addLog("状态机", `状态保存失败：${error.message}`);
+  }
+}
+
+async function deleteStateMachineLibraryEntry(libraryId) {
+  const entry = stateMachineLibraryById(libraryId);
+  if (!entry) return;
+  try {
+    await stateMachineApiPost("states/delete", { id: libraryId });
+    state.stateMachine.library = state.stateMachine.library.filter((item) => item.id !== libraryId);
+    addLog("状态机", `已从状态库删除：${entry.title}`);
+    renderStateMachine();
+  } catch (error) {
+    addLog("状态机", `状态删除失败：${error.message}`);
+  }
+}
+
+function stateMachineLibrarySummary(entry) {
+  return stateMachineParamSummary({ type: "task", taskType: entry.taskType, params: entry.params || {} });
+}
+
+function renderStateMachineTaskLibrary() {
+  const library = $("#stateMachineNodeLibrary");
+  if (!library) return;
+  library.innerHTML = Object.entries(stateMachineTaskTypes)
+    .map(([taskType, taskMeta]) => {
+      const entries = stateMachineLibraryForTask(taskType)
+        .map(
+          (entry) => `
+            <div class="state-machine-library-item">
+              <button type="button" draggable="true" data-sm-library-id="${escapeHtml(entry.id)}">
+                <strong>${escapeHtml(entry.title)}</strong>
+                <span>${escapeHtml(stateMachineLibrarySummary(entry))}</span>
+              </button>
+              <button type="button" class="state-machine-library-remove" data-sm-library-remove="${escapeHtml(entry.id)}" title="从状态库删除" aria-label="从状态库删除">×</button>
+            </div>
+          `,
+        )
+        .join("");
+      const emptyHint = state.stateMachine.libraryLoaded
+        ? `<div class="state-machine-library-empty">点击 + 新建${taskMeta.label}状态</div>`
+        : `<div class="state-machine-library-empty">状态库加载中…</div>`;
+      return `
+        <section class="state-machine-task-group">
+          <div class="state-machine-task-group-title">
+            <div>
+              <strong>${escapeHtml(taskMeta.label)}</strong>
+              <span>${escapeHtml(taskMeta.summary)}</span>
+            </div>
+            <button type="button" class="state-machine-task-add" data-sm-add-type="${escapeHtml(taskType)}" title="新建${escapeHtml(taskMeta.label)}状态" aria-label="新建${escapeHtml(taskMeta.label)}状态">＋</button>
+          </div>
+          <div class="state-machine-task-buttons">${entries || emptyHint}</div>
+        </section>
+      `;
+    })
+    .join("");
+}
+
+function renderStateMachineGraphBar() {
+  const sm = state.stateMachine;
+  const select = $("#stateMachineGraphSelect");
+  if (!select) return;
+  const graphs = sm.graphs.filter((graph) => graph.id !== stateMachineDraftGraphId);
+  select.innerHTML = graphs.length
+    ? graphs
+        .map((graph) => `<option value="${escapeHtml(graph.id)}" ${sm.selectedGraphId === graph.id ? "selected" : ""}>${escapeHtml(graph.name || graph.id)}</option>`)
+        .join("")
+    : `<option value="">暂无已保存流程</option>`;
+  select.disabled = graphs.length === 0;
+  const loadButton = $("#stateMachineGraphLoadButton");
+  if (loadButton) loadButton.disabled = !graphs.length || !sm.selectedGraphId;
+  const deleteButton = $("#stateMachineGraphDeleteButton");
+  if (deleteButton) deleteButton.disabled = !graphs.length || !sm.selectedGraphId;
+}
+
+async function saveStateMachineGraphToBackend() {
+  const snapshot = stateMachineSnapshot();
+  try {
+    const payload = await stateMachineApiPost("graphs/save", {
+      name: snapshot.name,
+      nodes: snapshot.nodes,
+    });
+    if (payload.graph?.id) state.stateMachine.selectedGraphId = payload.graph.id;
+    addLog("状态机", `流程已保存到后端：${snapshot.name}`);
+    await refreshStateMachineGraphs({ silent: true });
+  } catch (error) {
+    addLog("状态机", `流程保存失败：${error.message}`);
+  }
+}
+
+function loadStateMachineGraphFromBackend() {
+  const sm = state.stateMachine;
+  const graph = sm.graphs.find((item) => item.id === sm.selectedGraphId);
+  if (!graph) return;
+  stopStateMachinePreview({ quiet: true });
+  applyStateMachineSnapshot(graph);
+  sm.connectingFromId = "";
+  resetStateMachineRun();
+  addLog("状态机", `流程已载入：${graph.name || graph.id}`);
+  saveStateMachineDraft();
+  renderStateMachine();
+}
+
+async function deleteStateMachineGraphFromBackend() {
+  const sm = state.stateMachine;
+  const graph = sm.graphs.find((item) => item.id === sm.selectedGraphId);
+  if (!graph) return;
+  try {
+    await stateMachineApiPost("graphs/delete", { id: graph.id });
+    addLog("状态机", `流程已删除：${graph.name || graph.id}`);
+    await refreshStateMachineGraphs({ silent: true });
+  } catch (error) {
+    addLog("状态机", `流程删除失败：${error.message}`);
+  }
+}
+
+function renderStateMachineCanvas() {
+  const canvas = $("#stateMachineCanvas");
+  if (!canvas) return;
+  ensureStateMachineGraph();
+  const scrollLeft = canvas.scrollLeft;
+  const scrollTop = canvas.scrollTop;
+  canvas.innerHTML = `
+    <div class="state-machine-workspace" style="width:${stateMachineCanvasSize.width}px; height:${stateMachineCanvasSize.height}px;">
+      ${renderStateMachineEdges()}
+      ${state.stateMachine.nodes.map((node) => renderStateMachineNodeCard(node)).join("")}
+    </div>
+  `;
+  canvas.scrollLeft = scrollLeft;
+  canvas.scrollTop = scrollTop;
+}
+
+function renderStateMachine() {
+  const sm = state.stateMachine;
+  ensureStateMachineGraph();
+  renderStateMachineTaskLibrary();
+  const taskCount = sm.nodes.filter((node) => node.type === "task").length;
+  const edgeCount = sm.nodes.reduce((total, node) => total + (node.outgoingIds || []).length, 0);
+  const selected = stateMachineSelectedNode();
+  const nameInput = $("#stateMachineNameInput");
+  if (nameInput && document.activeElement !== nameInput) nameInput.value = sm.name || "";
+  setText("#stateMachineTitle", sm.name || "状态机草稿");
+  setText("#stateMachineSummary", `${taskCount} 个任务 state / ${edgeCount} 条连线 / 多出口随机执行`);
+
+  if (sm.realRun.active) {
+    setStateBadge("#stateMachineBadge", "真实运行中", "ok");
+  } else if (sm.run.active) {
+    setStateBadge("#stateMachineBadge", "预演中", "ok");
+  } else if (sm.run.status === "completed") {
+    setStateBadge("#stateMachineBadge", "预演完成", "ok");
+  } else if (sm.run.status === "stopped") {
+    setStateBadge("#stateMachineBadge", "已停止", "warn");
+  } else if (sm.connectingFromId) {
+    setStateBadge("#stateMachineBadge", "选择目标", "warn");
+  } else {
+    setStateBadge("#stateMachineBadge", selected ? "编辑中" : "待添加", selected ? "idle" : "warn");
+  }
+
+  const hasStartExit = Boolean(stateMachineNodeById("sm_start")?.outgoingIds?.length);
+  const runButton = $("#stateMachineRunButton");
+  if (runButton) runButton.disabled = sm.run.active || sm.realRun.active || !hasStartExit;
+  const stopButton = $("#stateMachineStopButton");
+  if (stopButton) stopButton.disabled = !sm.run.active;
+  const realRunButton = $("#stateMachineRealRunButton");
+  if (realRunButton) realRunButton.disabled = sm.run.active || sm.realRun.active || !hasStartExit;
+  const realStopButton = $("#stateMachineRealStopButton");
+  if (realStopButton) realStopButton.disabled = !sm.realRun.active;
+
+  renderStateMachineCanvas();
+  renderStateMachineGraphBar();
+}
+
+function startStateMachinePreview() {
+  const start = stateMachineNodeById("sm_start");
+  if (!start || state.stateMachine.run.active || state.stateMachine.realRun.active || !start.outgoingIds?.length) return;
+  const sm = state.stateMachine;
+  window.clearTimeout(sm.runTimer);
+  sm.run = {
+    active: true,
+    status: "running",
+    currentId: "sm_start",
+    completedIds: [],
+    activeEdge: null,
+    edgePath: [],
+    path: ["sm_start"],
+    startedAt: formatTime(),
+    completedAt: null,
+  };
+  sm.connectingFromId = "";
+  addLog("状态机", `开始前端预演：${sm.name || "未命名状态机"}`);
+  renderStateMachine();
+  sm.runTimer = window.setTimeout(advanceStateMachinePreview, stateMachineRunDelayMs);
+}
+
+function finishStateMachinePreview(status = "completed", detail = "状态机前端预演完成", options = {}) {
+  const sm = state.stateMachine;
+  window.clearTimeout(sm.runTimer);
+  sm.runTimer = null;
+  const wasActive = sm.run.active;
+  sm.run.active = false;
+  sm.run.status = status;
+  sm.run.currentId = null;
+  sm.run.activeEdge = null;
+  sm.run.completedAt = formatTime();
+  if (!options.quiet && wasActive) addLog("状态机", detail);
+  renderStateMachine();
+}
+
+function stopStateMachinePreview(options = {}) {
+  if (!state.stateMachine.run.active && !state.stateMachine.runTimer) return;
+  finishStateMachinePreview("stopped", "状态机前端预演已停止", options);
+}
+
+function advanceStateMachinePreview() {
+  const sm = state.stateMachine;
+  if (!sm.run.active) return;
+  const current = stateMachineNodeById(sm.run.currentId);
+  if (!current) {
+    finishStateMachinePreview("stopped", "当前 state 不存在，预演已停止");
+    return;
+  }
+  if (!sm.run.completedIds.includes(current.id)) sm.run.completedIds.push(current.id);
+  if (current.type === "end") {
+    finishStateMachinePreview("completed", "状态机前端预演完成");
+    return;
+  }
+  const outgoing = (current.outgoingIds || []).filter((id) => stateMachineNodeById(id));
+  if (!outgoing.length) {
+    finishStateMachinePreview("stopped", `${current.title} 没有出口，预演已停止`);
+    return;
+  }
+  const nextId = outgoing[Math.floor(Math.random() * outgoing.length)];
+  if (sm.run.path.includes(nextId) && nextId !== "sm_end") {
+    finishStateMachinePreview("stopped", "检测到循环链接，预演已停止");
+    return;
+  }
+  sm.run.activeEdge = { from: current.id, to: nextId };
+  sm.run.edgePath.push({ from: current.id, to: nextId });
+  sm.run.currentId = nextId;
+  sm.run.path.push(nextId);
+  renderStateMachine();
+  sm.runTimer = window.setTimeout(advanceStateMachinePreview, stateMachineRunDelayMs);
+}
+
+function stopStateMachineRunPolling() {
+  window.clearInterval(state.stateMachine.realRun.pollTimer);
+  state.stateMachine.realRun.pollTimer = null;
+}
+
+async function pollStateMachineRunStatus() {
+  const sm = state.stateMachine;
+  try {
+    const payload = await stateMachineApiGet("run/status");
+    const run = payload.run || {};
+    sm.realRun.active = !!run.active;
+    sm.realRun.status = run.status || "idle";
+    sm.run = {
+      ...sm.run,
+      active: false,
+      status: sm.run.status,
+      currentId: run.currentId || null,
+      completedIds: Array.isArray(run.completedIds) ? run.completedIds : [],
+      activeEdge: null,
+      edgePath: Array.isArray(run.edgePath) ? run.edgePath : [],
+      path: Array.isArray(run.path) ? run.path : [],
+    };
+    if (!run.active) {
+      stopStateMachineRunPolling();
+      if (run.status === "completed") addLog("状态机", "真实运行完成");
+      if (run.status === "failed") addLog("状态机", `真实运行失败：${run.error || "未知原因"}`);
+      if (run.status === "stopped") addLog("状态机", "真实运行已停止");
+    }
+    renderStateMachine();
+  } catch (error) {
+    stopStateMachineRunPolling();
+    sm.realRun.active = false;
+    addLog("状态机", `运行状态查询失败：${error.message}`);
+    renderStateMachine();
+  }
+}
+
+async function startStateMachineRealRun() {
+  const sm = state.stateMachine;
+  if (sm.run.active || sm.realRun.active) return;
+  const snapshot = stateMachineSnapshot();
+  try {
+    await stateMachineApiPost("run/start", { name: snapshot.name, nodes: snapshot.nodes });
+    sm.realRun.active = true;
+    sm.realRun.status = "running";
+    addLog("状态机", `真实运行已启动：${snapshot.name}`);
+    stopStateMachineRunPolling();
+    sm.realRun.pollTimer = window.setInterval(pollStateMachineRunStatus, 1000);
+    renderStateMachine();
+  } catch (error) {
+    addLog("状态机", `真实运行启动失败：${error.message}`);
+  }
+}
+
+async function stopStateMachineRealRun() {
+  try {
+    await stateMachineApiPost("run/stop");
+    addLog("状态机", "已请求停止真实运行");
+    pollStateMachineRunStatus();
+  } catch (error) {
+    addLog("状态机", `停止真实运行失败：${error.message}`);
+  }
+}
+
+async function copyStateMachineJson() {
+  const payload = JSON.stringify(stateMachineSnapshot(), null, 2);
+  try {
+    await navigator.clipboard.writeText(payload);
+    addLog("状态机", "状态机 JSON 已复制");
+  } catch (error) {
+    addLog("状态机", `JSON 复制失败：${error.message}`);
+  }
+}
+
+function clearStateMachine() {
+  stopStateMachinePreview({ quiet: true });
+  state.stateMachine.nodes = [createStateMachineSystemNode("start"), createStateMachineSystemNode("end")];
+  state.stateMachine.selectedId = "sm_start";
+  state.stateMachine.connectingFromId = "";
+  resetStateMachineRun();
+  addLog("状态机", "任务 state 已清空，保留 Start / End");
+  saveStateMachineDraft();
+  renderStateMachine();
+}
+
+function stateMachineCanvasPointFromEvent(event) {
+  const rect = stateMachineWorkspaceRect();
+  if (!rect) return stateMachineDefaultTaskPosition();
+  return clampStateMachineNodePosition({
+    x: event.clientX - rect.left - stateMachineNodeSize.width / 2,
+    y: event.clientY - rect.top - stateMachineNodeSize.height / 2,
+  });
+}
+
+function openStateMachineNodeEditor(nodeId) {
+  const node = stateMachineNodeById(nodeId);
+  if (!node || node.type !== "task") return;
+  state.stateMachine.selectedId = node.id;
+  openStateMachineModal({
+    mode: "edit-node",
+    taskType: node.taskType,
+    nodeId: node.id,
+    title: node.title,
+    params: cloneStateMachineValue(node.params || {}),
+  });
+}
+
+function handleStateMachineCanvasClick(event) {
+  const edgeDelete = event.target.closest("[data-sm-edge-from]");
+  if (edgeDelete) {
+    disconnectStateMachineNodes(edgeDelete.dataset.smEdgeFrom, edgeDelete.dataset.smEdgeTo);
+    return;
+  }
+
+  const connectButton = event.target.closest("[data-sm-connect-from]");
+  if (connectButton) {
+    const source = stateMachineNodeById(connectButton.dataset.smConnectFrom);
+    if (source && source.type !== "end") {
+      state.stateMachine.connectingFromId = state.stateMachine.connectingFromId === source.id ? "" : source.id;
+      state.stateMachine.selectedId = source.id;
+      renderStateMachine();
+    }
+    return;
+  }
+
+  const editButton = event.target.closest("[data-sm-edit]");
+  if (editButton) {
+    openStateMachineNodeEditor(editButton.dataset.smEdit);
+    return;
+  }
+  const duplicateButton = event.target.closest("[data-sm-duplicate]");
+  if (duplicateButton) {
+    duplicateStateMachineNode(duplicateButton.dataset.smDuplicate);
+    return;
+  }
+  const deleteButton = event.target.closest("[data-sm-delete]");
+  if (deleteButton) {
+    deleteStateMachineNode(deleteButton.dataset.smDelete);
+    return;
+  }
+  const selectButton = event.target.closest("[data-sm-select]");
+  if (selectButton) {
+    const targetId = selectButton.dataset.smSelect;
+    if (state.stateMachine.connectingFromId && state.stateMachine.connectingFromId !== targetId) {
+      connectStateMachineNodes(state.stateMachine.connectingFromId, targetId);
+      return;
+    }
+    // Skip the re-render when the node is already selected so the second
+    // click of a double-click still lands on the same DOM element.
+    if (state.stateMachine.selectedId !== targetId) {
+      state.stateMachine.selectedId = targetId;
+      renderStateMachine();
+    }
+  }
+}
+
+function handleStateMachineCanvasDoubleClick(event) {
+  const selectButton = event.target.closest("[data-sm-select]");
+  if (!selectButton) return;
+  openStateMachineNodeEditor(selectButton.dataset.smSelect);
+}
+
+function handleStateMachineLibraryClick(event) {
+  const addButton = event.target.closest("[data-sm-add-type]");
+  if (addButton) {
+    const taskType = addButton.dataset.smAddType;
+    openStateMachineModal({
+      mode: "create-library",
+      taskType,
+      title: "",
+      params: cloneStateMachineValue(stateMachineTaskTypeDefaults[taskType] || {}),
+    });
+    return;
+  }
+  const removeButton = event.target.closest("[data-sm-library-remove]");
+  if (removeButton) {
+    deleteStateMachineLibraryEntry(removeButton.dataset.smLibraryRemove);
+    return;
+  }
+  const entryButton = event.target.closest("[data-sm-library-id]");
+  if (!entryButton) return;
+  addStateMachineTaskNode(entryButton.dataset.smLibraryId);
+}
+
+function handleStateMachineLibraryDragStart(event) {
+  const button = event.target.closest("[data-sm-library-id]");
+  if (!button || !event.dataTransfer) return;
+  event.dataTransfer.effectAllowed = "copy";
+  event.dataTransfer.setData("application/x-robot-state-library", button.dataset.smLibraryId);
+  event.dataTransfer.setData("text/plain", button.dataset.smLibraryId);
+}
+
+function handleStateMachineCanvasDrop(event) {
+  const libraryId =
+    event.dataTransfer?.getData("application/x-robot-state-library") ||
+    event.dataTransfer?.getData("text/plain") ||
+    "";
+  if (!libraryId) return;
+  event.preventDefault();
+  addStateMachineTaskNode(libraryId, stateMachineCanvasPointFromEvent(event));
+}
+
+function handleStateMachineCanvasDragOver(event) {
+  if (!event.dataTransfer?.types?.includes("application/x-robot-state-library") && !event.dataTransfer?.types?.includes("text/plain")) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+}
+
+function stateMachineWorkspaceRect() {
+  // Measure the workspace element itself: its rect already moves with the
+  // canvas scroll position, so pointer math stays correct no matter how or
+  // when the canvas scrolls (scrollbars, scroll anchoring, re-renders).
+  return $("#stateMachineCanvas")?.querySelector(".state-machine-workspace")?.getBoundingClientRect() || null;
+}
+
+function startStateMachineNodeDrag(event) {
+  const handle = event.target.closest("[data-sm-drag-handle]");
+  if (!handle || event.button !== 0) return;
+  const node = stateMachineNodeById(handle.dataset.smDragHandle);
+  if (!node) return;
+  event.preventDefault();
+  const rect = stateMachineWorkspaceRect();
+  state.stateMachine.draggingNode = {
+    id: node.id,
+    offsetX: rect ? event.clientX - rect.left - node.x : 0,
+    offsetY: rect ? event.clientY - rect.top - node.y : 0,
+  };
+  if (state.stateMachine.selectedId !== node.id) {
+    state.stateMachine.selectedId = node.id;
+    renderStateMachine();
+  }
+}
+
+function updateStateMachineNodeDrag(event) {
+  const drag = state.stateMachine.draggingNode;
+  if (!drag) return;
+  const rect = stateMachineWorkspaceRect();
+  const node = stateMachineNodeById(drag.id);
+  if (!rect || !node) return;
+  const next = clampStateMachineNodePosition({
+    x: event.clientX - rect.left - drag.offsetX,
+    y: event.clientY - rect.top - drag.offsetY,
+  });
+  node.x = next.x;
+  node.y = next.y;
+  // Move the card in place and redraw only the edge layer; rebuilding the
+  // whole canvas mid-drag would reset the scroll position and break dragging.
+  const canvas = $("#stateMachineCanvas");
+  const card = canvas?.querySelector(`[data-sm-node-id="${node.id}"]`);
+  if (card) {
+    card.style.left = `${next.x}px`;
+    card.style.top = `${next.y}px`;
+  }
+  const edgeLayer = canvas?.querySelector(".state-machine-edge-layer");
+  if (edgeLayer) edgeLayer.outerHTML = renderStateMachineEdges();
+}
+
+function finishStateMachineNodeDrag() {
+  if (!state.stateMachine.draggingNode) return;
+  state.stateMachine.draggingNode = null;
+  saveStateMachineDraft();
+  renderStateMachine();
 }
 
 function renderHealth() {
@@ -9669,6 +11045,41 @@ function bindEvents() {
   $$(".nav-item").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
   $$("[data-view-jump]").forEach((button) => button.addEventListener("click", () => showView(button.dataset.viewJump)));
 
+  $("#stateMachineNodeLibrary")?.addEventListener("click", handleStateMachineLibraryClick);
+  $("#stateMachineNodeLibrary")?.addEventListener("dragstart", handleStateMachineLibraryDragStart);
+  $("#stateMachineCanvas")?.addEventListener("click", handleStateMachineCanvasClick);
+  $("#stateMachineCanvas")?.addEventListener("dblclick", handleStateMachineCanvasDoubleClick);
+  $("#stateMachineCanvas")?.addEventListener("dragover", handleStateMachineCanvasDragOver);
+  $("#stateMachineCanvas")?.addEventListener("drop", handleStateMachineCanvasDrop);
+  $("#stateMachineCanvas")?.addEventListener("pointerdown", startStateMachineNodeDrag);
+  document.addEventListener("pointermove", updateStateMachineNodeDrag);
+  document.addEventListener("pointerup", finishStateMachineNodeDrag);
+  $("#stateMachineNameInput")?.addEventListener("change", (event) => updateStateMachineName(event.currentTarget.value));
+  $("#stateMachineRunButton")?.addEventListener("click", startStateMachinePreview);
+  $("#stateMachineStopButton")?.addEventListener("click", () => stopStateMachinePreview());
+  $("#stateMachineClearButton")?.addEventListener("click", clearStateMachine);
+  $("#stateMachineCopyJsonButton")?.addEventListener("click", copyStateMachineJson);
+  $("#stateMachineGraphSaveButton")?.addEventListener("click", saveStateMachineGraphToBackend);
+  $("#stateMachineGraphLoadButton")?.addEventListener("click", loadStateMachineGraphFromBackend);
+  $("#stateMachineGraphDeleteButton")?.addEventListener("click", deleteStateMachineGraphFromBackend);
+  $("#stateMachineGraphSelect")?.addEventListener("change", (event) => {
+    state.stateMachine.selectedGraphId = event.currentTarget.value;
+    renderStateMachine();
+  });
+  $("#stateMachineRealRunButton")?.addEventListener("click", startStateMachineRealRun);
+  $("#stateMachineRealStopButton")?.addEventListener("click", stopStateMachineRealRun);
+  $("#stateMachineModalClose")?.addEventListener("click", closeStateMachineModal);
+  $("#stateMachineModalCancelButton")?.addEventListener("click", closeStateMachineModal);
+  $("#stateMachineModalSaveButton")?.addEventListener("click", submitStateMachineModal);
+  $("#stateMachineModalForm")?.addEventListener("change", handleStateMachineModalChange);
+  $("#stateMachineModal")?.addEventListener("click", (event) => {
+    if (event.target === event.currentTarget) closeStateMachineModal();
+  });
+  $("#stateMachineModalForm")?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitStateMachineModal();
+  });
+
   $("#drawerToggle").addEventListener("click", () => $("#eventDrawer").classList.toggle("is-open"));
   $("#clearEventsButton").addEventListener("click", () => {
     state.logs = [];
@@ -10055,6 +11466,13 @@ function bindEvents() {
 function init() {
   const activePanel = $(".view.is-active");
   document.body.dataset.activeView = activePanel ? activePanel.dataset.viewPanel : "self-check";
+  const hadLocalDraft = loadStateMachineState();
+  refreshStateMachineLibrary({ silent: true });
+  if (hadLocalDraft) {
+    refreshStateMachineGraphs({ silent: true });
+  } else {
+    restoreStateMachineDraftFromBackend();
+  }
   bindEvents();
   renderHealth();
   renderSelfCheck();
@@ -10076,6 +11494,7 @@ function init() {
   renderCameraFrames();
   renderLidarCloudStatus();
   renderPlayback();
+  renderStateMachine();
   refreshPlaybackStatus({ silent: true });
   renderRobotViewStatus();
   renderMappingStatus();

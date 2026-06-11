@@ -24,6 +24,7 @@
           <button class="nav-item" data-view="robot-view">整机视图</button>
           <button class="nav-item" data-view="sensors">传感器</button>
           <button class="nav-item" data-view="data-playback">数据回放</button>
+          <button class="nav-item" data-view="state-machine">状态机</button>
           <button class="nav-item" data-view="inference">推理</button>
         </nav>
       </aside>
@@ -672,6 +673,84 @@
                     <section class="robot-modal-panel navigation-details-section" data-robot-modal-panel="navigation-details" hidden>
                       <div class="mapping-detail-list navigation-detail-list" id="navigationDetailList"></div>
                     </section>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section class="view state-machine-view" data-view-panel="state-machine">
+              <div class="page-head compact state-machine-page-head">
+                <div>
+                  <p class="eyebrow">任务编排</p>
+                  <h1>状态机编辑器</h1>
+                </div>
+                <div class="button-group state-machine-actions">
+                  <button class="secondary-button" id="stateMachineCopyJsonButton" type="button">复制 JSON</button>
+                  <button class="secondary-button" id="stateMachineClearButton" type="button">清空</button>
+                  <button class="secondary-button" id="stateMachineStopButton" type="button" disabled>停止预演</button>
+                  <button class="secondary-button" id="stateMachineRunButton" type="button">模拟运行</button>
+                  <button class="secondary-button" id="stateMachineRealStopButton" type="button" disabled>停止运行</button>
+                  <button class="primary-button" id="stateMachineRealRunButton" type="button">真实运行</button>
+                </div>
+              </div>
+
+              <div class="state-machine-layout">
+                <article class="panel state-machine-palette">
+                  <div class="panel-head">
+                    <div>
+                      <h2>状态库</h2>
+                      <p>点击加号自定义状态，拖到画布使用</p>
+                    </div>
+                  </div>
+                  <div class="state-machine-node-library" id="stateMachineNodeLibrary"></div>
+                </article>
+
+                <article class="panel state-machine-canvas-panel">
+                  <div class="panel-head state-machine-canvas-head">
+                    <div>
+                      <h2 id="stateMachineTitle">状态机草稿</h2>
+                      <p id="stateMachineSummary">Start / End 固定，多出口随机执行</p>
+                    </div>
+                    <span class="state-badge idle" id="stateMachineBadge">编辑中</span>
+                  </div>
+                  <div class="state-machine-graph-bar">
+                    <label class="state-machine-name-field">
+                      <span class="field-label">流程名称</span>
+                      <input id="stateMachineNameInput" type="text" value="取物流程草稿" autocomplete="off">
+                    </label>
+                    <label class="state-machine-graph-field">
+                      <span class="field-label">已保存流程</span>
+                      <select id="stateMachineGraphSelect"></select>
+                    </label>
+                    <div class="button-group state-machine-graph-actions">
+                      <button class="primary-button" id="stateMachineGraphSaveButton" type="button">保存</button>
+                      <button class="secondary-button" id="stateMachineGraphLoadButton" type="button">载入</button>
+                      <button class="secondary-button" id="stateMachineGraphDeleteButton" type="button">删除</button>
+                    </div>
+                  </div>
+                  <div class="state-machine-canvas-help">
+                    <span>拖拽状态创建节点</span>
+                    <span>点击“连线”后再点目标节点</span>
+                    <span>点连线上的 × 可删除连线</span>
+                    <span>多出口随机选一个执行</span>
+                  </div>
+                  <div class="state-machine-canvas" id="stateMachineCanvas" aria-label="状态机画布"></div>
+                </article>
+              </div>
+
+              <div class="state-machine-modal" id="stateMachineModal" hidden>
+                <div class="state-machine-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="stateMachineModalTitle">
+                  <div class="state-machine-modal-head">
+                    <div>
+                      <p id="stateMachineModalKicker">导航</p>
+                      <h2 id="stateMachineModalTitle">新建状态</h2>
+                    </div>
+                    <button class="icon-button state-machine-modal-close" id="stateMachineModalClose" type="button" aria-label="关闭">×</button>
+                  </div>
+                  <form class="config-form state-machine-modal-form" id="stateMachineModalForm" autocomplete="off"></form>
+                  <div class="button-group state-machine-modal-actions">
+                    <button class="secondary-button" id="stateMachineModalCancelButton" type="button">取消</button>
+                    <button class="primary-button" id="stateMachineModalSaveButton" type="button">保存</button>
                   </div>
                 </div>
               </div>
