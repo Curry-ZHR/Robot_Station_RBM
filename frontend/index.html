@@ -427,6 +427,12 @@
                     <button data-robot-work-mode="navigation" type="button" role="tab" aria-selected="false">导航</button>
                   </div>
 
+                  <div class="navigation-run-actions navigation-top-actions" data-work-content="navigation" hidden>
+                    <button class="primary-button" id="navigationPlanButton" type="button" disabled>预览路径</button>
+                    <button class="primary-button" id="navigationStartButton" type="button" disabled>开始导航</button>
+                    <button class="secondary-button" id="navigationCancelButton" type="button" disabled>停止</button>
+                  </div>
+
                   <div class="mapping-actions robot-work-actions" data-work-content="mapping">
                     <button class="primary-button" id="mappingCaptureButton" type="button" disabled>采集点云</button>
                     <button class="secondary-button" id="mappingStartButton" type="button">新建</button>
@@ -592,14 +598,23 @@
                       </div>
                       <button class="secondary-button robot-section-link" data-robot-modal-toggle="navigation-details" type="button" aria-label="导航详情" aria-expanded="false">导航详情</button>
                     </div>
+                    <form class="config-form navigation-param-form" id="navigationParamsForm" autocomplete="off">
+                      <label>
+                        <span class="field-label">模式<em>mode</em></span>
+                        <select id="navigationModeSelect">
+                          <option value="lateral">横向</option>
+                          <option value="omni">全向</option>
+                        </select>
+                      </label>
+                      <label><span class="field-label">前后限速<em>m/s</em></span><input id="navigationMaxLinearInput" type="number" min="0.01" max="0.20" step="0.01" value="0.20" inputmode="decimal"></label>
+                      <label><span class="field-label">横移限速<em>m/s</em></span><input id="navigationMaxLateralInput" type="number" min="0.01" max="0.15" step="0.01" value="0.15" inputmode="decimal"></label>
+                      <label><span class="field-label">旋转限速<em>rad/s</em></span><input id="navigationMaxAngularInput" type="number" min="0.02" max="0.50" step="0.01" value="0.50" inputmode="decimal"></label>
+                      <label><span class="field-label">位置误差<em>m</em></span><input id="navigationPositionToleranceInput" type="number" min="0.02" max="1.00" step="0.01" value="0.05" inputmode="decimal"></label>
+                      <label><span class="field-label">角度误差<em>deg</em></span><input id="navigationYawToleranceInput" type="number" min="1" max="45" step="1" value="3" inputmode="decimal"></label>
+                      <label><span class="field-label">定位超时<em>s</em></span><input id="navigationLocalizationStaleInput" type="number" min="0.1" max="5" step="0.1" value="0.8" inputmode="decimal"></label>
+                      <label><span class="field-label">控制频率<em>Hz</em></span><input id="navigationControlRateInput" type="number" min="5" max="50" step="1" value="20" inputmode="numeric"></label>
+                    </form>
                     <div class="metric-grid navigation-metrics" id="navigationMetrics"></div>
-                    <div class="navigation-run-actions">
-                      <button class="primary-button" id="navigationPlanButton" type="button" disabled>规划路径</button>
-                      <button class="primary-button" id="navigationStartButton" type="button" disabled>开始导航</button>
-                      <button class="secondary-button" id="navigationPauseButton" type="button" disabled>暂停</button>
-                      <button class="secondary-button" id="navigationResumeButton" type="button" disabled>继续</button>
-                      <button class="secondary-button" id="navigationCancelButton" type="button" disabled>取消</button>
-                    </div>
                   </section>
                 </article>
               </div>

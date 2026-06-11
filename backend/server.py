@@ -30,6 +30,7 @@ from modules.inference import get_inference_manager
 from modules.logger import get_logger, setup_logger
 from modules.localization import get_localization_manager, localization_result_status
 from modules.map import get_mapping_manager, mapping_result_status
+from modules.navigation import get_navigation_manager, navigation_result_status
 from modules.playback import load_playback_dataset, playback_result_status
 from modules.playback_manager import get_playback_manager
 from modules.robot_description import RobotModelError, get_model, list_models, resolve_model_asset
@@ -237,6 +238,34 @@ def api_tail(path, prefix):
     if path.startswith(marker):
         return unquote(path[len(marker):])
     return None
+
+
+def payload_has_nonzero_chassis_velocity(payload):
+    if not isinstance(payload, dict):
+        return False
+    keys = (
+        "linearX",
+        "linear_x",
+        "x",
+        "forward",
+        "linearY",
+        "linear_y",
+        "y",
+        "lateral",
+        "angularZ",
+        "angular_z",
+        "yawRate",
+        "angularVelocity",
+    )
+    for key in keys:
+        if key not in payload:
+            continue
+        try:
+            if abs(float(payload.get(key) or 0.0)) > 1e-6:
+                return True
+        except (TypeError, ValueError):
+            return False
+    return False
 
 
 def query_float(query, key, default=0.0, minimum=0.0, maximum=5.0):
@@ -620,6 +649,21 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 status=404,
             )
             return
+        navigation_tail = api_tail(parsed.path, "/api/navigation")
+        if navigation_tail is not None:
+            if navigation_tail in ("", "status"):
+                result = get_navigation_manager().status()
+                self.write_json(result, status=navigation_result_status(result))
+                return
+            self.write_json(
+                {
+                    "ok": False,
+                    "code": "NAV-ACTION",
+                    "detail": "Navigation GET path must be /api/navigation/status.",
+                },
+                status=404,
+            )
+            return
         if parsed.path == "/api/playback/status":
             self.write_json(get_playback_manager().status())
             return
@@ -672,6 +716,14 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 status=400,
             )
             return
+        if chassis_action in {"cmd_vel", "velocity", "stop"}:
+            should_interrupt = chassis_action == "stop"
+            if not should_interrupt:
+                should_interrupt = payload_has_nonzero_chassis_velocity(payload)
+            if should_interrupt:
+                interrupt_result = get_navigation_manager().interrupt_for_manual_control()
+                if interrupt_result:
+                    log_action_result("Navigation interrupted by chassis control", interrupt_result)
         result = handler(payload)
         if result.get("ok") and not result.get("stale"):
             command = result.get("command")
@@ -766,6 +818,32 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 "ok": False,
                 "code": "INFER-ACTION",
                 "detail": f"Unsupported inference action: {action}",
+            },
+            status=400,
+        )
+
+    def handle_navigation(self, action):
+        manager = get_navigation_manager()
+        if action in ("", "status"):
+            result = manager.status()
+            self.write_json(result, status=navigation_result_status(result))
+            return
+        if action == "start":
+            payload = self.read_json_body()
+            result = manager.start(payload)
+            log_action_result("Navigation start", result)
+            self.write_json(result, status=navigation_result_status(result))
+            return
+        if action == "stop":
+            result = manager.stop()
+            log_action_result("Navigation stop", result)
+            self.write_json(result, status=navigation_result_status(result))
+            return
+        self.write_json(
+            {
+                "ok": False,
+                "code": "NAV-ACTION",
+                "detail": f"Unsupported navigation action: {action}",
             },
             status=400,
         )
@@ -937,6 +1015,10 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         mapping_action = api_tail(parsed.path, "/api/mapping")
         if mapping_action is not None:
             self.handle_mapping(mapping_action)
+            return
+        navigation_action = api_tail(parsed.path, "/api/navigation")
+        if navigation_action is not None:
+            self.handle_navigation(navigation_action)
             return
         if parsed.path == "/api/playback/load":
             payload = self.read_json_body()
