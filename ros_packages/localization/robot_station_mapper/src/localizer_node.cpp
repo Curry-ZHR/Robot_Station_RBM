@@ -8,6 +8,11 @@
 #include <pcl/registration/ndt.h>
 #include <pcl_conversions/pcl_conversions.h>
 
+#ifdef ROBOT_STATION_USE_FAST_GICP_CUDA
+#include <fast_gicp/gicp/fast_vgicp_cuda.hpp>
+#include <fast_gicp/ndt/ndt_cuda.hpp>
+#endif
+
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -39,6 +44,12 @@ using PointT = pcl::PointXYZI;
 using CloudT = pcl::PointCloud<PointT>;
 using Clock = std::chrono::steady_clock;
 
+#ifdef ROBOT_STATION_USE_FAST_GICP_CUDA
+constexpr const char * kRegistrationBackend = "gpu";
+#else
+constexpr const char * kRegistrationBackend = "cpu";
+#endif
+
 struct LocalizerOptions
 {
   std::string map_path;
@@ -60,6 +71,7 @@ struct LocalizerOptions
   double gicp_transformation_epsilon = 0.0005;
   double gicp_euclidean_fitness_epsilon = 0.0005;
   double heartbeat_sec = 1.0;
+  std::string registration_backend = kRegistrationBackend;
 };
 
 struct Pose2D
@@ -336,8 +348,8 @@ private:
     map_points_ = static_cast<int>(map_cloud_->points.size());
     last_error_.clear();
     RCLCPP_INFO(
-      get_logger(), "Loaded localization map %s with %d points", options_.map_path.c_str(),
-      map_points_);
+      get_logger(), "Loaded localization map %s with %d points using %s backend",
+      options_.map_path.c_str(), map_points_, options_.registration_backend.c_str());
   }
 
   void onCloud(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg)
@@ -478,6 +490,36 @@ private:
       return result;
     }
 
+#ifdef ROBOT_STATION_USE_FAST_GICP_CUDA
+    fast_gicp::NDTCuda<PointT, PointT> ndt;
+    ndt.setInputSource(frame.cloud);
+    ndt.setInputTarget(map_cloud_);
+    ndt.setResolution(options_.ndt_resolution);
+    ndt.setMaximumIterations(options_.ndt_max_iterations);
+    ndt.setTransformationEpsilon(options_.ndt_transformation_epsilon);
+    CloudT ndt_output;
+    ndt.align(ndt_output, initial_guess);
+    result.ndt_converged = ndt.hasConverged();
+    result.ndt_fitness = ndt.getFitnessScore();
+    Eigen::Matrix4f gicp_guess = ndt.hasConverged() ? ndt.getFinalTransformation() : initial_guess;
+    if (!matrixFinite(gicp_guess)) {
+      gicp_guess = initial_guess;
+    }
+
+    fast_gicp::FastVGICPCuda<PointT, PointT> gicp;
+    gicp.setInputSource(frame.cloud);
+    gicp.setInputTarget(map_cloud_);
+    gicp.setResolution(options_.gicp_max_correspondence);
+    gicp.setMaximumIterations(options_.gicp_max_iterations);
+    gicp.setMaxCorrespondenceDistance(options_.gicp_max_correspondence);
+    gicp.setTransformationEpsilon(options_.gicp_transformation_epsilon);
+    gicp.setEuclideanFitnessEpsilon(options_.gicp_euclidean_fitness_epsilon);
+    CloudT aligned;
+    gicp.align(aligned, gicp_guess);
+    result.gicp_converged = gicp.hasConverged();
+    result.fitness = gicp.getFitnessScore();
+    result.transform = gicp.getFinalTransformation();
+#else
     pcl::NormalDistributionsTransform<PointT, PointT> ndt;
     ndt.setInputSource(frame.cloud);
     ndt.setInputTarget(map_cloud_);
@@ -506,6 +548,7 @@ private:
     result.gicp_converged = gicp.hasConverged();
     result.fitness = gicp.getFitnessScore();
     result.transform = gicp.getFinalTransformation();
+#endif
     result.ok = result.ndt_converged && result.gicp_converged && matrixFinite(result.transform);
     if (result.ok) {
       const Pose2D pose = poseFromMatrix2D(result.transform);
@@ -599,6 +642,7 @@ private:
         << ",";
     out << "\"mapName\":" << jsonString(options_.map_name) << ",";
     out << "\"mapPath\":" << jsonString(options_.map_path) << ",";
+    out << "\"backend\":" << jsonString(options_.registration_backend) << ",";
     out << "\"frameId\":" << jsonString(options_.map_frame) << ",";
     out << "\"baseFrame\":" << jsonString(options_.base_frame) << ",";
     out << "\"cloudFrame\":" << jsonString(last_cloud_frame_) << ",";

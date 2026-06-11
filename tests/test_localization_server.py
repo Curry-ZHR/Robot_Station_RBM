@@ -40,7 +40,7 @@ def test_localization_status_endpoint(monkeypatch):
 def test_localization_start_and_stop_endpoints(monkeypatch):
     manager = FakeLocalizationManager()
     responses = []
-    handler = _handler("/api/localization/start", {"mapName": "lab_map"})
+    handler = _handler("/api/localization/start", {"mapName": "lab_map", "backend": "gpu"})
     handler.write_json = lambda payload, status=200, headers=None: responses.append((payload, status))
     monkeypatch.setattr(server, "get_localization_manager", lambda: manager)
     monkeypatch.setattr(server, "log_action_result", lambda *args, **kwargs: None)
@@ -51,7 +51,7 @@ def test_localization_start_and_stop_endpoints(monkeypatch):
     handler.write_json = lambda payload, status=200, headers=None: responses.append((payload, status))
     server.RobotStationHandler.do_POST(handler)
 
-    assert manager.started == [{"mapName": "lab_map"}]
+    assert manager.started == [{"mapName": "lab_map", "backend": "gpu"}]
     assert manager.stopped == 1
     assert responses[0] == ({"ok": True, "code": "LOC-STARTED", "map": {"name": "lab_map"}}, 200)
     assert responses[1] == ({"ok": True, "code": "LOC-STOPPED"}, 200)

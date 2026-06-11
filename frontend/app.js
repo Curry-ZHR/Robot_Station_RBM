@@ -150,6 +150,53 @@ const state = {
     mode: "mapping",
     modal: null,
   },
+  navigation: {
+    status: "idle",
+    goalEditMode: false,
+    goalDrag: {
+      active: false,
+      pointerId: null,
+    },
+    targetPose: {
+      x: null,
+      y: null,
+      z: 0,
+      yawDeg: null,
+    },
+    goalMarker: {
+      group: null,
+      arrow: null,
+      ring: null,
+    },
+    pathLayer: {
+      line: null,
+      geometry: null,
+      material: null,
+    },
+    plan: {
+      status: "empty",
+      points: [],
+      distanceM: null,
+      etaSec: null,
+      plannedAt: null,
+      startPose: null,
+      targetSignature: "",
+      stale: false,
+      staleReason: "",
+      planner: "straight-line-preview",
+      cost: null,
+    },
+    running: false,
+    paused: false,
+    progress: 0,
+    remainingDistanceM: null,
+    currentSpeedMps: 0,
+    runTimer: null,
+    startedAt: null,
+    completedAt: null,
+    canceledAt: null,
+    lastError: "",
+  },
   localization: {
     status: "idle",
     processStatus: "stopped",
@@ -164,6 +211,9 @@ const state = {
     mapsLoadedAt: null,
     mapLoadBusy: false,
     loadedMap: "",
+    backend: "cpu",
+    activeBackend: "cpu",
+    availableBackends: [],
     mapPointCount: 0,
     mapSizeBytes: 0,
     mapMtimeMs: null,
@@ -685,6 +735,7 @@ const robotWorkModalMeta = {
   "mapping-details": { title: "建图详情", kicker: "建图作业", mode: "mapping" },
   "model-load": { title: "模型加载详情", kicker: "3D 视口" },
   "localization-advanced": { title: "定位高级信息", kicker: "定位作业", mode: "localization" },
+  "navigation-details": { title: "导航详情", kicker: "导航作业", mode: "navigation" },
 };
 
 const chassisMotionModeLabels = {
@@ -2238,7 +2289,7 @@ function mappingPoseFromTransform(transform = mappingFinalTransform()) {
 function localizationPoseForRobotModel() {
   const localization = state.localization || {};
   const preview = state.mapping.mapPreview;
-  if (state.robotWork.mode !== "localization" || !localization.loadedMap || preview.source !== "localization") return null;
+  if (!["localization", "navigation"].includes(state.robotWork.mode) || !localization.loadedMap || preview.source !== "localization") return null;
   const pose = localization.pose || {};
   const x = localizationNumber(pose.x);
   const y = localizationNumber(pose.y);
@@ -2773,6 +2824,7 @@ function bindRobotViewerControls(surface) {
 
   surface.addEventListener("pointerdown", (event) => {
     if (handleInitialPosePointerDown(event, surface)) return;
+    if (handleNavigationGoalPointerDown(event, surface)) return;
     event.preventDefault();
     controls.dragging = true;
     controls.dragMode = viewerDragMode(event);
@@ -2783,6 +2835,7 @@ function bindRobotViewerControls(surface) {
 
   surface.addEventListener("pointermove", (event) => {
     if (handleInitialPosePointerMove(event, surface)) return;
+    if (handleNavigationGoalPointerMove(event, surface)) return;
     if (!controls.dragging) return;
     const dx = event.clientX - controls.lastX;
     const dy = event.clientY - controls.lastY;
@@ -2799,6 +2852,7 @@ function bindRobotViewerControls(surface) {
 
   const release = (event) => {
     if (handleInitialPosePointerRelease(event, surface)) return;
+    if (handleNavigationGoalPointerRelease(event, surface)) return;
     controls.dragging = false;
     controls.dragMode = "rotate";
     if (surface.hasPointerCapture(event.pointerId)) {
@@ -3398,6 +3452,15 @@ function localizationStatusLabel(value = state.localization.converged) {
   return "待接入";
 }
 
+function cleanLocalizationBackend(value, fallback = "cpu") {
+  const text = String(value || fallback).trim().toLowerCase();
+  return text === "gpu" ? "gpu" : "cpu";
+}
+
+function localizationBackendLabel(value = state.localization.activeBackend || state.localization.backend) {
+  return cleanLocalizationBackend(value) === "gpu" ? "GPU / CUDA" : "CPU / PCL";
+}
+
 function localizationNumber(value) {
   if (value === null || value === undefined || value === "") return null;
   const parsed = Number(value);
@@ -3581,6 +3644,7 @@ function applyLocalizationStatus(result = {}) {
   const process = result.process || {};
   const statusData = result.localizationStatus?.data || null;
   const map = result.map || {};
+  const settings = map.settings || {};
   localization.statusPayload = result;
   localization.statusUpdatedAt = Date.now();
   localization.running = Boolean(result.running || process.running);
@@ -3589,6 +3653,12 @@ function applyLocalizationStatus(result = {}) {
   if (!localization.running && localization.status === "running") localization.status = "stopped";
   if (map.name) {
     localization.loadedMap = map.name;
+  }
+  localization.availableBackends = Array.isArray(result.availableBackends) ? result.availableBackends : localization.availableBackends;
+  const responseBackend = result.backend || statusData?.backend || settings.backend;
+  if (responseBackend) {
+    localization.activeBackend = cleanLocalizationBackend(responseBackend, localization.activeBackend);
+    if (localization.running) localization.backend = localization.activeBackend;
   }
 
   const pose = poseFromLocalizationResponse(result);
@@ -3612,6 +3682,10 @@ function applyLocalizationStatus(result = {}) {
     (result.ok === false ? result.detail || result.code || "定位状态异常" : "");
 
   renderLocalizationStatus();
+  if (state.robotWork.mode === "navigation") {
+    refreshNavigationPlanFreshness();
+    renderNavigationStatus();
+  }
   if (state.robotWork.mode === "localization") renderRobotWorkMode();
   scheduleLocalizationStatusPoll();
 }
@@ -3636,7 +3710,7 @@ async function refreshLocalizationStatus(options = {}) {
 function scheduleLocalizationStatusPoll(delayMs = null) {
   const localization = state.localization;
   window.clearTimeout(localization.statusTimer);
-  const shouldPoll = state.robotWork.mode === "localization" || localization.running;
+  const shouldPoll = state.robotWork.mode === "localization" || state.robotWork.mode === "navigation" || localization.running;
   if (!shouldPoll) {
     localization.statusTimer = null;
     return;
@@ -3666,10 +3740,19 @@ async function startLocalization() {
   localization.lastError = "";
   localization.status = "starting";
   localization.running = true;
+  localization.activeBackend = cleanLocalizationBackend(localization.backend);
   renderLocalizationStatus();
   try {
-    const result = await localizationPost("start", { mapName: localization.loadedMap });
-    addLog("定位", result.ok ? `定位节点已启动：${localization.loadedMap}` : `定位启动失败：${result.detail || result.code}`);
+    const result = await localizationPost("start", {
+      mapName: localization.loadedMap,
+      backend: localization.activeBackend,
+    });
+    addLog(
+      "定位",
+      result.ok
+        ? `定位节点已启动：${localization.loadedMap} / ${localizationBackendLabel(result.backend || localization.activeBackend)}`
+        : `定位启动失败：${result.detail || result.code}`,
+    );
   } catch (error) {
     localization.running = false;
     localization.status = "error";
@@ -3736,6 +3819,13 @@ function renderLocalizationMapControls() {
     loadButton.textContent = localization.mapLoadBusy ? "加载中" : localization.loadedMap === selected?.name ? "重新加载" : "加载地图";
   }
 
+  const backendSelect = $("#localizationBackendSelect");
+  if (backendSelect) {
+    backendSelect.disabled = localization.running || localization.status === "starting";
+    backendSelect.value = cleanLocalizationBackend(localization.running ? localization.activeBackend : localization.backend);
+    backendSelect.title = localizationBackendLabel(backendSelect.value);
+  }
+
   const startButton = $("#localizationStartButton");
   if (startButton) {
     startButton.disabled = !localizationCanStart() || localization.statusLoading;
@@ -3793,9 +3883,20 @@ function selectLocalizationMap(name) {
   localization.selectedMap = nextName;
   localization.lastError = "";
   localization.status = nextName ? "selected" : "idle";
+  resetNavigationForMapChange();
   if (state.mapping.mapPreview.source === "localization") clearMappingMapPreview();
   renderLocalizationStatus();
-  if (state.robotWork.mode === "localization") renderRobotWorkMode();
+  if (state.robotWork.mode === "localization" || state.robotWork.mode === "navigation") renderRobotWorkMode();
+}
+
+function selectLocalizationBackend(value) {
+  const localization = state.localization;
+  if (localization.running) return;
+  localization.backend = cleanLocalizationBackend(value);
+  localization.activeBackend = localization.backend;
+  localization.lastError = "";
+  renderLocalizationStatus();
+  if (state.robotWork.mode === "localization" || state.robotWork.mode === "navigation") renderRobotWorkMode();
 }
 
 function robotOdomPoseText() {
@@ -3832,6 +3933,25 @@ function renderRobotFooterRows(rows) {
 }
 
 function renderRobotFooterStatus() {
+  if (state.robotWork.mode === "navigation") {
+    const navigation = state.navigation;
+    const target = navigationTargetValues();
+    const start = navigationStartPose();
+    const pathState = navigation.plan?.stale
+      ? "需重新规划"
+      : navigation.plan?.status === "planned"
+        ? formatNavigationDistance(navigation.plan.distanceM)
+        : "--";
+    renderRobotFooterRows([
+      ["地图", state.localization.loadedMap || state.localization.selectedMap || "--"],
+      ["当前位姿", navigationPoseText(start)],
+      ["目标", navigationPoseText(target)],
+      ["路径", pathState],
+      ["状态", navigationStatusText()],
+    ]);
+    return;
+  }
+
   if (state.robotWork.mode === "localization") {
     const localization = state.localization;
     const pose = localization.pose || {};
@@ -4112,6 +4232,749 @@ function updateInitialPoseFromInputs() {
   renderLocalizationStatus();
 }
 
+function navigationMapReady() {
+  const preview = state.mapping.mapPreview;
+  return Boolean(
+    state.robotWork.mode === "navigation" &&
+      state.localization.loadedMap &&
+      preview.hasFrame &&
+      preview.source === "localization",
+  );
+}
+
+function navigationTargetValues() {
+  const pose = state.navigation.targetPose || {};
+  const x = localizationNumber(pose.x);
+  const y = localizationNumber(pose.y);
+  const yawDeg = normalizeInitialPoseYawDeg(pose.yawDeg);
+  if (x === null || y === null || yawDeg === null) return null;
+  return {
+    x,
+    y,
+    z: 0,
+    yawDeg,
+  };
+}
+
+function navigationStartPose() {
+  const localization = state.localization;
+  const pose = localization.pose || {};
+  const x = localizationNumber(pose.x);
+  const y = localizationNumber(pose.y);
+  const yawDeg = normalizeInitialPoseYawDeg(pose.yawDeg);
+  if (!localization.running || x === null || y === null || yawDeg === null) return null;
+  return {
+    x,
+    y,
+    z: localizationNumber(pose.z) ?? 0,
+    yawDeg,
+  };
+}
+
+function navigationPoseText(pose, emptyText = "--") {
+  if (!pose) return emptyText;
+  const x = localizationNumber(pose.x);
+  const y = localizationNumber(pose.y);
+  const yawDeg = normalizeInitialPoseYawDeg(pose.yawDeg);
+  if (x === null || y === null || yawDeg === null) return emptyText;
+  return `${x.toFixed(2)}, ${y.toFixed(2)}, ${yawDeg.toFixed(1)} deg`;
+}
+
+function navigationPoseSignature(pose) {
+  if (!pose) return "";
+  const x = localizationNumber(pose.x);
+  const y = localizationNumber(pose.y);
+  const yawDeg = normalizeInitialPoseYawDeg(pose.yawDeg);
+  if (x === null || y === null || yawDeg === null) return "";
+  return `${x.toFixed(3)}:${y.toFixed(3)}:${yawDeg.toFixed(1)}`;
+}
+
+function navigationPoseDriftMeters(a, b) {
+  if (!a || !b) return Infinity;
+  const ax = localizationNumber(a.x);
+  const ay = localizationNumber(a.y);
+  const bx = localizationNumber(b.x);
+  const by = localizationNumber(b.y);
+  if ([ax, ay, bx, by].some((value) => value === null)) return Infinity;
+  return Math.hypot(ax - bx, ay - by);
+}
+
+function navigationYawDriftDeg(a, b) {
+  const ayaw = normalizeInitialPoseYawDeg(a?.yawDeg);
+  const byaw = normalizeInitialPoseYawDeg(b?.yawDeg);
+  if (ayaw === null || byaw === null) return Infinity;
+  return Math.abs(normalizeInitialPoseYawDeg(ayaw - byaw));
+}
+
+function navigationCanEditGoal() {
+  return Boolean(navigationMapReady() && !state.navigation.running && !state.navigation.paused);
+}
+
+function navigationCanPlan() {
+  return Boolean(
+    navigationMapReady() &&
+      navigationTargetValues() &&
+      navigationStartPose() &&
+      !state.navigation.running &&
+      !state.navigation.paused,
+  );
+}
+
+function navigationPlanIsFresh() {
+  const navigation = state.navigation;
+  const plan = navigation.plan || {};
+  if (plan.status !== "planned" || plan.stale) return false;
+  if (navigationPoseSignature(navigationTargetValues()) !== plan.targetSignature) return false;
+  const start = navigationStartPose();
+  if (!start || !plan.startPose) return false;
+  return navigationPoseDriftMeters(start, plan.startPose) <= 0.15 && navigationYawDriftDeg(start, plan.startPose) <= 8;
+}
+
+function navigationCanStart() {
+  const navigation = state.navigation;
+  return Boolean(navigationCanPlan() && navigation.status === "planned" && navigationPlanIsFresh());
+}
+
+function resetNavigationGoalDrag() {
+  state.navigation.goalDrag = {
+    active: false,
+    pointerId: null,
+  };
+}
+
+function stopNavigationRunTimer() {
+  window.clearInterval(state.navigation.runTimer);
+  state.navigation.runTimer = null;
+}
+
+function resetNavigationPlan() {
+  stopNavigationRunTimer();
+  Object.assign(state.navigation, {
+    status: navigationTargetValues() ? "goal-set" : "idle",
+    running: false,
+    paused: false,
+    progress: 0,
+    remainingDistanceM: null,
+    currentSpeedMps: 0,
+    startedAt: null,
+    completedAt: null,
+    canceledAt: null,
+    lastError: "",
+  });
+  state.navigation.plan = {
+    status: "empty",
+    points: [],
+    distanceM: null,
+    etaSec: null,
+    plannedAt: null,
+    startPose: null,
+    targetSignature: "",
+    stale: false,
+    staleReason: "",
+    planner: "straight-line-preview",
+    cost: null,
+  };
+}
+
+function markNavigationPlanStale(reason = "起点或终点已变化") {
+  const navigation = state.navigation;
+  if (!navigation.plan?.points?.length || navigation.running || navigation.paused) return;
+  navigation.plan.stale = true;
+  navigation.plan.staleReason = reason;
+  if (!["completed", "canceled", "failed"].includes(navigation.status)) {
+    navigation.status = "stale";
+  }
+}
+
+function refreshNavigationPlanFreshness() {
+  const navigation = state.navigation;
+  if (!navigation.plan?.points?.length || navigation.running || navigation.paused || ["completed", "canceled", "failed"].includes(navigation.status)) {
+    return;
+  }
+  if (navigation.plan.status === "planned" && !navigationPlanIsFresh()) {
+    markNavigationPlanStale("当前定位位姿或目标已变化");
+  }
+}
+
+function resetNavigationForMapChange() {
+  stopNavigationRunTimer();
+  state.navigation.goalEditMode = false;
+  resetNavigationGoalDrag();
+  state.navigation.targetPose = { x: null, y: null, z: 0, yawDeg: null };
+  resetNavigationPlan();
+  renderNavigationGoalMarker();
+  renderNavigationPathLayer();
+}
+
+function clearNavigationTarget() {
+  if (state.navigation.running || state.navigation.paused) return;
+  state.navigation.goalEditMode = false;
+  resetNavigationGoalDrag();
+  state.navigation.targetPose = { x: null, y: null, z: 0, yawDeg: null };
+  resetNavigationPlan();
+  addLog("导航", "导航目标已清除");
+  renderNavigationStatus();
+}
+
+function setNavigationGoalEditMode(enabled) {
+  const active = Boolean(enabled && navigationCanEditGoal());
+  state.navigation.goalEditMode = active;
+  if (!active) resetNavigationGoalDrag();
+  renderNavigationStatus();
+}
+
+function navigationTargetChanged(reason = "目标已变化") {
+  const navigation = state.navigation;
+  navigation.completedAt = null;
+  navigation.canceledAt = null;
+  navigation.lastError = "";
+  if (navigation.plan?.points?.length) {
+    markNavigationPlanStale(reason);
+    if (!navigation.running && !navigation.paused) navigation.status = "stale";
+  } else if (!navigation.running && !navigation.paused) {
+    navigation.status = navigationTargetValues() ? "goal-set" : "idle";
+  }
+}
+
+function navigationGoalStatusText() {
+  const navigation = state.navigation;
+  if (!state.localization.loadedMap) return "待加载地图";
+  if (!navigationMapReady()) return "地图未显示";
+  if (navigation.goalEditMode) return "设定中";
+  if (navigationTargetValues()) return "目标已设置";
+  return "目标待设置";
+}
+
+function navigationStatusText(value = state.navigation.status) {
+  const mapping = {
+    idle: "待设置目标",
+    "goal-set": "目标已设置",
+    planned: "路径已规划",
+    stale: "需重新规划",
+    running: "导航中",
+    paused: "已暂停",
+    completed: "已完成",
+    canceled: "已取消",
+    failed: "失败",
+  };
+  return mapping[value] || value || "--";
+}
+
+function navigationBadgeMeta() {
+  const navigation = state.navigation;
+  if (navigation.status === "running") return { text: "导航中", level: "ok" };
+  if (navigation.status === "paused") return { text: "已暂停", level: "warn" };
+  if (navigation.status === "completed") return { text: "已完成", level: "ok" };
+  if (navigation.status === "failed") return { text: "失败", level: "danger" };
+  if (navigation.status === "canceled" || navigation.status === "stale" || navigation.plan?.stale) {
+    return { text: "需规划", level: "warn" };
+  }
+  if (navigation.plan?.status === "planned") return { text: "已规划", level: "ok" };
+  if (navigationTargetValues()) return { text: "待规划", level: "idle" };
+  if (state.localization.loadedMap) return { text: "待目标", level: "idle" };
+  return { text: "待地图", level: "idle" };
+}
+
+function navigationWorkSummaryText() {
+  const navigation = state.navigation;
+  if (!state.localization.loadedMap) return "请先在定位作业加载地图";
+  if (!navigationMapReady()) return "定位地图未显示";
+  if (!navigationTargetValues()) return "设置终止 pose";
+  if (!navigationStartPose()) return "等待当前定位位姿";
+  if (navigation.plan?.stale) return navigation.plan.staleReason || "路径需重新规划";
+  if (navigation.status === "completed" && navigation.completedAt) return `导航完成：${navigation.completedAt}`;
+  if (navigation.status === "canceled" && navigation.canceledAt) return `导航已取消：${navigation.canceledAt}`;
+  return navigationStatusText();
+}
+
+function formatNavigationDistance(value) {
+  const parsed = localizationNumber(value);
+  if (parsed === null) return "--";
+  return parsed >= 1000 ? `${(parsed / 1000).toFixed(2)} km` : `${parsed.toFixed(2)} m`;
+}
+
+function formatNavigationDuration(value) {
+  const parsed = localizationNumber(value);
+  if (parsed === null) return "--";
+  if (parsed < 60) return `${Math.max(0, Math.round(parsed))} s`;
+  const minutes = Math.floor(parsed / 60);
+  const seconds = Math.round(parsed % 60);
+  return `${minutes} min ${seconds} s`;
+}
+
+function ensureNavigationGoalMarker() {
+  const robot = state.robotModel;
+  const marker = state.navigation.goalMarker;
+  if (!robot.three || !robot.scene) return false;
+  const THREE = robot.three;
+
+  if (!marker.group) {
+    marker.group = new THREE.Group();
+    marker.group.name = "navigation_goal_marker";
+
+    const ringMaterial = new THREE.MeshBasicMaterial({
+      color: 0x059669,
+      transparent: true,
+      opacity: 0.94,
+      depthTest: false,
+    });
+    marker.ring = new THREE.Mesh(new THREE.TorusGeometry(0.24, 0.014, 8, 36), ringMaterial);
+    marker.ring.renderOrder = 11;
+    marker.group.add(marker.ring);
+
+    marker.arrow = new THREE.ArrowHelper(
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(0, 0, 0.05),
+      1.05,
+      0x059669,
+      0.26,
+      0.16,
+    );
+    marker.arrow.renderOrder = 12;
+    marker.arrow.line.renderOrder = 12;
+    marker.arrow.cone.renderOrder = 12;
+    marker.group.add(marker.arrow);
+  }
+
+  if (marker.group.parent !== robot.scene) {
+    robot.scene.add(marker.group);
+  }
+  return true;
+}
+
+function renderNavigationGoalMarker() {
+  const marker = state.navigation.goalMarker;
+  const pose = navigationTargetValues();
+  const visible = Boolean(state.robotWork.mode === "navigation" && navigationMapReady() && pose && ensureNavigationGoalMarker());
+  if (!marker.group) return;
+  marker.group.visible = visible;
+  if (!visible) return;
+
+  const yawRad = (pose.yawDeg * Math.PI) / 180;
+  marker.group.position.set(pose.x, pose.y, 0.09);
+  marker.arrow.setDirection(new state.robotModel.three.Vector3(Math.cos(yawRad), Math.sin(yawRad), 0).normalize());
+  marker.arrow.setLength(1.05, 0.26, 0.16);
+}
+
+function ensureNavigationPathLayer() {
+  const robot = state.robotModel;
+  const layer = state.navigation.pathLayer;
+  if (!robot.three || !robot.scene) return false;
+  const THREE = robot.three;
+
+  if (!layer.line) {
+    layer.geometry = new THREE.BufferGeometry();
+    layer.material = new THREE.LineBasicMaterial({
+      color: 0x0f766e,
+      transparent: true,
+      opacity: 0.92,
+      depthTest: false,
+    });
+    layer.line = new THREE.Line(layer.geometry, layer.material);
+    layer.line.name = "navigation_preview_path";
+    layer.line.renderOrder = 8;
+  }
+
+  if (layer.line.parent !== robot.scene) {
+    robot.scene.add(layer.line);
+  }
+  return true;
+}
+
+function navigationPathColor() {
+  const navigation = state.navigation;
+  if (navigation.plan?.stale || ["canceled", "failed"].includes(navigation.status)) return 0x64748b;
+  if (navigation.status === "running" || navigation.status === "paused") return 0x16a34a;
+  if (navigation.status === "completed") return 0x2563eb;
+  return 0x0f766e;
+}
+
+function renderNavigationPathLayer() {
+  const layer = state.navigation.pathLayer;
+  const points = Array.isArray(state.navigation.plan?.points) ? state.navigation.plan.points : [];
+  const visible = Boolean(state.robotWork.mode === "navigation" && navigationMapReady() && points.length >= 2 && ensureNavigationPathLayer());
+  if (!layer.line) return;
+  layer.line.visible = visible;
+  if (!visible) return;
+
+  const THREE = state.robotModel.three;
+  layer.geometry.setFromPoints(points.map((point) => new THREE.Vector3(point.x, point.y, point.z ?? 0.07)));
+  layer.geometry.computeBoundingSphere();
+  layer.material.color.setHex(navigationPathColor());
+  layer.material.opacity = state.navigation.plan?.stale ? 0.48 : 0.92;
+}
+
+function navigationPointFromPointer(event, surface) {
+  return initialPosePointFromPointer(event, surface);
+}
+
+function setNavigationTargetPositionFromPoint(point) {
+  if (!point) return;
+  const pose = state.navigation.targetPose;
+  pose.x = point.x;
+  pose.y = point.y;
+  pose.z = 0;
+  if (normalizeInitialPoseYawDeg(pose.yawDeg) === null) pose.yawDeg = 0;
+  navigationTargetChanged("目标点已变化");
+}
+
+function setNavigationTargetYawFromPoint(point) {
+  if (!point) return;
+  const pose = state.navigation.targetPose;
+  const x = localizationNumber(pose.x);
+  const y = localizationNumber(pose.y);
+  if (x === null || y === null) return;
+  const dx = point.x - x;
+  const dy = point.y - y;
+  if (Math.hypot(dx, dy) < 0.02) return;
+  pose.yawDeg = normalizeInitialPoseYawDeg((Math.atan2(dy, dx) * 180) / Math.PI);
+  navigationTargetChanged("目标朝向已变化");
+}
+
+function handleNavigationGoalPointerDown(event, surface) {
+  if (!state.navigation.goalEditMode || !navigationCanEditGoal() || event.button !== 0) return false;
+  event.preventDefault();
+  const point = navigationPointFromPointer(event, surface);
+  if (!point) return true;
+  setNavigationTargetPositionFromPoint(point);
+  state.navigation.goalDrag = {
+    active: true,
+    pointerId: event.pointerId,
+  };
+  surface.setPointerCapture(event.pointerId);
+  renderNavigationStatus();
+  return true;
+}
+
+function handleNavigationGoalPointerMove(event, surface) {
+  const drag = state.navigation.goalDrag;
+  if (!drag.active || drag.pointerId !== event.pointerId) return false;
+  event.preventDefault();
+  setNavigationTargetYawFromPoint(navigationPointFromPointer(event, surface));
+  renderNavigationStatus();
+  return true;
+}
+
+function handleNavigationGoalPointerRelease(event, surface) {
+  const drag = state.navigation.goalDrag;
+  if (!drag.active || drag.pointerId !== event.pointerId) return false;
+  event.preventDefault();
+  setNavigationTargetYawFromPoint(navigationPointFromPointer(event, surface));
+  resetNavigationGoalDrag();
+  if (surface.hasPointerCapture(event.pointerId)) {
+    surface.releasePointerCapture(event.pointerId);
+  }
+  renderNavigationStatus();
+  return true;
+}
+
+function updateNavigationGoalFromInputs() {
+  const pose = state.navigation.targetPose;
+  [
+    ["#navigationGoalXInput", "x"],
+    ["#navigationGoalYInput", "y"],
+    ["#navigationGoalYawInput", "yawDeg"],
+  ].forEach(([selector, key]) => {
+    const input = $(selector);
+    if (!input) return;
+    pose[key] = key === "yawDeg" ? normalizeInitialPoseYawDeg(input.value) : localizationNumber(input.value);
+  });
+  pose.z = 0;
+  navigationTargetChanged("目标输入已变化");
+  renderNavigationStatus();
+}
+
+function buildNavigationPreviewPath(start, target) {
+  const dx = target.x - start.x;
+  const dy = target.y - start.y;
+  const distance = Math.hypot(dx, dy);
+  const steps = Math.max(2, Math.min(24, Math.ceil(distance / 0.35) + 1));
+  const points = Array.from({ length: steps }, (_, index) => {
+    const t = steps <= 1 ? 1 : index / (steps - 1);
+    return {
+      x: start.x + dx * t,
+      y: start.y + dy * t,
+      z: 0.07,
+    };
+  });
+  return {
+    points,
+    distance,
+    etaSec: distance / 0.35,
+  };
+}
+
+function planNavigationPath() {
+  if (!navigationCanPlan()) return;
+  const start = navigationStartPose();
+  const target = navigationTargetValues();
+  const preview = buildNavigationPreviewPath(start, target);
+  const navigation = state.navigation;
+  navigation.plan = {
+    status: "planned",
+    points: preview.points,
+    distanceM: preview.distance,
+    etaSec: preview.etaSec,
+    plannedAt: formatTime(),
+    startPose: { ...start },
+    targetSignature: navigationPoseSignature(target),
+    stale: false,
+    staleReason: "",
+    planner: "straight-line-preview",
+    cost: preview.distance,
+  };
+  Object.assign(navigation, {
+    status: "planned",
+    running: false,
+    paused: false,
+    progress: 0,
+    remainingDistanceM: preview.distance,
+    currentSpeedMps: 0,
+    startedAt: null,
+    completedAt: null,
+    canceledAt: null,
+    lastError: "",
+  });
+  addLog("导航", `路径已规划：${formatNavigationDistance(preview.distance)} / ${formatNavigationDuration(preview.etaSec)}`);
+  renderNavigationStatus();
+}
+
+function tickNavigationRun() {
+  const navigation = state.navigation;
+  if (!navigation.running || navigation.paused) return;
+  const distance = localizationNumber(navigation.plan?.distanceM) ?? 0;
+  if (distance <= 0.001) {
+    completeNavigation();
+    return;
+  }
+  const now = Date.now();
+  const elapsedSec = Math.min(1, Math.max(0, (now - (navigation.lastTickAt || now)) / 1000));
+  navigation.lastTickAt = now;
+  const speed = 0.35;
+  navigation.currentSpeedMps = speed;
+  navigation.progress = clamp(navigation.progress + (speed * elapsedSec) / distance, 0, 1);
+  navigation.remainingDistanceM = Math.max(0, distance * (1 - navigation.progress));
+  if (navigation.progress >= 1) {
+    completeNavigation();
+    return;
+  }
+  renderNavigationStatus();
+}
+
+function startNavigationRunTimer() {
+  stopNavigationRunTimer();
+  state.navigation.lastTickAt = Date.now();
+  state.navigation.runTimer = window.setInterval(tickNavigationRun, 400);
+}
+
+function startNavigation() {
+  if (!navigationCanStart()) return;
+  const navigation = state.navigation;
+  navigation.status = "running";
+  navigation.running = true;
+  navigation.paused = false;
+  navigation.progress = 0;
+  navigation.remainingDistanceM = navigation.plan.distanceM;
+  navigation.currentSpeedMps = 0.35;
+  navigation.startedAt = formatTime();
+  navigation.completedAt = null;
+  navigation.canceledAt = null;
+  navigation.lastError = "";
+  startNavigationRunTimer();
+  addLog("导航", "导航执行已开始");
+  renderNavigationStatus();
+}
+
+function pauseNavigation() {
+  const navigation = state.navigation;
+  if (!navigation.running) return;
+  stopNavigationRunTimer();
+  navigation.status = "paused";
+  navigation.running = false;
+  navigation.paused = true;
+  navigation.currentSpeedMps = 0;
+  addLog("导航", "导航已暂停");
+  renderNavigationStatus();
+}
+
+function resumeNavigation() {
+  const navigation = state.navigation;
+  if (!navigation.paused) return;
+  navigation.status = "running";
+  navigation.running = true;
+  navigation.paused = false;
+  navigation.currentSpeedMps = 0.35;
+  startNavigationRunTimer();
+  addLog("导航", "导航继续执行");
+  renderNavigationStatus();
+}
+
+function cancelNavigation() {
+  const navigation = state.navigation;
+  if (!navigation.running && !navigation.paused) return;
+  stopNavigationRunTimer();
+  navigation.status = "canceled";
+  navigation.running = false;
+  navigation.paused = false;
+  navigation.currentSpeedMps = 0;
+  navigation.canceledAt = formatTime();
+  if (navigation.plan?.points?.length) {
+    navigation.plan.stale = true;
+    navigation.plan.staleReason = "导航已取消";
+  }
+  addLog("导航", "导航已取消，重新执行前需要重新规划");
+  renderNavigationStatus();
+}
+
+function completeNavigation() {
+  const navigation = state.navigation;
+  stopNavigationRunTimer();
+  navigation.status = "completed";
+  navigation.running = false;
+  navigation.paused = false;
+  navigation.progress = 1;
+  navigation.remainingDistanceM = 0;
+  navigation.currentSpeedMps = 0;
+  navigation.completedAt = formatTime();
+  addLog("导航", "导航已完成");
+  renderNavigationStatus();
+}
+
+function renderNavigationStatus() {
+  const navigation = state.navigation;
+  const target = navigationTargetValues();
+  const start = navigationStartPose();
+  const mapReady = navigationMapReady();
+  refreshNavigationPlanFreshness();
+
+  if (!mapReady && navigation.goalEditMode) {
+    navigation.goalEditMode = false;
+    resetNavigationGoalDrag();
+  }
+
+  if (state.robotWork.mode === "navigation") {
+    const meta = navigationBadgeMeta();
+    setText("#mappingSummary", navigationWorkSummaryText());
+    setStateBadge("#mappingBadge", meta.text, meta.level);
+  }
+
+  setText(
+    "#navigationContextSummary",
+    mapReady ? "复用定位地图与当前位姿" : state.localization.loadedMap ? "定位地图未显示" : "等待定位地图",
+  );
+  const context = $("#navigationContextList");
+  if (context) {
+    context.innerHTML = [
+      ["地图", state.localization.loadedMap || state.localization.selectedMap || "--"],
+      ["当前位姿", navigationPoseText(start)],
+      ["定位状态", state.localization.running ? localizationStatusText(state.localization.status) : "未启动"],
+      ["目标", navigationPoseText(target)],
+    ]
+      .map(([name, value]) => `<div><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
+      .join("");
+  }
+
+  [
+    ["#navigationGoalXInput", target?.x, 2],
+    ["#navigationGoalYInput", target?.y, 2],
+    ["#navigationGoalYawInput", target?.yawDeg, 1],
+  ].forEach(([selector, value, digits]) => {
+    const input = $(selector);
+    if (!input || document.activeElement === input) return;
+    const parsed = localizationNumber(value);
+    input.value = parsed === null ? "" : parsed.toFixed(digits);
+  });
+
+  setText("#navigationGoalZText", `XY 平面 / Z=${formatLocalizationNumber(state.navigation.targetPose?.z ?? 0, 0)}`);
+  const arrow = $(".navigation-goal-arrow");
+  if (arrow) {
+    arrow.style.transform = `translate(-50%, -50%) rotate(${target ? target.yawDeg : 0}deg)`;
+    arrow.classList.toggle("is-disabled", !target);
+  }
+  const stageLabel = $(".navigation-goal-stage-label");
+  if (stageLabel) stageLabel.textContent = navigationGoalStatusText();
+
+  const editButton = $("#navigationGoalEditButton");
+  if (editButton) {
+    editButton.disabled = !navigationCanEditGoal();
+    editButton.classList.toggle("is-active", navigation.goalEditMode);
+    editButton.setAttribute("aria-pressed", navigation.goalEditMode ? "true" : "false");
+    editButton.textContent = navigation.goalEditMode ? "设定中" : "设定目标";
+  }
+  const clearButton = $("#navigationGoalClearButton");
+  if (clearButton) {
+    clearButton.disabled = !target || navigation.running || navigation.paused;
+  }
+
+  const planStatusText = navigation.plan?.stale
+    ? navigation.plan.staleReason || "需重新规划"
+    : navigation.plan?.status === "planned"
+      ? "路径已规划"
+      : target
+        ? "目标已设置"
+        : "目标点待设置";
+  setText("#navigationPlanSummary", planStatusText);
+
+  const metrics = $("#navigationMetrics");
+  if (metrics) {
+    const progressText = navigation.plan?.distanceM ? `${Math.round((navigation.progress || 0) * 100)}%` : "--";
+    const metricRows =
+      navigation.status === "running" || navigation.status === "paused"
+        ? [
+            ["阶段", navigationStatusText()],
+            ["剩余距离", formatNavigationDistance(navigation.remainingDistanceM)],
+            ["当前速度", navigation.currentSpeedMps ? `${navigation.currentSpeedMps.toFixed(2)} m/s` : "--"],
+            ["进度", progressText],
+          ]
+        : [
+            ["距离", formatNavigationDistance(navigation.plan?.distanceM)],
+            ["预计耗时", formatNavigationDuration(navigation.plan?.etaSec)],
+            ["规划状态", navigation.plan?.stale ? "需重新规划" : navigationStatusText()],
+            ["目标 pose", navigationPoseText(target)],
+          ];
+    metrics.innerHTML = metricRows
+      .map(([name, value]) => `<div class="metric-card"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
+      .join("");
+  }
+
+  const planButton = $("#navigationPlanButton");
+  if (planButton) planButton.disabled = !navigationCanPlan();
+  const startButton = $("#navigationStartButton");
+  if (startButton) startButton.disabled = !navigationCanStart();
+  const pauseButton = $("#navigationPauseButton");
+  if (pauseButton) pauseButton.disabled = navigation.status !== "running";
+  const resumeButton = $("#navigationResumeButton");
+  if (resumeButton) resumeButton.disabled = navigation.status !== "paused";
+  const cancelButton = $("#navigationCancelButton");
+  if (cancelButton) cancelButton.disabled = !navigation.running && !navigation.paused;
+
+  const detailList = $("#navigationDetailList");
+  if (detailList) {
+    detailList.innerHTML = [
+      ["地图", state.localization.loadedMap || state.localization.selectedMap || "--"],
+      ["起点", navigationPoseText(navigation.plan?.startPose || start)],
+      ["目标", navigationPoseText(target)],
+      ["规划器", navigation.plan?.planner || "--"],
+      ["路径点数", String(navigation.plan?.points?.length || 0)],
+      ["距离", formatNavigationDistance(navigation.plan?.distanceM)],
+      ["预计耗时", formatNavigationDuration(navigation.plan?.etaSec)],
+      ["Cost", formatLocalizationNumber(navigation.plan?.cost, 3)],
+      ["规划时间", navigation.plan?.plannedAt || "--"],
+      ["路径状态", navigation.plan?.stale ? navigation.plan.staleReason || "需重新规划" : navigationStatusText()],
+      ["开始时间", navigation.startedAt || "--"],
+      ["完成时间", navigation.completedAt || "--"],
+      ["取消时间", navigation.canceledAt || "--"],
+    ]
+      .map(([name, value]) => `<div><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
+      .join("");
+  }
+
+  $("#robotViewStage")?.classList.toggle("is-navigation-goal-editing", Boolean(navigation.goalEditMode && mapReady));
+  renderNavigationGoalMarker();
+  renderNavigationPathLayer();
+  renderRobotFooterStatus();
+}
+
 function renderLocalizationStatus() {
   const localization = state.localization;
   const pose = localization.pose || {};
@@ -4128,6 +4991,7 @@ function renderLocalizationStatus() {
   const ndtFitnessText = formatLocalizationNumber(localization.ndtFitness, 5);
   const frequencyText = frequencyHz === null ? "--" : `${frequencyHz.toFixed(1)} Hz`;
   const convergenceText = localizationStatusLabel(localization.converged);
+  const backendText = localizationBackendLabel(localization.activeBackend || localization.backend);
 
   renderLocalizationMapControls();
   setText(
@@ -4139,6 +5003,7 @@ function renderLocalizationStatus() {
   if (statusMetrics) {
     statusMetrics.innerHTML = [
       ["地图", localization.loadedMap || localization.selectedMap || "--"],
+      ["后端", backendText],
       ["位姿", poseText],
       ["Fitness", fitnessText],
       ["频率", frequencyText],
@@ -4154,6 +5019,7 @@ function renderLocalizationStatus() {
     detailList.innerHTML = [
       ["坐标系", "map / base_link"],
       ["地图", localization.loadedMap || localization.selectedMap || "--"],
+      ["定位后端", backendText],
       ["地图包", selectedMap?.path || "--"],
       ["地图大小", selectedMap ? formatBytes(selectedMap.sizeBytes) : "--"],
       ["结果来源", localization.running ? "/localization/status" : "--"],
@@ -4179,8 +5045,10 @@ function renderLocalizationStatus() {
 }
 
 function renderRobotWorkMode() {
-  const mode = state.robotWork.mode === "localization" ? "localization" : "mapping";
+  const mode = ["mapping", "localization", "navigation"].includes(state.robotWork.mode) ? state.robotWork.mode : "mapping";
   const localizationMode = mode === "localization";
+  const navigationMode = mode === "navigation";
+  const modeLabel = navigationMode ? "导航" : localizationMode ? "定位" : "建图";
   document.body.dataset.robotWorkMode = mode;
 
   $$("#robotWorkModeTabs [data-robot-work-mode]").forEach((button) => {
@@ -4200,30 +5068,37 @@ function renderRobotWorkMode() {
     });
   });
 
-  setText("#robotWorkStatusText", `当前作业：${localizationMode ? "定位" : "建图"}`);
-  setText("#robotWorkTitle", `${localizationMode ? "定位" : "建图"}作业`);
+  setText("#robotWorkStatusText", `当前作业：${modeLabel}`);
+  setText("#robotWorkTitle", `${modeLabel}作业`);
 
   if (localizationMode) {
     const meta = localizationBadgeMeta();
     setText("#mappingSummary", localizationWorkSummaryText());
     setStateBadge("#mappingBadge", meta.text, meta.level);
     renderLocalizationStatus();
+  } else if (navigationMode) {
+    renderNavigationStatus();
   }
   renderRobotModal();
 }
 
 function setRobotWorkMode(mode) {
-  const nextMode = mode === "localization" ? "localization" : "mapping";
+  const nextMode = ["mapping", "localization", "navigation"].includes(mode) ? mode : "mapping";
+  if ((state.navigation.running || state.navigation.paused) && nextMode !== "navigation") {
+    addLog("导航", "导航运行中，取消或完成后再切换作业");
+    renderRobotWorkMode();
+    return;
+  }
   const changed = state.robotWork.mode !== nextMode;
-  if (nextMode === "localization" && state.chassisControl.keyboardListening) {
-    stopChassisKeyboardControl("切换到定位作业，键盘监听停止", { deactivate: true });
+  if (nextMode !== "mapping" && state.chassisControl.keyboardListening) {
+    stopChassisKeyboardControl(`切换到${nextMode === "navigation" ? "导航" : "定位"}作业，键盘监听停止`, { deactivate: true });
   }
   if (changed) state.robotWork.modal = null;
   state.robotWork.mode = nextMode;
   if (changed && nextMode === "mapping" && state.mapping.mapPreview.source === "localization") {
     clearMappingMapPreview();
   }
-  if (changed && nextMode === "localization") {
+  if (changed && (nextMode === "localization" || nextMode === "navigation")) {
     if (state.mapping.mapPreview.source === "mapping") clearMappingMapPreview();
     refreshLocalizationMaps({ silent: true });
     refreshLocalizationStatus({ silent: true });
@@ -5921,10 +6796,11 @@ function applyLocalizationMaps(result = {}) {
     localization.mapPointCount = 0;
     localization.mapSizeBytes = 0;
     localization.mapMtimeMs = null;
+    resetNavigationForMapChange();
     if (state.mapping.mapPreview.source === "localization") clearMappingMapPreview();
   }
   renderLocalizationStatus();
-  if (state.robotWork.mode === "localization") renderRobotWorkMode();
+  if (state.robotWork.mode === "localization" || state.robotWork.mode === "navigation") renderRobotWorkMode();
 }
 
 async function refreshLocalizationMaps(options = {}) {
@@ -5933,7 +6809,7 @@ async function refreshLocalizationMaps(options = {}) {
   localization.mapsLoading = true;
   if (!options.silent) localization.lastError = "";
   renderLocalizationStatus();
-  if (state.robotWork.mode === "localization") renderRobotWorkMode();
+  if (state.robotWork.mode === "localization" || state.robotWork.mode === "navigation") renderRobotWorkMode();
 
   try {
     const response = await fetch("/api/mapping/maps", { cache: "no-store" });
@@ -5949,7 +6825,7 @@ async function refreshLocalizationMaps(options = {}) {
     localization.mapsLoading = false;
     localization.lastError = `地图列表刷新失败：${error.message}`;
     renderLocalizationStatus();
-    if (state.robotWork.mode === "localization") renderRobotWorkMode();
+    if (state.robotWork.mode === "localization" || state.robotWork.mode === "navigation") renderRobotWorkMode();
     if (!options.silent) addLog("定位", localization.lastError);
     return null;
   }
@@ -5959,6 +6835,7 @@ async function loadLocalizationMapFrame() {
   const localization = state.localization;
   const mapName = localization.selectedMap;
   const selectedMap = localizationMapByName(mapName);
+  const previousMapName = localization.loadedMap;
   if (localization.running) return;
   if (!selectedMap || localization.mapLoadBusy) return;
 
@@ -6001,6 +6878,7 @@ async function loadLocalizationMapFrame() {
     localization.mapSizeBytes = preview.sizeBytes;
     localization.mapMtimeMs = preview.mtimeMs;
     localization.lastError = "";
+    if (previousMapName !== mapName) resetNavigationForMapChange();
     updateRobotModelTransforms();
     renderRobotViewStatus();
     addLog("定位", `定位地图已加载：${mapName}`);
@@ -8236,10 +9114,14 @@ function clearMappingMapPreview() {
     state.localization.mapMtimeMs = null;
     state.localization.initialPoseEditMode = false;
     resetInitialPoseDrag();
+    resetNavigationForMapChange();
   }
   if (preview.points) preview.points.visible = false;
   $("#robotViewStage")?.classList.remove("is-initial-pose-editing");
+  $("#robotViewStage")?.classList.remove("is-navigation-goal-editing");
   renderInitialPoseMarker();
+  renderNavigationGoalMarker();
+  renderNavigationPathLayer();
   if (state.robotModel.hasModel && state.robotModel.modelRoot && !mappingFinalTransform()) {
     frameRobotModelInViewer(state.robotModel.modelRoot);
     updateRobotModelTransforms();
@@ -8292,7 +9174,7 @@ async function requestMappingMapFrame(revision = mappingMapRevision()) {
 function syncMappingMapPreview() {
   const preview = state.mapping.mapPreview;
   if (preview.source === "localization") {
-    if (state.robotWork.mode === "localization") return;
+    if (state.robotWork.mode === "localization" || state.robotWork.mode === "navigation") return;
     clearMappingMapPreview();
   }
   const session = state.mapping.session;
@@ -8673,10 +9555,19 @@ function bindEvents() {
   $("#mappingResetButton").addEventListener("click", resetMappingSession);
   $("#mappingChassisKeyboardButton").addEventListener("click", toggleChassisKeyboardListening);
   $("#localizationMapSelect")?.addEventListener("change", (event) => selectLocalizationMap(event.currentTarget.value));
+  $("#localizationBackendSelect")?.addEventListener("change", (event) => selectLocalizationBackend(event.currentTarget.value));
   $("#localizationLoadMapButton")?.addEventListener("click", loadLocalizationMapFrame);
   $("#localizationStartButton")?.addEventListener("click", startLocalization);
   $("#localizationStopButton")?.addEventListener("click", stopLocalization);
   $("#localizationRestartButton")?.addEventListener("click", restartLocalization);
+  $("#navigationGoalForm")?.addEventListener("input", updateNavigationGoalFromInputs);
+  $("#navigationGoalEditButton")?.addEventListener("click", () => setNavigationGoalEditMode(!state.navigation.goalEditMode));
+  $("#navigationGoalClearButton")?.addEventListener("click", clearNavigationTarget);
+  $("#navigationPlanButton")?.addEventListener("click", planNavigationPath);
+  $("#navigationStartButton")?.addEventListener("click", startNavigation);
+  $("#navigationPauseButton")?.addEventListener("click", pauseNavigation);
+  $("#navigationResumeButton")?.addEventListener("click", resumeNavigation);
+  $("#navigationCancelButton")?.addEventListener("click", cancelNavigation);
   $$("[data-robot-modal-toggle]").forEach((button) => {
     button.addEventListener("click", () => toggleRobotModal(button.dataset.robotModalToggle));
   });
@@ -8983,6 +9874,7 @@ function init() {
   renderRobotViewStatus();
   renderMappingStatus();
   renderLocalizationStatus();
+  renderNavigationStatus();
   fetchRobotModels({ silent: true });
   refreshMappingStatus({ silent: true });
   refreshLocalizationStatus({ silent: true });

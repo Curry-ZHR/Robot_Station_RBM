@@ -424,6 +424,7 @@
                   <div class="segmented robot-work-mode-tabs" id="robotWorkModeTabs" role="tablist" aria-label="整机作业切换">
                     <button class="is-active" data-robot-work-mode="mapping" type="button" role="tab" aria-selected="true">建图</button>
                     <button data-robot-work-mode="localization" type="button" role="tab" aria-selected="false">定位</button>
+                    <button data-robot-work-mode="navigation" type="button" role="tab" aria-selected="false">导航</button>
                   </div>
 
                   <div class="mapping-actions robot-work-actions" data-work-content="mapping">
@@ -490,6 +491,13 @@
                       </select>
                       <button class="secondary-button" id="localizationLoadMapButton" type="button" disabled>加载地图</button>
                     </div>
+                    <div class="localization-backend-actions">
+                      <span>定位后端</span>
+                      <select id="localizationBackendSelect" aria-label="定位后端选择">
+                        <option value="cpu">CPU / PCL</option>
+                        <option value="gpu">GPU / CUDA</option>
+                      </select>
+                    </div>
                     <div class="localization-run-actions">
                       <button class="primary-button" id="localizationStartButton" type="button" disabled>开始定位</button>
                       <button class="secondary-button" id="localizationStopButton" type="button" disabled>停止定位</button>
@@ -537,6 +545,60 @@
                     <div class="initial-pose-actions">
                       <button class="secondary-button" id="initialPoseEditButton" type="button" aria-pressed="false" disabled>设定初值</button>
                       <button class="secondary-button" id="initialPosePublishButton" type="button" disabled>发布初值</button>
+                    </div>
+                  </section>
+
+                  <section class="robot-side-section navigation-context-section" data-work-content="navigation" hidden>
+                    <div class="section-title compact-title">
+                      <h2>导航上下文</h2>
+                      <span id="navigationContextSummary">等待定位结果</span>
+                    </div>
+                    <div class="navigation-context-list" id="navigationContextList"></div>
+                  </section>
+
+                  <section class="robot-side-section navigation-goal-section" data-work-content="navigation" hidden>
+                    <div class="section-title compact-title">
+                      <h2>导航目标</h2>
+                      <span id="navigationGoalZText">XY 平面 / Z=0</span>
+                    </div>
+                    <div class="initial-pose-layout navigation-goal-layout">
+                      <div class="initial-pose-stage navigation-goal-stage" id="navigationGoalStage" aria-label="导航终点箭头工具">
+                        <div class="initial-pose-grid" aria-hidden="true"></div>
+                        <div class="initial-pose-axis x" aria-hidden="true">X</div>
+                        <div class="initial-pose-axis y" aria-hidden="true">Y</div>
+                        <div class="initial-pose-arrow navigation-goal-arrow is-disabled" aria-hidden="true">
+                          <span class="initial-pose-arrow-shaft"></span>
+                          <span class="initial-pose-arrow-head"></span>
+                        </div>
+                        <span class="initial-pose-stage-label navigation-goal-stage-label">待加载地图</span>
+                      </div>
+                      <form class="initial-pose-form navigation-goal-form" id="navigationGoalForm" autocomplete="off">
+                        <label><span>x</span><input id="navigationGoalXInput" type="number" step="0.01" value="" inputmode="decimal" data-navigation-goal-field="x"></label>
+                        <label><span>y</span><input id="navigationGoalYInput" type="number" step="0.01" value="" inputmode="decimal" data-navigation-goal-field="y"></label>
+                        <label><span>yaw</span><input id="navigationGoalYawInput" type="number" step="1" value="" inputmode="decimal" data-navigation-goal-field="yawDeg"></label>
+                      </form>
+                    </div>
+                    <div class="initial-pose-actions navigation-goal-actions">
+                      <button class="secondary-button" id="navigationGoalEditButton" type="button" aria-pressed="false" disabled>设定目标</button>
+                      <button class="secondary-button" id="navigationGoalClearButton" type="button" disabled>清除目标</button>
+                    </div>
+                  </section>
+
+                  <section class="robot-side-section navigation-plan-section" data-work-content="navigation" hidden>
+                    <div class="section-title compact-title robot-section-row">
+                      <div>
+                        <h2>路径与执行</h2>
+                        <span id="navigationPlanSummary">目标点待设置</span>
+                      </div>
+                      <button class="secondary-button robot-section-link" data-robot-modal-toggle="navigation-details" type="button" aria-label="导航详情" aria-expanded="false">导航详情</button>
+                    </div>
+                    <div class="metric-grid navigation-metrics" id="navigationMetrics"></div>
+                    <div class="navigation-run-actions">
+                      <button class="primary-button" id="navigationPlanButton" type="button" disabled>规划路径</button>
+                      <button class="primary-button" id="navigationStartButton" type="button" disabled>开始导航</button>
+                      <button class="secondary-button" id="navigationPauseButton" type="button" disabled>暂停</button>
+                      <button class="secondary-button" id="navigationResumeButton" type="button" disabled>继续</button>
+                      <button class="secondary-button" id="navigationCancelButton" type="button" disabled>取消</button>
                     </div>
                   </section>
                 </article>
@@ -590,6 +652,10 @@
 
                     <section class="robot-modal-panel localization-advanced-section" data-robot-modal-panel="localization-advanced" hidden>
                       <div class="mapping-detail-list localization-detail-list" id="localizationDetailList"></div>
+                    </section>
+
+                    <section class="robot-modal-panel navigation-details-section" data-robot-modal-panel="navigation-details" hidden>
+                      <div class="mapping-detail-list navigation-detail-list" id="navigationDetailList"></div>
                     </section>
                   </div>
                 </div>

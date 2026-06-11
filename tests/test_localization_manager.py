@@ -94,15 +94,84 @@ def test_localization_manager_start_resolves_saved_map_and_builds_command(tmp_pa
     monkeypatch.setattr("modules.localization.manager.get_mapping_manager", lambda: FakeMappingManager(map_path))
     monkeypatch.setattr("modules.localization.manager.subprocess.Popen", fake_popen)
 
-    manager = LocalizationManager(localizer_command=("localizer",))
+    manager = LocalizationManager(localizer_command=("localizer",), gpu_localizer_command=("python3",))
     result = manager.start({"mapName": "lab_map"})
 
     assert result["ok"] is True
+    assert result["backend"] == "cpu"
     assert result["map"]["name"] == "lab_map"
+    assert result["map"]["settings"]["backend"] == "cpu"
     assert commands[0][:4] == ["localizer", "--ros-args", "-p", f"map_path:={map_path}"]
     assert "map_name:=lab_map" in commands[0]
     assert "base_frame:=base_link" in commands[0]
     assert result["process"]["running"] is True
+
+
+def test_localization_manager_start_uses_gpu_backend_command(tmp_path, monkeypatch):
+    map_path = tmp_path / "lab_map" / "map.pcd"
+    map_path.parent.mkdir()
+    map_path.write_text("pcd", encoding="utf-8")
+    commands = []
+
+    def fake_popen(command, **kwargs):
+        commands.append(command)
+        return FakeProcess()
+
+    monkeypatch.setattr("modules.localization.manager.get_mapping_manager", lambda: FakeMappingManager(map_path))
+    monkeypatch.setattr("modules.localization.manager.subprocess.Popen", fake_popen)
+
+    manager = LocalizationManager(localizer_command=("localizer",), gpu_localizer_command=("python3",))
+    result = manager.start({"mapName": "lab_map", "backend": "gpu"})
+
+    assert result["ok"] is True
+    assert result["backend"] == "gpu"
+    assert result["map"]["settings"]["backend"] == "gpu"
+    assert commands[0][:4] == ["python3", "--ros-args", "-p", f"map_path:={map_path}"]
+
+
+def test_localization_manager_rejects_unknown_backend(tmp_path, monkeypatch):
+    map_path = tmp_path / "lab_map" / "map.pcd"
+    map_path.parent.mkdir()
+    map_path.write_text("pcd", encoding="utf-8")
+    commands = []
+
+    def fake_popen(command, **kwargs):
+        commands.append(command)
+        return FakeProcess()
+
+    monkeypatch.setattr("modules.localization.manager.get_mapping_manager", lambda: FakeMappingManager(map_path))
+    monkeypatch.setattr("modules.localization.manager.subprocess.Popen", fake_popen)
+
+    manager = LocalizationManager(localizer_command=("localizer",), gpu_localizer_command=("python3",))
+    result = manager.start({"mapName": "lab_map", "backend": "tpu"})
+
+    assert result["ok"] is False
+    assert result["code"] == "LOC-PAYLOAD"
+    assert commands == []
+
+
+def test_localization_manager_rejects_unavailable_gpu_backend(tmp_path, monkeypatch):
+    map_path = tmp_path / "lab_map" / "map.pcd"
+    map_path.parent.mkdir()
+    map_path.write_text("pcd", encoding="utf-8")
+    commands = []
+
+    def fake_popen(command, **kwargs):
+        commands.append(command)
+        return FakeProcess()
+
+    monkeypatch.setattr("modules.localization.manager.get_mapping_manager", lambda: FakeMappingManager(map_path))
+    monkeypatch.setattr("modules.localization.manager.subprocess.Popen", fake_popen)
+
+    manager = LocalizationManager(
+        localizer_command=("localizer",),
+        gpu_localizer_command=("definitely-missing-gpu-localizer",),
+    )
+    result = manager.start({"mapName": "lab_map", "backend": "gpu"})
+
+    assert result["ok"] is False
+    assert result["code"] == "LOC-GPU-UNAVAILABLE"
+    assert commands == []
 
 
 def test_localization_manager_status_merges_ros_status(tmp_path, monkeypatch):
@@ -113,11 +182,12 @@ def test_localization_manager_status_merges_ros_status(tmp_path, monkeypatch):
     monkeypatch.setattr("modules.localization.manager.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
     monkeypatch.setattr("modules.localization.manager.get_ros_reader", lambda: FakeReader())
 
-    manager = LocalizationManager(localizer_command=("localizer",))
+    manager = LocalizationManager(localizer_command=("localizer",), gpu_localizer_command=("python3",))
     manager.start({"mapName": "lab_map"})
     result = manager.status()
 
     assert result["ok"] is True
+    assert result["backend"] == "cpu"
     assert result["state"] == "localizing"
     assert result["localizationStatus"]["data"]["fitness"] == 0.04
     assert result["pose"]["ok"] is True

@@ -17,3 +17,7 @@ ros_packages/**/build/
 ros_packages/**/install/
 ros_packages/**/log/
 ros_packages/**/Log/
+modules/localization/fast_gicp_ws/build/
+modules/localization/fast_gicp_ws/install/
+modules/localization/fast_gicp_ws/log/
+modules/localization/fast_gicp_ws/Log/
