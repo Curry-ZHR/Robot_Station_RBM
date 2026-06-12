@@ -235,6 +235,8 @@ const state = {
       active: false,
       status: "idle",
       pollTimer: null,
+      taskStatus: null,
+      taskStatusPanelOpen: false,
     },
     run: {
       active: false,
@@ -850,6 +852,13 @@ const stateMachineTaskTypes = {
           { value: "omni", label: "全向" },
         ],
       },
+      { key: "maxLinearMps", label: "最大前进速度", type: "number", step: "0.01", min: "0.01", unit: "m/s", advanced: true },
+      { key: "maxLateralMps", label: "最大横移速度", type: "number", step: "0.01", min: "0.01", unit: "m/s", advanced: true },
+      { key: "maxAngularRadS", label: "最大角速度", type: "number", step: "0.01", min: "0.02", unit: "rad/s", advanced: true },
+      { key: "positionToleranceM", label: "位置容差", type: "number", step: "0.01", min: "0.02", unit: "m", advanced: true },
+      { key: "yawToleranceDeg", label: "yaw 容差", type: "number", step: "0.5", min: "1", unit: "deg", advanced: true },
+      { key: "localizationStaleSec", label: "定位超时", type: "number", step: "0.1", min: "0.1", unit: "s", advanced: true },
+      { key: "controlRateHz", label: "控制频率", type: "number", step: "1", min: "5", unit: "Hz", advanced: true },
     ],
   },
   grasp: {
@@ -892,18 +901,30 @@ const stateMachineTaskTypes = {
     ],
   },
   wait: {
-    label: "等待",
-    summary: "延时或等待稳定",
+    label: "等待静止",
+    summary: "运动后等待关节静止",
     fields: [
-      { key: "durationSec", label: "等待时长", type: "number", step: "0.1", min: "0", unit: "s" },
-      { key: "reason", label: "等待原因", type: "text", placeholder: "等待底盘稳定" },
+      { key: "stableSec", label: "静止等待时间", type: "number", step: "0.1", min: "0.1", unit: "s" },
     ],
   },
 };
 const stateMachineTaskTypeDefaults = {
-  navigation: { targetName: "", x: 0, y: 0, yawDeg: 0, mode: "lateral" },
+  navigation: {
+    targetName: "",
+    x: 0,
+    y: 0,
+    yawDeg: 0,
+    mode: "lateral",
+    maxLinearMps: 0.2,
+    maxLateralMps: 0.15,
+    maxAngularRadS: 0.5,
+    positionToleranceM: 0.05,
+    yawToleranceDeg: 3,
+    localizationStaleSec: 0.8,
+    controlRateHz: 20,
+  },
   grasp: { graspMethod: "inference", leftTarget: "", rightTarget: "", prompt: "", leftPose: "", rightPose: "" },
-  wait: { durationSec: 1, reason: "" },
+  wait: { stableSec: 2 },
 };
 
 const chassisMotionModeLabels = {
@@ -1705,15 +1726,122 @@ function stateMachineParamSummary(node) {
       .join(" ") || "未配置目标";
     return `${method} / ${arms}`;
   }
-  if (node.taskType === "wait") return `${params.durationSec ?? 0}s / ${params.reason || "等待"}`;
+  if (node.taskType === "wait") return `运动后静止 ${params.stableSec ?? "--"}s`;
   return stateMachineTaskMeta(node.taskType).summary;
 }
 
 function stateMachineRunState(node) {
   const run = state.stateMachine.run;
+  if (run.currentId === node.id && run.status === "failed") return { label: "失败", className: "is-failed" };
+  if (run.currentId === node.id && run.status === "stopped") return { label: "停止", className: "is-stopped" };
   if (run.currentId === node.id) return { label: "运行中", className: "is-running" };
   if (run.completedIds.includes(node.id)) return { label: "完成", className: "is-complete" };
   return { label: node.type === "task" ? "待执行" : "固定", className: "is-pending" };
+}
+
+function stateMachineVisibleTaskStatus() {
+  const sm = state.stateMachine;
+  const taskStatus = sm.realRun.taskStatus;
+  if (!taskStatus?.nodeId) return null;
+  if (sm.realRun.active || sm.realRun.status === "failed") return taskStatus;
+  return null;
+}
+
+function stateMachineCanShowTaskDetail(node) {
+  const taskStatus = stateMachineVisibleTaskStatus();
+  return Boolean(node?.type === "task" && taskStatus && taskStatus.nodeId === node.id);
+}
+
+function openStateMachineTaskStatusPanel(nodeId) {
+  const node = stateMachineNodeById(nodeId);
+  if (!stateMachineCanShowTaskDetail(node)) return;
+  state.stateMachine.realRun.taskStatusPanelOpen = true;
+  renderStateMachine();
+}
+
+function closeStateMachineTaskStatusPanel() {
+  state.stateMachine.realRun.taskStatusPanelOpen = false;
+  renderStateMachine();
+}
+
+function stateMachineTaskPoseText(pose) {
+  if (!pose || typeof pose !== "object") return "--";
+  return [
+    formatLocalizationNumber(pose.x, 2, " m"),
+    formatLocalizationNumber(pose.y, 2, " m"),
+    formatLocalizationNumber(pose.yawDeg, 1, " deg"),
+  ].join(" / ");
+}
+
+function stateMachineTaskCommandText(command) {
+  if (!command || typeof command !== "object") return "--";
+  return [
+    formatLocalizationNumber(command.linearX, 3),
+    formatLocalizationNumber(command.linearY, 3),
+    formatLocalizationNumber(command.angularZ, 3),
+  ].join(" / ");
+}
+
+function stateMachineTaskStatusRows(taskStatus) {
+  const data = taskStatus?.data && typeof taskStatus.data === "object" ? taskStatus.data : {};
+  const rows = [
+    ["状态", taskStatus?.status || "--"],
+    ["说明", taskStatus?.detail || data.detail || "--"],
+    ["更新时间", taskStatus?.updatedAt || "--"],
+  ];
+  if (taskStatus?.taskType === "navigation") {
+    const errors = data.errors || {};
+    const params = data.params || {};
+    rows.push(
+      ["阶段", data.phase || "--"],
+      ["当前位姿", stateMachineTaskPoseText(data.currentPose)],
+      ["距离误差", formatLocalizationNumber(errors.distance, 3, " m")],
+      ["车体系误差", `${formatLocalizationNumber(errors.bodyX, 3)} / ${formatLocalizationNumber(errors.bodyY, 3)} m`],
+      ["Yaw 误差", formatLocalizationNumber(errors.yawDeg, 2, " deg")],
+      ["速度指令", stateMachineTaskCommandText(data.command)],
+      ["限速", `${formatLocalizationNumber(params.maxLinearMps, 2)} / ${formatLocalizationNumber(params.maxLateralMps, 2)} / ${formatLocalizationNumber(params.maxAngularRadS, 2)}`],
+      ["容差", `${formatLocalizationNumber(params.positionToleranceM, 2)} m / ${formatLocalizationNumber(params.yawToleranceDeg, 1)} deg`],
+    );
+  }
+  if (taskStatus?.taskType === "wait") {
+    rows.push(
+      ["阶段", data.phase || "--"],
+      ["静止计时", `${formatLocalizationNumber(data.stableElapsedSec, 1)} / ${formatLocalizationNumber(data.stableSec, 1)} s`],
+      ["关节变化", formatLocalizationNumber(data.maxDeltaRad, 4, " rad")],
+      ["夹爪变化", formatLocalizationNumber(data.maxGripperDeltaM, 4, " m")],
+    );
+  }
+  return rows;
+}
+
+function renderStateMachineTaskStatusPanel() {
+  const sm = state.stateMachine;
+  const taskStatus = stateMachineVisibleTaskStatus();
+  if (!sm.realRun.taskStatusPanelOpen || !taskStatus) return "";
+  const node = stateMachineNodeById(taskStatus.nodeId);
+  if (!stateMachineCanShowTaskDetail(node)) return "";
+  const rows = stateMachineTaskStatusRows(taskStatus)
+    .map(
+      ([label, value]) => `
+        <div>
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+        </div>
+      `,
+    )
+    .join("");
+  return `
+    <aside class="state-machine-task-status-panel">
+      <div class="state-machine-task-status-head">
+        <div>
+          <span>${escapeHtml(stateMachineTaskMeta(taskStatus.taskType).label)}</span>
+          <strong>${escapeHtml(taskStatus.title || node?.title || "当前任务")}</strong>
+        </div>
+        <button type="button" data-sm-task-detail-close aria-label="关闭">×</button>
+      </div>
+      <div class="state-machine-task-status-grid">${rows}</div>
+    </aside>
+  `;
 }
 
 function stateMachineNodeCenter(node) {
@@ -1826,6 +1954,7 @@ function renderStateMachineNodeCard(node) {
   const outgoing = Array.isArray(node.outgoingIds) ? node.outgoingIds : [];
   const nodeClass = node.type === "task" ? `is-${node.taskType}` : `is-${node.type}`;
   const canConnect = node.type !== "end";
+  const canShowTaskDetail = stateMachineCanShowTaskDetail(node);
   const outputText = node.type === "end"
     ? "无出口"
     : outgoing.length > 1
@@ -1851,6 +1980,7 @@ function renderStateMachineNodeCard(node) {
       </div>
       <div class="state-machine-node-tools" aria-label="state 操作">
         ${canConnect ? `<button type="button" data-sm-connect-from="${escapeHtml(node.id)}">${connecting ? "选择目标" : "连线"}</button>` : ""}
+        ${canShowTaskDetail ? `<button type="button" data-sm-task-detail="${escapeHtml(node.id)}">详情</button>` : ""}
         ${node.type === "task" ? `<button type="button" data-sm-edit="${escapeHtml(node.id)}">编辑</button>` : ""}
         ${node.type === "task" ? `<button type="button" data-sm-duplicate="${escapeHtml(node.id)}">复制</button>` : ""}
         ${node.type === "task" ? `<button type="button" data-sm-delete="${escapeHtml(node.id)}">删除</button>` : ""}
@@ -1889,6 +2019,10 @@ function renderStateMachineModalField(field, value) {
   `;
 }
 
+function renderStateMachineModalFields(fields, params) {
+  return fields.map((field) => renderStateMachineModalField(field, params?.[field.key])).join("");
+}
+
 function stateMachineModalVisibleFields(taskType, params) {
   return (stateMachineTaskMeta(taskType).fields || []).filter((field) => {
     if (!field.showWhen) return true;
@@ -1901,12 +2035,25 @@ function renderStateMachineModalForm() {
   const form = $("#stateMachineModalForm");
   if (!config || !form) return;
   const fields = stateMachineModalVisibleFields(config.taskType, config.params);
+  const baseFields = fields.filter((field) => !field.advanced);
+  const advancedFields = fields.filter((field) => field.advanced);
+  const advancedSection = advancedFields.length
+    ? `
+      <details class="state-machine-param-group" open>
+        <summary>高级参数</summary>
+        <div class="state-machine-param-grid">
+          ${renderStateMachineModalFields(advancedFields, config.params)}
+        </div>
+      </details>
+    `
+    : "";
   form.innerHTML = `
     <label class="state-machine-modal-title-field">
       <span class="field-label">状态名</span>
       <input data-sm-modal-field="__title" type="text" value="${escapeHtml(config.title || "")}" placeholder="例如：靠近货柜">
     </label>
-    ${fields.map((field) => renderStateMachineModalField(field, config.params?.[field.key])).join("")}
+    ${renderStateMachineModalFields(baseFields, config.params)}
+    ${advancedSection}
   `;
 }
 
@@ -1967,7 +2114,16 @@ async function submitStateMachineModal() {
   }
   // Merge over the modal params so values of fields hidden by the current
   // graspMethod selection are preserved instead of dropped.
-  const params = { ...config.params, ...values.params };
+  let params = { ...config.params, ...values.params };
+  if (config.taskType === "wait") {
+    const stableSec = Number(values.params.stableSec);
+    if (!Number.isFinite(stableSec) || stableSec < 0.1) {
+      addLog("状态机", "静止等待时间必须 >= 0.1s");
+      $("#stateMachineModalForm [data-sm-modal-field='stableSec']")?.focus();
+      return;
+    }
+    params = { stableSec };
+  }
 
   if (config.mode === "edit-node") {
     const node = stateMachineNodeById(config.nodeId);
@@ -2127,6 +2283,7 @@ function renderStateMachineCanvas() {
       ${renderStateMachineEdges(workspaceSize)}
       ${state.stateMachine.nodes.map((node) => renderStateMachineNodeCard(node)).join("")}
     </div>
+    ${renderStateMachineTaskStatusPanel()}
   `;
   canvas.scrollLeft = scrollLeft;
   canvas.scrollTop = scrollTop;
@@ -2149,7 +2306,9 @@ function renderStateMachine() {
   } else if (sm.run.active) {
     setStateBadge("#stateMachineBadge", "预演中", "ok");
   } else if (sm.run.status === "completed") {
-    setStateBadge("#stateMachineBadge", "预演完成", "ok");
+    setStateBadge("#stateMachineBadge", "运行完成", "ok");
+  } else if (sm.run.status === "failed") {
+    setStateBadge("#stateMachineBadge", "运行失败", "danger");
   } else if (sm.run.status === "stopped") {
     setStateBadge("#stateMachineBadge", "已停止", "warn");
   } else if (sm.connectingFromId) {
@@ -2244,6 +2403,25 @@ function advanceStateMachinePreview() {
   sm.runTimer = window.setTimeout(advanceStateMachinePreview, stateMachineRunDelayMs);
 }
 
+function applyStateMachineBackendRun(run) {
+  const sm = state.stateMachine;
+  const status = run.status || "idle";
+  sm.realRun.active = !!run.active;
+  sm.realRun.status = status;
+  sm.realRun.taskStatus = run.taskStatus || null;
+  if (!stateMachineVisibleTaskStatus()) sm.realRun.taskStatusPanelOpen = false;
+  sm.run = {
+    ...sm.run,
+    active: false,
+    status,
+    currentId: run.currentId || null,
+    completedIds: Array.isArray(run.completedIds) ? run.completedIds : [],
+    activeEdge: null,
+    edgePath: Array.isArray(run.edgePath) ? run.edgePath : [],
+    path: Array.isArray(run.path) ? run.path : [],
+  };
+}
+
 function stopStateMachineRunPolling() {
   window.clearInterval(state.stateMachine.realRun.pollTimer);
   state.stateMachine.realRun.pollTimer = null;
@@ -2254,18 +2432,7 @@ async function pollStateMachineRunStatus() {
   try {
     const payload = await stateMachineApiGet("run/status");
     const run = payload.run || {};
-    sm.realRun.active = !!run.active;
-    sm.realRun.status = run.status || "idle";
-    sm.run = {
-      ...sm.run,
-      active: false,
-      status: sm.run.status,
-      currentId: run.currentId || null,
-      completedIds: Array.isArray(run.completedIds) ? run.completedIds : [],
-      activeEdge: null,
-      edgePath: Array.isArray(run.edgePath) ? run.edgePath : [],
-      path: Array.isArray(run.path) ? run.path : [],
-    };
+    applyStateMachineBackendRun(run);
     if (!run.active) {
       stopStateMachineRunPolling();
       if (run.status === "completed") addLog("状态机", "真实运行完成");
@@ -2286,12 +2453,12 @@ async function startStateMachineRealRun() {
   if (sm.run.active || sm.realRun.active) return;
   const snapshot = stateMachineSnapshot();
   try {
-    await stateMachineApiPost("run/start", { name: snapshot.name, nodes: snapshot.nodes });
-    sm.realRun.active = true;
-    sm.realRun.status = "running";
+    const payload = await stateMachineApiPost("run/start", { name: snapshot.name, nodes: snapshot.nodes });
+    applyStateMachineBackendRun(payload.run || { active: true, status: "running", currentId: "sm_start", path: ["sm_start"] });
     addLog("状态机", `真实运行已启动：${snapshot.name}`);
     stopStateMachineRunPolling();
     sm.realRun.pollTimer = window.setInterval(pollStateMachineRunStatus, 1000);
+    pollStateMachineRunStatus();
     renderStateMachine();
   } catch (error) {
     addLog("状态机", `真实运行启动失败：${error.message}`);
@@ -2352,6 +2519,18 @@ function openStateMachineNodeEditor(nodeId) {
 }
 
 function handleStateMachineCanvasClick(event) {
+  const detailCloseButton = event.target.closest("[data-sm-task-detail-close]");
+  if (detailCloseButton) {
+    closeStateMachineTaskStatusPanel();
+    return;
+  }
+
+  const detailButton = event.target.closest("[data-sm-task-detail]");
+  if (detailButton) {
+    openStateMachineTaskStatusPanel(detailButton.dataset.smTaskDetail);
+    return;
+  }
+
   const edgeDelete = event.target.closest("[data-sm-edge-from]");
   if (edgeDelete) {
     disconnectStateMachineNodes(edgeDelete.dataset.smEdgeFrom, edgeDelete.dataset.smEdgeTo);

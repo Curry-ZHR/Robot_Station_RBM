@@ -3470,6 +3470,14 @@ body[data-active-view="state-machine"] #drawerToggle {
   background: #f8fafc;
 }
 
+.state-machine-node.is-failed {
+  background: #fef2f2;
+}
+
+.state-machine-node.is-stopped {
+  background: #fffbeb;
+}
+
 .state-machine-node-main {
   display: grid;
   width: 100%;
@@ -3521,6 +3529,16 @@ body[data-active-view="state-machine"] #drawerToggle {
 .state-machine-node.is-complete .state-machine-node-status {
   background: #e0f2fe;
   color: #0369a1;
+}
+
+.state-machine-node.is-failed .state-machine-node-status {
+  background: #fee2e2;
+  color: var(--danger);
+}
+
+.state-machine-node.is-stopped .state-machine-node-status {
+  background: #fef3c7;
+  color: #b45309;
 }
 
 .state-machine-node-tools {
@@ -3882,6 +3900,123 @@ body[data-active-view="state-machine"] #drawerToggle {
 
 .state-machine-modal-form .state-machine-modal-title-field {
   grid-column: 1 / -1;
+}
+
+.state-machine-param-group {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.state-machine-param-group > summary {
+  min-height: 36px;
+  padding: 9px 11px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.state-machine-param-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 11px 11px;
+}
+
+.state-machine-task-status-panel {
+  position: sticky;
+  right: 12px;
+  bottom: 12px;
+  z-index: 8;
+  display: grid;
+  width: min(340px, calc(100% - 24px));
+  max-height: 320px;
+  margin: -332px 12px 12px auto;
+  overflow: auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.18);
+}
+
+.state-machine-task-status-head {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e2e8f0;
+  background: #ffffff;
+}
+
+.state-machine-task-status-head > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.state-machine-task-status-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.state-machine-task-status-head strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-machine-task-status-head button {
+  display: grid;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.state-machine-task-status-grid {
+  display: grid;
+  gap: 1px;
+  padding: 8px;
+}
+
+.state-machine-task-status-grid > div {
+  display: grid;
+  grid-template-columns: 86px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.state-machine-task-status-grid span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.state-machine-task-status-grid strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .state-machine-modal-actions {
