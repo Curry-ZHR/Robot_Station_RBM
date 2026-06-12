@@ -102,3 +102,13 @@ def test_autostart_transforms_can_be_disabled(monkeypatch):
 
     assert server.autostart_transforms() is None
     assert manager.calls == []
+
+
+def test_chassis_service_passes_action_topics(monkeypatch):
+    monkeypatch.setenv("CHASSIS_RAW_ACTION_TOPIC", "/action/chassis_custom")
+    monkeypatch.setenv("CHASSIS_SMOOTHED_ACTION_TOPIC", "/action/chassis_custom_smoothed")
+
+    command = default_service_specs()["chassis"].command
+
+    assert "chassis_raw_action_topic:=/action/chassis_custom" in command
+    assert "chassis_smoothed_action_topic:=/action/chassis_custom_smoothed" in command

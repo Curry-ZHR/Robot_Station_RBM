@@ -10,7 +10,6 @@ from modules.ros_io.serializers import RosMessageImportError, import_message_cla
 
 LOGGER = get_logger()
 
-CHASSIS_TOPIC = os.environ.get("ACTION_MIRROR_CHASSIS_TOPIC", "/action/chassis")
 LIFTING_TOPIC = os.environ.get("ACTION_MIRROR_LIFTING_TOPIC", "/action/lifting")
 MESSAGE_TYPE = "std_msgs/msg/String"
 
@@ -23,7 +22,6 @@ def _env_float(name, default):
 
 
 DEFAULT_RATE_HZ = _env_float("ACTION_MIRROR_RATE_HZ", 60.0)
-DEFAULT_CHASSIS_TIMEOUT_SEC = _env_float("ACTION_MIRROR_CHASSIS_TIMEOUT_SEC", 0.1)
 DEFAULT_LIFTING_HEIGHT_M = _env_float("ACTION_MIRROR_DEFAULT_LIFTING_HEIGHT_M", 0.0)
 
 
@@ -45,31 +43,20 @@ def _number(value, field, default=None):
     return parsed
 
 
-def _payload_number(payload, keys, field, default=0.0):
-    for key in keys:
-        if key in payload:
-            return _number(payload[key], field)
-    return _number(default, field)
-
-
 class ActionMirror:
-    """Publish the latest web action as dataset labels without controlling hardware."""
+    """Publish non-chassis web actions as dataset labels without controlling hardware."""
 
     def __init__(
         self,
         runtime=None,
         rate_hz=DEFAULT_RATE_HZ,
-        chassis_timeout_sec=DEFAULT_CHASSIS_TIMEOUT_SEC,
         lifting_height_m=DEFAULT_LIFTING_HEIGHT_M,
-        chassis_topic=CHASSIS_TOPIC,
         lifting_topic=LIFTING_TOPIC,
         message_class=None,
         clock=time.monotonic,
     ):
         self._runtime = runtime
         self._rate_hz = max(1.0, float(rate_hz))
-        self._chassis_timeout_sec = max(0.0, float(chassis_timeout_sec))
-        self._chassis_topic = chassis_topic
         self._lifting_topic = lifting_topic
         self._message_class = message_class
         self._clock = clock
@@ -77,21 +64,10 @@ class ActionMirror:
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._thread = None
-        self._chassis_publisher = None
         self._lifting_publisher = None
         self._last_error_log_at = 0.0
 
-        self._chassis_action = {
-            "linearX": 0.0,
-            "linearY": 0.0,
-            "angularZ": 0.0,
-        }
-        self._chassis_updated_at = None
         self._lifting_height_m = _number(lifting_height_m, "lifting_height_m", default=0.0)
-
-    @property
-    def chassis_topic(self):
-        return self._chassis_topic
 
     @property
     def lifting_topic(self):
@@ -111,19 +87,6 @@ class ActionMirror:
         if thread is not None and thread.is_alive():
             thread.join(timeout=timeout)
 
-    def set_chassis_action(self, payload):
-        if not isinstance(payload, dict):
-            raise ActionMirrorValidationError("chassis action must be a JSON object.")
-        action = {
-            "linearX": _payload_number(payload, ("linearX", "linear_x", "x", "forward"), "linearX"),
-            "linearY": _payload_number(payload, ("linearY", "linear_y", "y", "lateral"), "linearY"),
-            "angularZ": _payload_number(payload, ("angularZ", "angular_z", "yawRate", "angularVelocity"), "angularZ"),
-        }
-        with self._lock:
-            self._chassis_action = action
-            self._chassis_updated_at = self._clock()
-        return action
-
     def set_lifting_action(self, height_m):
         height = _number(height_m, "height")
         with self._lock:
@@ -131,22 +94,15 @@ class ActionMirror:
         return height
 
     def snapshot(self):
-        now = self._clock()
         with self._lock:
-            chassis = dict(self._chassis_action)
-            updated_at = self._chassis_updated_at
             lifting_height = self._lifting_height_m
-        if updated_at is None or now - updated_at > self._chassis_timeout_sec:
-            chassis = {"linearX": 0.0, "linearY": 0.0, "angularZ": 0.0}
         return {
-            "chassis": chassis,
             "lifting": {"height": lifting_height},
         }
 
     def publish_once(self):
         snapshot = self.snapshot()
         self._ensure_publishers()
-        self._publish_json(self._chassis_publisher, snapshot["chassis"])
         self._publish_json(self._lifting_publisher, snapshot["lifting"])
 
     def _run(self):
@@ -174,13 +130,6 @@ class ActionMirror:
         if self._message_class is None:
             self._message_class = import_message_class(MESSAGE_TYPE)
         runtime = self._ensure_runtime()
-        if self._chassis_publisher is None:
-            self._chassis_publisher = runtime.get_publisher(
-                "action_mirror_chassis",
-                MESSAGE_TYPE,
-                self._chassis_topic,
-                qos_depth=1,
-            )
         if self._lifting_publisher is None:
             self._lifting_publisher = runtime.get_publisher(
                 "action_mirror_lifting",

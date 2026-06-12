@@ -30,14 +30,6 @@ class FakeNavigationManager:
         return {"ok": True, "code": "NAV-STOPPED", "status": "stopped", "phase": "stopped"}
 
 
-class FakeActionMirror:
-    def __init__(self):
-        self.chassis_calls = []
-
-    def set_chassis_action(self, command):
-        self.chassis_calls.append(command)
-
-
 def test_navigation_status_endpoint(monkeypatch):
     manager = FakeNavigationManager()
     responses = []
@@ -72,12 +64,10 @@ def test_navigation_start_and_stop_endpoints(monkeypatch):
 
 def test_manual_chassis_velocity_interrupts_navigation(monkeypatch):
     manager = FakeNavigationManager()
-    mirror = FakeActionMirror()
     responses = []
     handler = _handler("/api/control/chassis/cmd_vel", {"linearX": 0.1, "linearY": 0.0, "angularZ": 0.0})
     handler.write_json = lambda payload, status=200, headers=None: responses.append((payload, status))
     monkeypatch.setattr(server, "get_navigation_manager", lambda: manager)
-    monkeypatch.setattr(server, "get_action_mirror", lambda: mirror)
     monkeypatch.setattr(server, "log_action_result", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         server,
@@ -96,5 +86,4 @@ def test_manual_chassis_velocity_interrupts_navigation(monkeypatch):
     server.RobotStationHandler.do_POST(handler)
 
     assert manager.interrupted == 1
-    assert mirror.chassis_calls == [{"linearX": 0.1, "linearY": 0.0, "angularZ": 0.0}]
     assert responses[0][0]["code"] == "CHASSIS-C-PUBLISHED"

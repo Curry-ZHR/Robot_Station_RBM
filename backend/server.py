@@ -750,13 +750,6 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 if interrupt_result:
                     log_action_result("Navigation interrupted by chassis control", interrupt_result)
         result = handler(payload)
-        if result.get("ok") and not result.get("stale"):
-            command = result.get("command")
-            if isinstance(command, dict):
-                try:
-                    get_action_mirror().set_chassis_action(command)
-                except Exception as exc:
-                    LOGGER.warning("Action mirror chassis update failed: %s", exc)
         log_action_result(f"Chassis {chassis_action}", result)
         self.write_json(result, status=ros_result_status(result))
 

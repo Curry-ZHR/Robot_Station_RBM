@@ -175,7 +175,7 @@ READ_TOPICS = {
         topic="/action/chassis",
         message_type="std_msgs/msg/String",
         stale_after_sec=0.2,
-        description="Latest web chassis action mirrored for data collection as JSON.",
+        description="Raw chassis target action published by the chassis velocity smoother as JSON.",
     ),
     "action_chassis_smoothed": TopicReadSpec(
         key="action_chassis_smoothed",

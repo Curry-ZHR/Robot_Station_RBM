@@ -230,6 +230,7 @@ def default_service_specs():
     chassis_smoother_watchdog_timeout_sec = os.environ.get("CHASSIS_SMOOTHER_WATCHDOG_TIMEOUT_SEC", "0.25")
     chassis_smoother_linear_deadband_mps = os.environ.get("CHASSIS_SMOOTHER_LINEAR_DEADBAND_MPS", "0.005")
     chassis_smoother_angular_deadband_rad_s = os.environ.get("CHASSIS_SMOOTHER_ANGULAR_DEADBAND_RAD_S", "0.01")
+    chassis_raw_action_topic = os.environ.get("CHASSIS_RAW_ACTION_TOPIC", "/action/chassis")
     chassis_smoothed_action_topic = os.environ.get("CHASSIS_SMOOTHED_ACTION_TOPIC", "/action/chassis_smoothed")
     specs = {
         "piper": ManagedServiceSpec(
@@ -309,6 +310,7 @@ def default_service_specs():
                 f"chassis_smoother_watchdog_timeout_sec:={chassis_smoother_watchdog_timeout_sec}",
                 f"chassis_smoother_linear_deadband_mps:={chassis_smoother_linear_deadband_mps}",
                 f"chassis_smoother_angular_deadband_rad_s:={chassis_smoother_angular_deadband_rad_s}",
+                f"chassis_raw_action_topic:={chassis_raw_action_topic}",
                 f"chassis_smoothed_action_topic:={chassis_smoothed_action_topic}",
             ),
             setup_scripts=(

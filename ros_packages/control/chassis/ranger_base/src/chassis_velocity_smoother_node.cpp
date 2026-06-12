@@ -72,6 +72,7 @@ public:
   {
     declare_parameter<std::string>("target_topic", "/cmd_vel");
     declare_parameter<std::string>("output_topic", "/cmd_vel_smoothed");
+    declare_parameter<std::string>("raw_action_topic", "/action/chassis");
     declare_parameter<std::string>("smoothed_action_topic", "/action/chassis_smoothed");
     declare_parameter<double>("publish_rate_hz", 50.0);
     declare_parameter<double>("linear_accel_mps2", 0.25);
@@ -84,6 +85,7 @@ public:
 
     target_topic_ = get_parameter("target_topic").as_string();
     output_topic_ = get_parameter("output_topic").as_string();
+    raw_action_topic_ = get_parameter("raw_action_topic").as_string();
     smoothed_action_topic_ = get_parameter("smoothed_action_topic").as_string();
     publish_rate_hz_ = positive_or_default(get_parameter("publish_rate_hz").as_double(), 50.0);
     linear_accel_mps2_ = positive_or_default(get_parameter("linear_accel_mps2").as_double(), 0.25);
@@ -109,6 +111,9 @@ public:
       rclcpp::QoS(1),
       std::bind(&ChassisVelocitySmootherNode::target_callback, this, std::placeholders::_1));
     output_pub_ = create_publisher<geometry_msgs::msg::Twist>(output_topic_, rclcpp::QoS(1));
+    raw_action_pub_ = create_publisher<std_msgs::msg::String>(
+      raw_action_topic_, rclcpp::QoS(
+        1));
     smoothed_action_pub_ = create_publisher<std_msgs::msg::String>(
       smoothed_action_topic_, rclcpp::QoS(
         1));
@@ -118,11 +123,12 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "Chassis velocity smoother: target=%s output=%s action=%s rate=%.1fHz "
+      "Chassis velocity smoother: target=%s output=%s raw_action=%s smoothed_action=%s rate=%.1fHz "
       "linear_accel=%.3f linear_decel=%.3f angular_accel=%.3f "
       "angular_decel=%.3f watchdog=%.3fs",
       target_topic_.c_str(),
       output_topic_.c_str(),
+      raw_action_topic_.c_str(),
       smoothed_action_topic_.c_str(),
       publish_rate_hz_,
       linear_accel_mps2_,
@@ -156,20 +162,25 @@ private:
   void timer_callback()
   {
     const rclcpp::Time now = get_clock()->now();
+    geometry_msgs::msg::Twist target;
     geometry_msgs::msg::Twist output;
     {
       std::lock_guard<std::mutex> lock(lock_);
       const double dt = tick_dt(now);
-      const geometry_msgs::msg::Twist desired = desired_target(now);
-      step_toward(desired, dt);
+      target = desired_target(now);
+      step_toward(target, dt);
       output = current_;
     }
 
     output_pub_->publish(output);
 
-    std_msgs::msg::String action_msg;
-    action_msg.data = chassis_action_json(output);
-    smoothed_action_pub_->publish(action_msg);
+    std_msgs::msg::String raw_action_msg;
+    raw_action_msg.data = chassis_action_json(target);
+    raw_action_pub_->publish(raw_action_msg);
+
+    std_msgs::msg::String smoothed_action_msg;
+    smoothed_action_msg.data = chassis_action_json(output);
+    smoothed_action_pub_->publish(smoothed_action_msg);
   }
 
   double tick_dt(const rclcpp::Time & now)
@@ -266,6 +277,7 @@ private:
 
   std::string target_topic_;
   std::string output_topic_;
+  std::string raw_action_topic_;
   std::string smoothed_action_topic_;
   double publish_rate_hz_ = 50.0;
   double linear_accel_mps2_ = 0.25;
@@ -278,6 +290,7 @@ private:
 
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr target_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr output_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr raw_action_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr smoothed_action_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

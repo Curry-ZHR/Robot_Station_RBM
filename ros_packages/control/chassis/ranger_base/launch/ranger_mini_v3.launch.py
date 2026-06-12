@@ -71,6 +71,11 @@ def generate_launch_description():
         default_value='0.01',
         description='Angular velocity deadband in rad/s'
     )
+    chassis_raw_action_topic_arg = DeclareLaunchArgument(
+        'chassis_raw_action_topic',
+        default_value='/action/chassis',
+        description='Dataset action topic for raw chassis target velocity JSON'
+    )
     chassis_smoothed_action_topic_arg = DeclareLaunchArgument(
         'chassis_smoothed_action_topic',
         default_value='/action/chassis_smoothed',
@@ -84,6 +89,7 @@ def generate_launch_description():
         parameters=[{
             'target_topic': '/cmd_vel',
             'output_topic': '/cmd_vel_smoothed',
+            'raw_action_topic': launch.substitutions.LaunchConfiguration('chassis_raw_action_topic'),
             'smoothed_action_topic': launch.substitutions.LaunchConfiguration('chassis_smoothed_action_topic'),
             'publish_rate_hz': ParameterValue(LaunchConfiguration('chassis_smoother_publish_rate_hz'), value_type=float),
             'linear_accel_mps2': ParameterValue(LaunchConfiguration('chassis_smoother_linear_accel_mps2'), value_type=float),
@@ -133,6 +139,7 @@ def generate_launch_description():
         chassis_smoother_watchdog_timeout_sec_arg,
         chassis_smoother_linear_deadband_mps_arg,
         chassis_smoother_angular_deadband_rad_s_arg,
+        chassis_raw_action_topic_arg,
         chassis_smoothed_action_topic_arg,
         chassis_velocity_smoother_node,
         ranger_base_node
