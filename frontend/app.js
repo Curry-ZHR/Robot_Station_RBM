@@ -817,6 +817,7 @@ const stateMachineCanvasSize = {
   width: 980,
   height: 620,
 };
+const stateMachineCanvasNodeMargin = 180;
 const stateMachineNodeSize = {
   width: 168,
   height: 94,
@@ -1358,11 +1359,31 @@ function stateMachineDefaultTaskPosition() {
 }
 
 function clampStateMachineNodePosition(position) {
-  const maxX = stateMachineCanvasSize.width - stateMachineNodeSize.width - 20;
-  const maxY = stateMachineCanvasSize.height - stateMachineNodeSize.height - 20;
+  const x = Number(position?.x);
+  const y = Number(position?.y);
   return {
-    x: clamp(Number(position?.x) || 0, 20, maxX),
-    y: clamp(Number(position?.y) || 0, 20, maxY),
+    x: Math.max(20, Number.isFinite(x) ? x : 0),
+    y: Math.max(20, Number.isFinite(y) ? y : 0),
+  };
+}
+
+function stateMachineWorkspaceSize() {
+  const canvas = $("#stateMachineCanvas");
+  const visibleWidth = canvas ? Math.max(0, canvas.clientWidth - 24) : 0;
+  const visibleHeight = canvas ? Math.max(0, canvas.clientHeight - 24) : 0;
+  const size = {
+    width: Math.max(stateMachineCanvasSize.width, visibleWidth),
+    height: Math.max(stateMachineCanvasSize.height, visibleHeight),
+  };
+  state.stateMachine.nodes.forEach((node) => {
+    const x = Number(node?.x);
+    const y = Number(node?.y);
+    if (Number.isFinite(x)) size.width = Math.max(size.width, x + stateMachineNodeSize.width + stateMachineCanvasNodeMargin);
+    if (Number.isFinite(y)) size.height = Math.max(size.height, y + stateMachineNodeSize.height + stateMachineCanvasNodeMargin);
+  });
+  return {
+    width: Math.ceil(size.width),
+    height: Math.ceil(size.height),
   };
 }
 
@@ -1476,7 +1497,7 @@ function stateMachineSnapshot() {
       multipleOutgoing: "random",
       fixedStates: ["sm_start", "sm_end"],
     },
-    canvas: { ...stateMachineCanvasSize },
+    canvas: stateMachineWorkspaceSize(),
     nodes: state.stateMachine.nodes.map((node) => ({
       id: node.id,
       type: node.type,
@@ -1751,7 +1772,7 @@ function stateMachineEdgeGeometry(source, target) {
   };
 }
 
-function renderStateMachineEdges() {
+function renderStateMachineEdges(workspaceSize = stateMachineWorkspaceSize()) {
   const sm = state.stateMachine;
   const edgePathKeys = new Set((sm.run.edgePath || []).map((edge) => `${edge.from}->${edge.to}`));
   const activeEdgeKey = sm.run.activeEdge ? `${sm.run.activeEdge.from}->${sm.run.activeEdge.to}` : "";
@@ -1786,7 +1807,7 @@ function renderStateMachineEdges() {
     });
   });
   return `
-    <svg class="state-machine-edge-layer" viewBox="0 0 ${stateMachineCanvasSize.width} ${stateMachineCanvasSize.height}">
+    <svg class="state-machine-edge-layer" viewBox="0 0 ${workspaceSize.width} ${workspaceSize.height}">
       <defs>
         <marker id="stateMachineArrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
           <path d="M0,0 L9,4.5 L0,9 z"></path>
@@ -2100,9 +2121,10 @@ function renderStateMachineCanvas() {
   ensureStateMachineGraph();
   const scrollLeft = canvas.scrollLeft;
   const scrollTop = canvas.scrollTop;
+  const workspaceSize = stateMachineWorkspaceSize();
   canvas.innerHTML = `
-    <div class="state-machine-workspace" style="width:${stateMachineCanvasSize.width}px; height:${stateMachineCanvasSize.height}px;">
-      ${renderStateMachineEdges()}
+    <div class="state-machine-workspace" style="width:${workspaceSize.width}px; height:${workspaceSize.height}px;">
+      ${renderStateMachineEdges(workspaceSize)}
       ${state.stateMachine.nodes.map((node) => renderStateMachineNodeCard(node)).join("")}
     </div>
   `;
@@ -2437,6 +2459,16 @@ function stateMachineWorkspaceRect() {
   return $("#stateMachineCanvas")?.querySelector(".state-machine-workspace")?.getBoundingClientRect() || null;
 }
 
+function resizeStateMachineWorkspace(canvas) {
+  const workspace = canvas?.querySelector(".state-machine-workspace");
+  const workspaceSize = stateMachineWorkspaceSize();
+  if (workspace) {
+    workspace.style.width = `${workspaceSize.width}px`;
+    workspace.style.height = `${workspaceSize.height}px`;
+  }
+  return workspaceSize;
+}
+
 function startStateMachineNodeDrag(event) {
   const handle = event.target.closest("[data-sm-drag-handle]");
   if (!handle || event.button !== 0) return;
@@ -2475,8 +2507,9 @@ function updateStateMachineNodeDrag(event) {
     card.style.left = `${next.x}px`;
     card.style.top = `${next.y}px`;
   }
+  const workspaceSize = resizeStateMachineWorkspace(canvas);
   const edgeLayer = canvas?.querySelector(".state-machine-edge-layer");
-  if (edgeLayer) edgeLayer.outerHTML = renderStateMachineEdges();
+  if (edgeLayer) edgeLayer.outerHTML = renderStateMachineEdges(workspaceSize);
 }
 
 function finishStateMachineNodeDrag() {
