@@ -573,7 +573,10 @@ body.robot-modal-open {
 
 .robot-view .robot-work-panel {
   padding: 10px 10px 6px;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .mapping-actions {
@@ -1894,18 +1897,22 @@ body.robot-modal-open {
 }
 
 .robot-work-panel .localization-status-metrics {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .robot-work-panel .localization-status-metrics .metric-card {
   min-height: 48px;
-  padding: 6px;
+  padding: 7px 9px;
+}
+
+.robot-work-panel .localization-status-metrics .metric-card:first-child {
+  grid-column: 1 / -1;
 }
 
 .robot-work-panel .localization-status-metrics .metric-card strong {
   margin-top: 3px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .localization-viewer {
@@ -7010,9 +7017,13 @@ body[data-active-view="state-machine"] #drawerToggle {
     height: clamp(540px, calc(100vh - 154px), 760px);
   }
 
-  .robot-situation-canvas,
-  .robot-view .robot-work-panel {
+  .robot-situation-canvas {
     overflow: hidden;
+  }
+
+  .robot-view .robot-work-panel {
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 }
 
@@ -7467,7 +7478,9 @@ body[data-active-view="state-machine"] #drawerToggle {
     height: clamp(440px, 58vh, 620px);
   }
 
-  .robot-work-panel {
+  .robot-work-panel,
+  .robot-view .robot-work-panel {
+    height: auto;
     overflow: visible;
   }
 }
@@ -7560,6 +7573,35 @@ body[data-active-view="state-machine"] #drawerToggle {
   .mapping-detail-list > div:last-child:nth-child(odd) {
     grid-column: auto;
   }
+
+  .robot-stage-toolbar-left {
+    left: 10px;
+    width: calc(100% - 20px);
+    min-width: 0;
+  }
+
+  .robot-layer-toolbar {
+    position: absolute;
+    top: 132px;
+    z-index: 4;
+    left: 10px;
+    right: 10px;
+    max-width: calc(100% - 20px);
+    justify-content: flex-start;
+  }
+
+  .robot-layer-toolbar .secondary-button {
+    min-height: 30px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+
+  .robot-view-overlay {
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    max-width: none;
+  }
 }
 
 @media (max-width: 520px) {
@@ -7606,35 +7648,6 @@ body[data-active-view="state-machine"] #drawerToggle {
   .robot-situation-canvas .robot-stage {
     min-height: 340px;
     height: 58vh;
-  }
-
-  .robot-layer-toolbar {
-    position: absolute;
-    top: 132px;
-    z-index: 4;
-    left: 10px;
-    right: 10px;
-    max-width: calc(100% - 20px);
-    justify-content: flex-start;
-  }
-
-  .robot-layer-toolbar .secondary-button {
-    min-height: 30px;
-    padding: 0 10px;
-    font-size: 12px;
-  }
-
-  .robot-stage-toolbar-left {
-    left: 10px;
-    width: calc(100% - 20px);
-    min-width: 0;
-  }
-
-  .robot-view-overlay {
-    right: 10px;
-    bottom: 10px;
-    left: 10px;
-    max-width: none;
   }
 }
 

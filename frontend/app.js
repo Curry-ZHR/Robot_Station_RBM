@@ -639,6 +639,17 @@ const piperJointTopicKeys = {
   right: "piper_right_joint_state_double",
 };
 
+const piperJointTopicCandidates = {
+  left: [
+    { key: "piper_left_joint_state_double", topic: "/joint_states_single_l" },
+    { key: "piper_left_joint_state", topic: "/puppet/joint_left" },
+  ],
+  right: [
+    { key: "piper_right_joint_state_double", topic: "/joint_states_single_r" },
+    { key: "piper_right_joint_state", topic: "/puppet/joint_right" },
+  ],
+};
+
 const piperJointPollIntervalMs = 100;
 const piperJointReadWaitSec = 0.04;
 
@@ -3364,8 +3375,10 @@ function renderGripperCompareRow(side) {
 function renderArmComparison(side) {
   const label = piperArmLabels[side] || side;
   const action = state.piperActions[side];
+  const feedback = state.piperJoints[side];
   const status = armStatusText(side);
   const jointRows = armJointLimitsFor(side).map((limit, index) => renderJointCompareRow(side, limit, index)).join("");
+  const stateTopic = feedback && feedback.topic ? feedback.topic : piperJointTopicNames[side];
 
   return `
     <section class="arm-inline-card" data-arm-panel="${side}">
@@ -3375,7 +3388,7 @@ function renderArmComparison(side) {
           <p>
             <span class="status-text ${status.level}">${status.text}</span>
             <span>${status.detail}</span>
-            <span>State ${piperJointTopicNames[side]}</span>
+            <span>State ${stateTopic}</span>
             <span>Action ${piperWriteActionTopics[side]}</span>
           </p>
         </div>
@@ -6793,11 +6806,10 @@ function renderLocalizationStatus() {
   const statusMetrics = $("#localizationStatusMetrics");
   if (statusMetrics) {
     statusMetrics.innerHTML = [
-      ["地图", localization.loadedMap || localization.selectedMap || "--"],
-      ["后端", backendText],
-      ["位姿", poseText],
+      ["位姿 x / y / yaw", poseText],
       ["Fitness", fitnessText],
       ["频率", frequencyText],
+      ["收敛", convergenceText],
       ["失败帧", String(localization.failedFrameCount || 0)],
     ]
       .map(([name, value]) => `<div class="metric-card"><span>${escapeHtml(name)}</span><strong>${escapeHtml(value)}</strong></div>`)
@@ -10059,35 +10071,55 @@ function renderPiperJointFeedback() {
   renderRobotViewStatus();
 }
 
+function piperJointPayloadHasPositions(payload) {
+  const positions = payload && payload.data && Array.isArray(payload.data.position) ? payload.data.position : [];
+  return Boolean(payload && payload.ok && positions.length > 0);
+}
+
+async function fetchPiperJointCandidate(candidate) {
+  try {
+    const response = await fetch(`/api/ros/topics/${candidate.key}?wait=${piperJointReadWaitSec}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok && !payload.code) {
+      payload.ok = false;
+      payload.code = `HTTP-${response.status}`;
+      payload.detail = `HTTP ${response.status}`;
+    }
+    if (!payload.topic) payload.topic = candidate.topic;
+    return payload;
+  } catch (error) {
+    return {
+      ok: false,
+      code: "ROS-R-FETCH",
+      detail: error.message,
+      topic: candidate.topic,
+    };
+  }
+}
+
+async function fetchPiperJointSide(side) {
+  const candidates = piperJointTopicCandidates[side] || [{ key: piperJointTopicKeys[side], topic: piperJointTopicNames[side] }];
+  let firstPayload = null;
+  let stalePayload = null;
+  for (const candidate of candidates) {
+    const payload = await fetchPiperJointCandidate(candidate);
+    if (!firstPayload) firstPayload = payload;
+    if (piperJointPayloadHasPositions(payload)) {
+      if (!payload.stale) return [side, payload];
+      if (!stalePayload) stalePayload = payload;
+    }
+  }
+  return [side, stalePayload || firstPayload || { ok: false, code: "ROS-R-NODATA", detail: `${piperArmLabels[side]}关节反馈无可用候选。` }];
+}
+
 async function fetchPiperJointStates() {
   if (state.piperJointPolling) {
     return null;
   }
   state.piperJointPolling = true;
   try {
-    const entries = Object.entries(piperJointTopicKeys);
     const results = await Promise.all(
-      entries.map(async ([side, key]) => {
-        try {
-          const response = await fetch(`/api/ros/topics/${key}?wait=${piperJointReadWaitSec}`, { cache: "no-store" });
-          const payload = await response.json();
-          if (!response.ok && !payload.code) {
-            payload.ok = false;
-            payload.code = `HTTP-${response.status}`;
-            payload.detail = `HTTP ${response.status}`;
-          }
-          return [side, payload];
-        } catch (error) {
-          return [
-            side,
-            {
-              ok: false,
-              code: "ROS-R-FETCH",
-              detail: error.message,
-            },
-          ];
-        }
-      }),
+      Object.keys(piperJointTopicCandidates).map((side) => fetchPiperJointSide(side)),
     );
 
     results.forEach(([side, payload]) => applyPiperJointPayload(side, payload));

@@ -61,6 +61,40 @@ def test_build_observation_success():
     assert "speed" not in state
 
 
+def test_build_observation_falls_back_to_external_piper_joint_topics():
+    ros = FakeRosReader(
+        {
+            "piper_left_joint_state": _joint_state([0.7, 0.2, 0.3, 0.4, 0.5, 0.6, 0.05]),
+            "piper_right_joint_state": _joint_state([-0.7, -0.2, -0.3, -0.4, -0.5, -0.6, 0.04]),
+            "lifting_motor_state": {"ok": True, "data": {"back_height": 420}},
+        }
+    )
+
+    obs = build_observation("grasp the bottle", camera_reader=FakeCameraReader(), ros_reader=ros)
+    state = obs["observation"]["state"]
+
+    assert state["left"]["joint1"] == pytest.approx(0.7)
+    assert state["right"]["joint1"] == pytest.approx(-0.7)
+
+
+def test_build_observation_prefers_fresh_external_topic_over_stale_remap():
+    ros = FakeRosReader(
+        {
+            "piper_left_joint_state_double": {**_joint_state([9.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]), "stale": True},
+            "piper_right_joint_state_double": {**_joint_state([-9.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]), "stale": True},
+            "piper_left_joint_state": _joint_state([0.8, 0.2, 0.3, 0.4, 0.5, 0.6, 0.05]),
+            "piper_right_joint_state": _joint_state([-0.8, -0.2, -0.3, -0.4, -0.5, -0.6, 0.04]),
+            "lifting_motor_state": {"ok": True, "data": {"back_height": 420}},
+        }
+    )
+
+    obs = build_observation("grasp the bottle", camera_reader=FakeCameraReader(), ros_reader=ros)
+    state = obs["observation"]["state"]
+
+    assert state["left"]["joint1"] == pytest.approx(0.8)
+    assert state["right"]["joint1"] == pytest.approx(-0.8)
+
+
 def test_missing_camera_raises():
     reader = FakeCameraReader({"camera_f_color": {"ok": False, "detail": "no frame"}})
     with pytest.raises(ObservationBuildError) as exc:

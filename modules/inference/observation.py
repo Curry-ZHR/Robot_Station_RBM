@@ -9,6 +9,10 @@ chunks.
 import base64
 import os
 
+from modules.control.piper.feedback import (
+    joint_state_key_candidates,
+    read_joint_state_candidate,
+)
 from modules.ros_io import get_camera_image_reader, get_ros_reader
 from modules.inference.validation import GRIPPER_NAME, JOINT_NAMES
 
@@ -27,10 +31,20 @@ CAMERA_MAP = {
     "right_wrist": ("camera_r", "color"),
 }
 
-# Joint-state read keys per arm. Defaults match the double-arm launch remapping;
-# override via env when running a different launch configuration.
-LEFT_JOINT_STATE_KEY = os.environ.get("INFERENCE_LEFT_JOINT_STATE_KEY", "piper_left_joint_state_double")
-RIGHT_JOINT_STATE_KEY = os.environ.get("INFERENCE_RIGHT_JOINT_STATE_KEY", "piper_right_joint_state_double")
+# Joint-state read keys per arm. Defaults cover both Robot Station's double-arm
+# remapping and externally launched Piper nodes that publish /puppet/joint_*.
+LEFT_JOINT_STATE_KEYS = joint_state_key_candidates(
+    "left",
+    list_env="INFERENCE_LEFT_JOINT_STATE_KEYS",
+    single_env="INFERENCE_LEFT_JOINT_STATE_KEY",
+)
+RIGHT_JOINT_STATE_KEYS = joint_state_key_candidates(
+    "right",
+    list_env="INFERENCE_RIGHT_JOINT_STATE_KEYS",
+    single_env="INFERENCE_RIGHT_JOINT_STATE_KEY",
+)
+LEFT_JOINT_STATE_KEY = LEFT_JOINT_STATE_KEYS[0]
+RIGHT_JOINT_STATE_KEY = RIGHT_JOINT_STATE_KEYS[0]
 LIFT_STATE_KEY = os.environ.get("INFERENCE_LIFT_STATE_KEY", "lifting_motor_state")
 
 FRAME_WAIT_SEC = float(os.environ.get("INFERENCE_FRAME_WAIT_SEC", "1.0"))
@@ -56,20 +70,21 @@ def _encode_frame(camera, kind, reader):
     return base64.b64encode(body).decode("ascii")
 
 
-def _arm_state(key, side, reader):
-    result = reader.read(key, timeout_sec=STATE_WAIT_SEC)
-    if not result.get("ok"):
+def _arm_state(keys, side, reader):
+    try:
+        _, _, positions = read_joint_state_candidate(
+            reader,
+            side,
+            keys,
+            timeout_sec=STATE_WAIT_SEC,
+            min_positions=7,
+            accept_stale=True,
+        )
+    except Exception as exc:
         raise ObservationBuildError(
             "INFER-OBS-JOINT",
-            f"{side} joint state ({key}) unavailable: {result.get('detail', 'no data')}.",
-        )
-    data = result.get("data") or {}
-    positions = data.get("position")
-    if not isinstance(positions, (list, tuple)) or len(positions) < 7:
-        raise ObservationBuildError(
-            "INFER-OBS-JOINT",
-            f"{side} joint state ({key}) does not expose 7 positions.",
-        )
+            str(exc),
+        ) from exc
     arm = {name: float(positions[index]) for index, name in enumerate(JOINT_NAMES)}
     arm[GRIPPER_NAME] = float(positions[6])
     return arm
@@ -98,17 +113,20 @@ def read_current_arm_positions(ros_reader=None):
 
     ros_reader = ros_reader or get_ros_reader()
     out = {}
-    for side, key in (("left", LEFT_JOINT_STATE_KEY), ("right", RIGHT_JOINT_STATE_KEY)):
+    for side, keys in (("left", LEFT_JOINT_STATE_KEYS), ("right", RIGHT_JOINT_STATE_KEYS)):
         try:
-            result = ros_reader.read(key, timeout_sec=STATE_WAIT_SEC)
+            _, _, positions = read_joint_state_candidate(
+                ros_reader,
+                side,
+                keys,
+                timeout_sec=STATE_WAIT_SEC,
+                min_positions=7,
+                accept_stale=True,
+            )
         except Exception:
-            result = {"ok": False}
-        data = result.get("data") or {}
-        positions = data.get("position")
-        if result.get("ok") and isinstance(positions, (list, tuple)) and len(positions) >= 7:
-            out[side] = [float(positions[index]) for index in range(7)]
-        else:
             out[side] = None
+        else:
+            out[side] = [float(positions[index]) for index in range(7)]
     return out
 
 
@@ -124,8 +142,8 @@ def build_observation(prompt, camera_reader=None, ros_reader=None):
         for label, (camera, kind) in CAMERA_MAP.items()
     }
     state = {
-        "left": _arm_state(LEFT_JOINT_STATE_KEY, "left", ros_reader),
-        "right": _arm_state(RIGHT_JOINT_STATE_KEY, "right", ros_reader),
+        "left": _arm_state(LEFT_JOINT_STATE_KEYS, "left", ros_reader),
+        "right": _arm_state(RIGHT_JOINT_STATE_KEYS, "right", ros_reader),
         "lift": _lift_state(ros_reader),
     }
     return {

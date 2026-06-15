@@ -102,6 +102,20 @@ class FakeRosReader:
         return {"ok": True, "stale": False, "data": {"position": list(positions)}}
 
 
+class ExternalPiperRosReader:
+    def __init__(self, sample):
+        self.sample = sample
+        self.calls = []
+
+    def read(self, key, timeout_sec=0.0):
+        self.calls.append((key, timeout_sec))
+        if key == "piper_left_joint_state":
+            return {"ok": True, "stale": False, "data": {"position": list(self.sample["left"])}}
+        if key == "piper_right_joint_state":
+            return {"ok": True, "stale": False, "data": {"position": list(self.sample["right"])}}
+        return {"ok": False, "detail": f"no data for {key}"}
+
+
 def test_navigation_state_runs_to_completed(monkeypatch):
     nav_status = {
         "ok": True,
@@ -190,6 +204,24 @@ def test_wait_state_completes_after_gripper_moves_then_stays_stable(monkeypatch)
     assert run["taskStatus"]["status"] == "completed"
     assert run["taskStatus"]["data"]["phase"] == "completed"
     assert fake_ros.calls
+
+
+def test_wait_joint_reader_falls_back_to_external_piper_topics():
+    reader = ExternalPiperRosReader(
+        _arm_sample(
+            left=_arm_positions(joint1=0.2, gripper=0.003),
+            right=_arm_positions(joint1=-0.2, gripper=0.004),
+        )
+    )
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    snapshot = manager._read_wait_joint_positions(reader)
+
+    assert snapshot["joints"][0] == 0.2
+    assert snapshot["joints"][6] == -0.2
+    assert snapshot["grippers"] == [0.003, 0.004]
+    assert ("piper_left_joint_state_double", executor_module.WAIT_JOINT_READ_WAIT_SEC) in reader.calls
+    assert ("piper_left_joint_state", executor_module.WAIT_JOINT_READ_WAIT_SEC) in reader.calls
 
 
 def test_wait_state_rejects_invalid_stable_sec(monkeypatch):

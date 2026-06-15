@@ -52,6 +52,7 @@ import random
 import threading
 import time
 
+from modules.control.piper.feedback import joint_state_key_candidates, read_joint_state_candidate
 from modules.navigation import get_navigation_manager
 from modules.ros_io import get_ros_reader
 
@@ -59,8 +60,18 @@ _EXECUTOR = None
 _EXECUTOR_LOCK = threading.Lock()
 _TERMINAL_RUN_STATUSES = {"completed", "failed", "stopped"}
 _TERMINAL_NAVIGATION_STATUSES = {"completed", "failed", "stopped"}
-WAIT_LEFT_JOINT_STATE_KEY = "piper_left_joint_state_double"
-WAIT_RIGHT_JOINT_STATE_KEY = "piper_right_joint_state_double"
+WAIT_LEFT_JOINT_STATE_KEYS = joint_state_key_candidates(
+    "left",
+    list_env="STATE_MACHINE_WAIT_LEFT_JOINT_STATE_KEYS",
+    single_env="STATE_MACHINE_WAIT_LEFT_JOINT_STATE_KEY",
+)
+WAIT_RIGHT_JOINT_STATE_KEYS = joint_state_key_candidates(
+    "right",
+    list_env="STATE_MACHINE_WAIT_RIGHT_JOINT_STATE_KEYS",
+    single_env="STATE_MACHINE_WAIT_RIGHT_JOINT_STATE_KEY",
+)
+WAIT_LEFT_JOINT_STATE_KEY = WAIT_LEFT_JOINT_STATE_KEYS[0]
+WAIT_RIGHT_JOINT_STATE_KEY = WAIT_RIGHT_JOINT_STATE_KEYS[0]
 WAIT_JOINT_READ_WAIT_SEC = 0.2
 WAIT_MIN_STABLE_SEC = 0.1
 WAIT_JOINT_MOVE_EPS_RAD = 0.01
@@ -382,15 +393,18 @@ class StateMachineExecutor:
 
     def _read_wait_joint_positions(self, reader):
         snapshot = {"joints": [], "grippers": []}
-        for side, key in (("left", WAIT_LEFT_JOINT_STATE_KEY), ("right", WAIT_RIGHT_JOINT_STATE_KEY)):
-            result = reader.read(key, timeout_sec=WAIT_JOINT_READ_WAIT_SEC)
-            if not result.get("ok"):
-                raise ValueError(f"{side} joint state ({key}) read failed: {result.get('detail', 'no data')}")
-            if result.get("stale"):
-                raise ValueError(f"{side} joint state ({key}) is stale.")
-            positions = (result.get("data") or {}).get("position")
-            if not isinstance(positions, (list, tuple)) or len(positions) < 7:
-                raise ValueError(f"{side} joint state ({key}) must expose at least 7 positions.")
+        for side, keys in (("left", WAIT_LEFT_JOINT_STATE_KEYS), ("right", WAIT_RIGHT_JOINT_STATE_KEYS)):
+            try:
+                _, _, positions = read_joint_state_candidate(
+                    reader,
+                    side,
+                    keys,
+                    timeout_sec=WAIT_JOINT_READ_WAIT_SEC,
+                    min_positions=7,
+                    accept_stale=False,
+                )
+            except Exception as exc:
+                raise ValueError(str(exc)) from exc
             parsed = [_finite_float(value, f"{side}.position[{index}]") for index, value in enumerate(positions[:7])]
             snapshot["joints"].extend(parsed[:6])
             snapshot["grippers"].append(parsed[6])
