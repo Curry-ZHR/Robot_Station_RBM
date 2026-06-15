@@ -116,6 +116,60 @@ class ExternalPiperRosReader:
         return {"ok": False, "detail": f"no data for {key}"}
 
 
+class FakeTopicReader:
+    def __init__(self, baseline, next_result):
+        self.baseline = dict(baseline)
+        self.next_result = dict(next_result)
+        self.read_calls = []
+        self.read_after_calls = []
+
+    def read(self, key, timeout_sec=0.0):
+        self.read_calls.append((key, timeout_sec))
+        return dict(self.baseline)
+
+    def read_after(self, key, after_sequence=None, timeout_sec=0.0):
+        self.read_after_calls.append((key, after_sequence, timeout_sec))
+        return dict(self.next_result)
+
+    def read_bool_topic(self, topic, timeout_sec=0.0):
+        self.read_calls.append((topic, timeout_sec))
+        return dict(self.baseline)
+
+    def read_bool_topic_after(self, topic, after_sequence=None, timeout_sec=0.0):
+        self.read_after_calls.append((topic, after_sequence, timeout_sec))
+        return dict(self.next_result)
+
+
+class FakeRosWriter:
+    def __init__(self):
+        self.published = []
+
+    def publish(self, key, payload):
+        self.published.append((key, dict(payload)))
+        return {
+            "ok": True,
+            "code": "ROS-W-PUBLISHED",
+            "detail": f"Published command to /{key}.",
+            "key": key,
+            "topic": f"/{key}",
+            "messageType": "std_msgs/msg/Bool",
+            "publishedAt": "12:00:00",
+        }
+
+    def publish_bool_topic(self, topic, value=True):
+        self.published.append((topic, {"data": bool(value)}))
+        return {
+            "ok": True,
+            "code": "ROS-W-PUBLISHED",
+            "detail": f"Published bool signal to {topic}.",
+            "key": f"state_machine_bool:{topic}",
+            "topic": topic,
+            "messageType": "std_msgs/msg/Bool",
+            "data": bool(value),
+            "publishedAt": "12:00:00",
+        }
+
+
 def test_navigation_state_runs_to_completed(monkeypatch):
     nav_status = {
         "ok": True,
@@ -347,6 +401,87 @@ def test_wait_state_does_not_finish_before_arm_or_gripper_moves(monkeypatch):
 
     stop_result = manager.stop()
     assert stop_result["run"]["status"] == "stopped"
+
+
+def test_topic_publish_state_publishes_true_and_continues(monkeypatch):
+    fake_writer = FakeRosWriter()
+    monkeypatch.setattr(executor_module, "get_ros_writer", lambda: fake_writer)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    result = manager.start(
+        {
+            "name": "发布信号流程",
+            "nodes": [
+                _start(["publish"]),
+                _node("publish", "topic_publish", params={"topicName": "/state_machine/start"}, outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert result["ok"] is True
+    assert fake_writer.published == [("/state_machine/start", {"data": True})]
+    assert run["status"] == "completed"
+    assert run["path"] == ["sm_start", "publish", "sm_end"]
+    assert run["taskStatus"]["nodeId"] == "publish"
+    assert run["taskStatus"]["taskType"] == "topic_publish"
+    assert run["taskStatus"]["status"] == "completed"
+    assert run["taskStatus"]["data"]["phase"] == "completed"
+    assert run["taskStatus"]["data"]["key"] == "/state_machine/start"
+    assert run["taskStatus"]["data"]["topic"] == "/state_machine/start"
+
+
+def test_topic_wait_state_waits_for_next_message_and_continues(monkeypatch):
+    fake_reader = FakeTopicReader(
+        {
+            "ok": True,
+            "code": "ROS-R-OK",
+            "detail": "Latest message from /data_collection/start is 10 ms old.",
+            "key": "data_collection_start",
+            "topic": "/data_collection/start",
+            "messageType": "std_msgs/msg/Bool",
+            "sequence": 7,
+            "data": {"data": True},
+        },
+        {
+            "ok": True,
+            "code": "ROS-R-OK",
+            "detail": "Latest message from /data_collection/start is 0 ms old.",
+            "key": "data_collection_start",
+            "topic": "/data_collection/start",
+            "messageType": "std_msgs/msg/Bool",
+            "sequence": 8,
+            "data": {"data": True},
+        },
+    )
+    monkeypatch.setattr(executor_module, "get_ros_reader", lambda: fake_reader)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    result = manager.start(
+        {
+            "name": "监听信号流程",
+            "nodes": [
+                _start(["wait_signal"]),
+                _node("wait_signal", "topic_wait", params={"topicName": "/data_collection/start"}, outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert result["ok"] is True
+    assert fake_reader.read_calls == [("/data_collection/start", 0.0)]
+    assert fake_reader.read_after_calls
+    assert fake_reader.read_after_calls[0][0] == "/data_collection/start"
+    assert fake_reader.read_after_calls[0][1] == 7
+    assert run["status"] == "completed"
+    assert run["path"] == ["sm_start", "wait_signal", "sm_end"]
+    assert run["taskStatus"]["nodeId"] == "wait_signal"
+    assert run["taskStatus"]["taskType"] == "topic_wait"
+    assert run["taskStatus"]["status"] == "completed"
+    assert run["taskStatus"]["data"]["phase"] == "completed"
+    assert run["taskStatus"]["data"]["sequence"] == 8
 
 
 def test_external_navigation_stop_fails_state_machine(monkeypatch):

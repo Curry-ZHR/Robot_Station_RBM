@@ -6,6 +6,9 @@ FRONTEND_DIR="${ROOT_DIR}/frontend"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-9999}"
 CONTROL_PORT="${CONTROL_PORT:-9998}"
+LIDAR_HOST_IP_CIDR="${ROBOT_STATION_LIDAR_HOST_IP_CIDR:-192.168.1.100/24}"
+LIDAR_INTERFACE="${ROBOT_STATION_LIDAR_INTERFACE:-enp11s0}"
+CONFIGURE_LIDAR_HOST_IP="${ROBOT_STATION_CONFIGURE_LIDAR_HOST_IP:-true}"
 
 if [[ ! -f "${FRONTEND_DIR}/index.html" ]]; then
   echo "frontend/index.html not found"
@@ -77,7 +80,48 @@ configure_cuda_runtime() {
   prepend_path LD_LIBRARY_PATH "${cuda_root}/targets/x86_64-linux/lib"
 }
 
+configure_lidar_host_ip() {
+  local enabled
+  enabled="$(printf '%s' "${CONFIGURE_LIDAR_HOST_IP}" | tr '[:upper:]' '[:lower:]')"
+  case "${enabled}" in
+    1|true|yes|on) ;;
+    *) return ;;
+  esac
+
+  if [[ -z "${LIDAR_HOST_IP_CIDR}" || -z "${LIDAR_INTERFACE}" ]]; then
+    return
+  fi
+  if ! command -v ip >/dev/null 2>&1; then
+    echo "WARN: ip command not found; cannot configure LiDAR host IP ${LIDAR_HOST_IP_CIDR} on ${LIDAR_INTERFACE}." >&2
+    return
+  fi
+  if ! ip link show dev "${LIDAR_INTERFACE}" >/dev/null 2>&1; then
+    echo "WARN: LiDAR interface ${LIDAR_INTERFACE} not found; skip ${LIDAR_HOST_IP_CIDR}." >&2
+    return
+  fi
+  if ip -o addr show dev "${LIDAR_INTERFACE}" | awk '{print $4}' | grep -Fxq "${LIDAR_HOST_IP_CIDR}"; then
+    return
+  fi
+
+  if [[ "${EUID}" -eq 0 ]]; then
+    if ip addr add "${LIDAR_HOST_IP_CIDR}" dev "${LIDAR_INTERFACE}" 2>/dev/null; then
+      echo "Configured LiDAR host IP ${LIDAR_HOST_IP_CIDR} on ${LIDAR_INTERFACE}."
+      return
+    fi
+  elif command -v sudo >/dev/null 2>&1; then
+    if sudo -n ip addr add "${LIDAR_HOST_IP_CIDR}" dev "${LIDAR_INTERFACE}" 2>/dev/null; then
+      echo "Configured LiDAR host IP ${LIDAR_HOST_IP_CIDR} on ${LIDAR_INTERFACE}."
+      return
+    fi
+  fi
+
+  echo "WARN: LiDAR host IP ${LIDAR_HOST_IP_CIDR} is missing on ${LIDAR_INTERFACE}." >&2
+  echo "WARN: Run 'bash scripts/install_lidar_ip_sudoers.sh' once, or add it manually with:" >&2
+  echo "WARN:   sudo ip addr add ${LIDAR_HOST_IP_CIDR} dev ${LIDAR_INTERFACE}" >&2
+}
+
 configure_cuda_runtime
+configure_lidar_host_ip
 
 cleanup_stale_localizers() {
   local pids

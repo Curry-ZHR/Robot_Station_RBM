@@ -922,6 +922,20 @@ const stateMachineTaskTypes = {
       { key: "stableSec", label: "静止等待时间", type: "number", step: "0.1", min: "0.1", unit: "s" },
     ],
   },
+  topic_publish: {
+    label: "发布消息",
+    summary: "发布一次 true 信号",
+    fields: [
+      { key: "topicName", label: "发布话题名", type: "text", placeholder: "/state_machine/start" },
+    ],
+  },
+  topic_wait: {
+    label: "监听消息",
+    summary: "收到消息后继续",
+    fields: [
+      { key: "topicName", label: "监听话题名", type: "text", placeholder: "/data_collection/start" },
+    ],
+  },
 };
 const stateMachineTaskTypeDefaults = {
   navigation: {
@@ -941,6 +955,8 @@ const stateMachineTaskTypeDefaults = {
   grasp: { graspMethod: "inference", leftTarget: "", rightTarget: "", prompt: "", leftPose: "", rightPose: "" },
   reset_odom: {},
   wait: { stableSec: 2 },
+  topic_publish: { topicName: "" },
+  topic_wait: { topicName: "", timeoutSec: 0 },
 };
 const stateMachineBuiltInLibraryEntries = [
   {
@@ -1762,6 +1778,8 @@ function stateMachineParamSummary(node) {
   }
   if (node.taskType === "reset_odom") return "调用 /reset_odom，将 /odom 重置为 0";
   if (node.taskType === "wait") return `运动后静止 ${params.stableSec ?? "--"}s`;
+  if (node.taskType === "topic_publish") return `发布 true：${params.topicName || params.actionKey || "--"}`;
+  if (node.taskType === "topic_wait") return `等待消息：${params.topicName || params.topicKey || "--"}`;
   return stateMachineTaskMeta(node.taskType).summary;
 }
 
@@ -1850,6 +1868,26 @@ function stateMachineTaskStatusRows(taskStatus) {
     rows.push(
       ["阶段", data.phase || "--"],
       ["服务", data.service || "/reset_odom"],
+      ["结果", data.code || "--"],
+    );
+  }
+  if (taskStatus?.taskType === "topic_wait") {
+    rows.push(
+      ["阶段", data.phase || "--"],
+      ["话题名", data.topic || data.key || "--"],
+      ["Topic", data.topic || "--"],
+      ["消息类型", data.messageType || "--"],
+      ["Sequence", data.sequence ?? "--"],
+      ["结果", data.code || "--"],
+    );
+  }
+  if (taskStatus?.taskType === "topic_publish") {
+    rows.push(
+      ["阶段", data.phase || "--"],
+      ["话题名", data.topic || data.key || "--"],
+      ["Topic", data.topic || "--"],
+      ["消息类型", data.messageType || "--"],
+      ["发布时间", data.publishedAt || "--"],
       ["结果", data.code || "--"],
     );
   }
@@ -2166,6 +2204,24 @@ async function submitStateMachineModal() {
       return;
     }
     params = { stableSec };
+  }
+  if (config.taskType === "topic_publish") {
+    const topicName = String(values.params.topicName || "").trim();
+    if (!topicName) {
+      addLog("状态机", "发布话题名不能为空");
+      $("#stateMachineModalForm [data-sm-modal-field='topicName']")?.focus();
+      return;
+    }
+    params = { topicName };
+  }
+  if (config.taskType === "topic_wait") {
+    const topicName = String(values.params.topicName || "").trim();
+    if (!topicName) {
+      addLog("状态机", "监听话题名不能为空");
+      $("#stateMachineModalForm [data-sm-modal-field='topicName']")?.focus();
+      return;
+    }
+    params = { topicName, timeoutSec: Number(config.params.timeoutSec) || 0 };
   }
 
   if (config.mode === "edit-node") {

@@ -16,6 +16,7 @@
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/string.hpp>
@@ -59,6 +60,7 @@ struct LocalizerOptions
   std::string map_path;
   std::string map_name;
   std::string cloud_topic = "/rslidar_points";
+  std::string odom_topic = "/odom";
   std::string initial_pose_topic = "/initialpose";
   std::string pose_topic = "/localization/pose";
   std::string status_topic = "/localization/status";
@@ -76,6 +78,8 @@ struct LocalizerOptions
   int gicp_max_iterations = 50;
   double gicp_transformation_epsilon = 0.0005;
   double gicp_euclidean_fitness_epsilon = 0.0005;
+  bool use_odom_retry = true;
+  double odom_max_age_sec = 1.0;
   double heartbeat_sec = 1.0;
   std::string registration_backend = kRegistrationBackend;
 };
@@ -87,6 +91,13 @@ struct Pose2D
   double yaw = 0.0;
 };
 
+struct OdomFrame
+{
+  Pose2D pose;
+  rclcpp::Time stamp;
+  Clock::time_point received_at;
+};
+
 struct CloudFrame
 {
   CloudT::Ptr cloud;
@@ -94,6 +105,7 @@ struct CloudFrame
   rclcpp::Time stamp;
   std::uint64_t sequence = 0;
   int raw_source_points = 0;
+  std::optional<OdomFrame> odom;
 };
 
 struct RegistrationResult
@@ -106,6 +118,7 @@ struct RegistrationResult
   double fitness = std::numeric_limits<double>::quiet_NaN();
   int source_points = 0;
   int raw_source_points = 0;
+  bool used_odom_retry = false;
   Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
 };
 
@@ -175,6 +188,17 @@ Eigen::Matrix4f transform2D(const double x, const double y, const double yaw)
   return matrix;
 }
 
+Eigen::Matrix4f odomDeltaCurrentToPrevious(const Pose2D & previous, const Pose2D & current)
+{
+  const double dx = current.x - previous.x;
+  const double dy = current.y - previous.y;
+  const double c = std::cos(previous.yaw);
+  const double s = std::sin(previous.yaw);
+  const double local_x = c * dx + s * dy;
+  const double local_y = -s * dx + c * dy;
+  return transform2D(local_x, local_y, normalizeAngle(current.yaw - previous.yaw));
+}
+
 Pose2D poseFromMatrix2D(const Eigen::Matrix4f & matrix)
 {
   return Pose2D{
@@ -190,6 +214,24 @@ double yawFromQuaternion(
   const double siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
   const double cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
   return std::atan2(siny_cosp, cosy_cosp);
+}
+
+double yawFromOdom(const nav_msgs::msg::Odometry & odom)
+{
+  const auto & q = odom.pose.pose.orientation;
+  const double siny_cosp = 2.0 * (q.w * q.z + q.x * q.y);
+  const double cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z);
+  return std::atan2(siny_cosp, cosy_cosp);
+}
+
+Pose2D poseFromOdom(const nav_msgs::msg::Odometry & odom)
+{
+  return Pose2D{odom.pose.pose.position.x, odom.pose.pose.position.y, yawFromOdom(odom)};
+}
+
+bool poseFinite(const Pose2D & pose)
+{
+  return std::isfinite(pose.x) && std::isfinite(pose.y) && std::isfinite(pose.yaw);
 }
 
 bool matrixFinite(const Eigen::Matrix4f & matrix)
@@ -270,6 +312,11 @@ public:
     cloud_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       options_.cloud_topic, rclcpp::SensorDataQoS(),
       [this](sensor_msgs::msg::PointCloud2::ConstSharedPtr msg) { onCloud(msg); });
+    if (options_.use_odom_retry && !options_.odom_topic.empty()) {
+      odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+        options_.odom_topic, rclcpp::QoS(rclcpp::KeepLast(50)).best_effort(),
+        [this](nav_msgs::msg::Odometry::ConstSharedPtr msg) { onOdom(msg); });
+    }
     initial_pose_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
       options_.initial_pose_topic, rclcpp::QoS(rclcpp::KeepLast(10)),
       [this](geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg) {
@@ -303,6 +350,7 @@ private:
     declare_parameter<std::string>("map_path", "");
     declare_parameter<std::string>("map_name", "");
     declare_parameter<std::string>("cloud_topic", options_.cloud_topic);
+    declare_parameter<std::string>("odom_topic", options_.odom_topic);
     declare_parameter<std::string>("initial_pose_topic", options_.initial_pose_topic);
     declare_parameter<std::string>("pose_topic", options_.pose_topic);
     declare_parameter<std::string>("status_topic", options_.status_topic);
@@ -323,6 +371,8 @@ private:
       "gicp_transformation_epsilon", options_.gicp_transformation_epsilon);
     declare_parameter<double>(
       "gicp_euclidean_fitness_epsilon", options_.gicp_euclidean_fitness_epsilon);
+    declare_parameter<bool>("use_odom_retry", options_.use_odom_retry);
+    declare_parameter<double>("odom_max_age_sec", options_.odom_max_age_sec);
     declare_parameter<double>("heartbeat_sec", options_.heartbeat_sec);
   }
 
@@ -331,6 +381,7 @@ private:
     options_.map_path = get_parameter("map_path").as_string();
     options_.map_name = get_parameter("map_name").as_string();
     options_.cloud_topic = get_parameter("cloud_topic").as_string();
+    options_.odom_topic = get_parameter("odom_topic").as_string();
     options_.initial_pose_topic = get_parameter("initial_pose_topic").as_string();
     options_.pose_topic = get_parameter("pose_topic").as_string();
     options_.status_topic = get_parameter("status_topic").as_string();
@@ -356,6 +407,8 @@ private:
       std::max(0.000001, get_parameter("gicp_transformation_epsilon").as_double());
     options_.gicp_euclidean_fitness_epsilon =
       std::max(0.000001, get_parameter("gicp_euclidean_fitness_epsilon").as_double());
+    options_.use_odom_retry = get_parameter("use_odom_retry").as_bool();
+    options_.odom_max_age_sec = std::max(0.05, get_parameter("odom_max_age_sec").as_double());
     options_.heartbeat_sec = std::max(0.1, get_parameter("heartbeat_sec").as_double());
   }
 
@@ -480,6 +533,16 @@ private:
     condition_.notify_all();
   }
 
+  void onOdom(const nav_msgs::msg::Odometry::ConstSharedPtr msg)
+  {
+    const Pose2D pose = poseFromOdom(*msg);
+    if (!poseFinite(pose)) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    latest_odom_ = OdomFrame{pose, rclcpp::Time(msg->header.stamp), Clock::now()};
+  }
+
   void onInitialPose(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
   {
     const std::string frame_id = normalizeFrame(msg->header.frame_id);
@@ -506,6 +569,7 @@ private:
     {
       std::lock_guard<std::mutex> lock(mutex_);
       last_pose_ = transform2D(position.x, position.y, yaw);
+      last_success_odom_ = latestOdomLocked();
       initialized_ = true;
       tracking_ready_ = false;
       failed_frame_count_ = 0;
@@ -513,6 +577,7 @@ private:
       last_used_ndt_ = false;
       last_ndt_converged_ = false;
       last_gicp_converged_ = false;
+      last_used_odom_retry_ = false;
       last_ndt_fitness_ = std::numeric_limits<double>::quiet_NaN();
       last_fitness_ = std::numeric_limits<double>::quiet_NaN();
       state_ = "localizing";
@@ -549,6 +614,7 @@ private:
     while (rclcpp::ok()) {
       CloudFrame frame;
       Eigen::Matrix4f initial_guess = Eigen::Matrix4f::Identity();
+      std::optional<Eigen::Matrix4f> odom_retry_guess;
       bool use_ndt = true;
       {
         std::unique_lock<std::mutex> lock(mutex_);
@@ -561,12 +627,14 @@ private:
           return;
         }
         frame = latest_cloud_.value();
+        frame.odom = latestOdomLocked();
         processed_sequence_ = frame.sequence;
         initial_guess = last_pose_;
+        odom_retry_guess = odomRetryGuessLocked(frame.odom);
         use_ndt = options_.use_ndt_when_tracking || !tracking_ready_ || failed_frame_count_ > 0;
       }
       const auto started_at = Clock::now();
-      RegistrationResult result = registerFrame(frame, initial_guess, use_ndt);
+      RegistrationResult result = registerFrame(frame, initial_guess, odom_retry_guess, use_ndt);
       const double elapsed_sec =
         std::chrono::duration<double>(Clock::now() - started_at).count();
       finishRegistration(frame, result, elapsed_sec);
@@ -574,7 +642,8 @@ private:
   }
 
   RegistrationResult registerFrame(
-    const CloudFrame & frame, const Eigen::Matrix4f & initial_guess, const bool use_ndt)
+    const CloudFrame & frame, const Eigen::Matrix4f & initial_guess,
+    const std::optional<Eigen::Matrix4f> & odom_retry_guess, const bool use_ndt)
   {
     RegistrationResult result;
     result.source_points = static_cast<int>(frame.cloud->points.size());
@@ -588,6 +657,11 @@ private:
     result = runRegistration(frame, initial_guess, use_ndt);
     if (!result.ok && !use_ndt) {
       result = runRegistration(frame, initial_guess, true);
+    }
+    if (!result.ok && odom_retry_guess.has_value()) {
+      RegistrationResult odom_retry = runRegistration(frame, odom_retry_guess.value(), true);
+      odom_retry.used_odom_retry = true;
+      return odom_retry;
     }
     return result;
   }
@@ -632,9 +706,13 @@ private:
     const CloudFrame & frame, const RegistrationResult & result, const double elapsed_sec)
   {
     if (!result.ok) {
+      const std::string detail = result.used_odom_retry
+                                   ? "Odom retry NDT/GICP did not converge."
+                                   : (result.used_ndt ? "NDT/GICP did not converge."
+                                                      : "FastVGICP did not converge.");
       recordFrameFailure(
         "registration_failed",
-        result.used_ndt ? "NDT/GICP did not converge." : "FastVGICP did not converge.");
+        detail);
       return;
     }
 
@@ -649,9 +727,11 @@ private:
       last_raw_source_points_ = result.raw_source_points;
       last_source_points_ = result.source_points;
       last_cloud_frame_ = frame.cloud_frame;
+      last_success_odom_ = frame.odom;
       failed_frame_count_ = 0;
       tracking_ready_ = true;
       state_ = "localizing";
+      last_used_odom_retry_ = result.used_odom_retry;
       last_error_.clear();
       error_detail_.clear();
       if (elapsed_sec > 0.0) {
@@ -706,6 +786,47 @@ private:
     }
   }
 
+  std::optional<OdomFrame> latestOdomLocked() const
+  {
+    if (!latest_odom_.has_value()) {
+      return std::nullopt;
+    }
+    const double age_sec =
+      std::chrono::duration<double>(Clock::now() - latest_odom_->received_at).count();
+    if (age_sec > options_.odom_max_age_sec) {
+      return std::nullopt;
+    }
+    return latest_odom_;
+  }
+
+  std::optional<Eigen::Matrix4f> odomRetryGuessLocked(
+    const std::optional<OdomFrame> & current_odom) const
+  {
+    if (!options_.use_odom_retry || !current_odom.has_value() || !last_success_odom_.has_value()) {
+      return std::nullopt;
+    }
+    Eigen::Matrix4f guess =
+      last_pose_ * odomDeltaCurrentToPrevious(last_success_odom_->pose, current_odom->pose);
+    if (!matrixFinite(guess)) {
+      return std::nullopt;
+    }
+    return guess;
+  }
+
+  bool odomRetryAvailableLocked() const
+  {
+    return options_.use_odom_retry && latestOdomLocked().has_value() &&
+           last_success_odom_.has_value();
+  }
+
+  double odomAgeSecLocked() const
+  {
+    if (!latest_odom_.has_value()) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    return std::chrono::duration<double>(Clock::now() - latest_odom_->received_at).count();
+  }
+
   std::string statusJsonLocked() const
   {
     const Pose2D pose = poseFromMatrix2D(last_pose_);
@@ -722,6 +843,12 @@ private:
     out << "\"backend\":" << jsonString(options_.registration_backend) << ",";
     out << "\"frameId\":" << jsonString(options_.map_frame) << ",";
     out << "\"baseFrame\":" << jsonString(options_.base_frame) << ",";
+    out << "\"odomTopic\":" << jsonString(options_.odom_topic) << ",";
+    out << "\"useOdomRetry\":" << (options_.use_odom_retry ? "true" : "false") << ",";
+    out << "\"odomRetryAvailable\":" << (odomRetryAvailableLocked() ? "true" : "false")
+        << ",";
+    out << "\"usedOdomRetry\":" << (last_used_odom_retry_ ? "true" : "false") << ",";
+    out << "\"odomAgeSec\":" << jsonNumber(odomAgeSecLocked()) << ",";
     out << "\"cloudFrame\":" << jsonString(last_cloud_frame_) << ",";
     out << "\"rawSourcePoints\":" << last_raw_source_points_ << ",";
     out << "\"sourcePoints\":" << last_source_points_ << ",";
@@ -778,6 +905,8 @@ private:
   std::uint64_t cloud_sequence_ = 0;
   std::uint64_t processed_sequence_ = 0;
   Eigen::Matrix4f last_pose_ = Eigen::Matrix4f::Identity();
+  std::optional<OdomFrame> latest_odom_;
+  std::optional<OdomFrame> last_success_odom_;
 
   std::string state_ = "starting";
   std::string last_error_;
@@ -789,6 +918,7 @@ private:
   bool last_used_ndt_ = false;
   bool last_ndt_converged_ = false;
   bool last_gicp_converged_ = false;
+  bool last_used_odom_retry_ = false;
   double last_ndt_fitness_ = std::numeric_limits<double>::quiet_NaN();
   double last_fitness_ = std::numeric_limits<double>::quiet_NaN();
   double frequency_hz_ = std::numeric_limits<double>::quiet_NaN();
@@ -796,6 +926,7 @@ private:
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initial_pose_sub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;

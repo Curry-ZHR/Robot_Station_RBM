@@ -42,6 +42,7 @@ target_link_libraries(robot_station_localizer_node ${PCL_LIBRARIES})
 ament_target_dependencies(
   robot_station_localizer_node
   geometry_msgs
+  nav_msgs
   pcl_conversions
   rclcpp
   sensor_msgs
@@ -73,6 +74,7 @@ if(ROBOT_STATION_ENABLE_GPU_LOCALIZER AND fast_gicp_FOUND)
       robot_station_gpu_localizer_node
       fast_gicp
       geometry_msgs
+      nav_msgs
       pcl_conversions
       rclcpp
       sensor_msgs

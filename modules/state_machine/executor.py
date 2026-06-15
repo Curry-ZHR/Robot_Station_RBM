@@ -57,7 +57,7 @@ import time
 from modules.control.chassis import reset_chassis_odometry
 from modules.control.piper.feedback import joint_state_key_candidates, read_joint_state_candidate
 from modules.navigation import get_navigation_manager
-from modules.ros_io import get_ros_reader
+from modules.ros_io import get_ros_reader, get_ros_writer
 
 _EXECUTOR = None
 _EXECUTOR_LOCK = threading.Lock()
@@ -255,6 +255,10 @@ class StateMachineExecutor:
             return self._execute_reset_odom(node)
         if task_type == "wait":
             return self._execute_wait(node)
+        if task_type == "topic_wait":
+            return self._execute_topic_wait(node)
+        if task_type == "topic_publish":
+            return self._execute_topic_publish(node)
         if task_type == "grasp":
             params = node.get("params") or {}
             if params.get("graspMethod") == "auto":
@@ -414,6 +418,104 @@ class StateMachineExecutor:
         )
         return "stopped", "State machine run stopped."
 
+    def _execute_topic_wait(self, node):
+        """Wait until a configured ROS topic receives the next message."""
+        params = node.get("params") or {}
+        topic_name = self._topic_param(params, ("topicName", "topic"))
+        topic_key = self._topic_param(params, ("topicKey", "readKey", "key"))
+        signal_target = topic_name or topic_key
+        if not signal_target:
+            detail = "Topic wait requires topicName."
+            self._set_task_status(node, "failed", detail, self._topic_wait_status_data("failed", signal_target))
+            return "failed", detail
+
+        try:
+            timeout_sec = self._nonnegative_float(params.get("timeoutSec", 0), "timeoutSec")
+        except ValueError as exc:
+            detail = f"Topic wait timeoutSec is invalid: {exc}"
+            self._set_task_status(node, "failed", detail, self._topic_wait_status_data("failed", signal_target))
+            return "failed", detail
+
+        reader = get_ros_reader()
+        if topic_name:
+            baseline = reader.read_bool_topic(topic_name, timeout_sec=0.0)
+        else:
+            baseline = reader.read(topic_key, timeout_sec=0.0)
+        if not baseline.get("ok") and baseline.get("code") != "ROS-R-NODATA":
+            detail = baseline.get("detail") or baseline.get("code") or f"Topic wait failed to subscribe: {signal_target}"
+            self._set_task_status(node, "failed", detail, self._topic_wait_status_data("failed", signal_target, baseline))
+            return "failed", detail
+
+        after_sequence = baseline.get("sequence") if baseline.get("ok") else None
+        topic_data = self._topic_wait_status_data("waiting_message", signal_target, baseline, after_sequence=after_sequence)
+        self._set_task_status(node, "running", f"Waiting for message on {signal_target}.", topic_data)
+
+        deadline = time.monotonic() + timeout_sec if timeout_sec > 0 else None
+        while not self._stop_event.is_set():
+            wait_sec = self._poll_interval_sec
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    detail = f"Topic wait timed out: {signal_target}"
+                    data = self._topic_wait_status_data("failed", signal_target, baseline, after_sequence=after_sequence)
+                    self._set_task_status(node, "failed", detail, data)
+                    return "failed", detail
+                wait_sec = min(wait_sec, remaining)
+
+            if topic_name:
+                result = reader.read_bool_topic_after(topic_name, after_sequence=after_sequence, timeout_sec=wait_sec)
+            else:
+                result = reader.read_after(topic_key, after_sequence=after_sequence, timeout_sec=wait_sec)
+            if result.get("ok"):
+                data = self._topic_wait_status_data("completed", signal_target, result, after_sequence=after_sequence)
+                self._set_task_status(node, "completed", f"Received message on {result.get('topic') or topic_key}.", data)
+                return "completed", f"Received message on {result.get('topic') or topic_key}."
+            if result.get("code") != "ROS-R-NODATA":
+                detail = result.get("detail") or result.get("code") or f"Topic wait failed: {signal_target}"
+                data = self._topic_wait_status_data("failed", signal_target, result, after_sequence=after_sequence)
+                self._set_task_status(node, "failed", detail, data)
+                return "failed", detail
+
+            data = self._topic_wait_status_data("waiting_message", signal_target, result, after_sequence=after_sequence)
+            self._set_task_status(node, "running", f"Waiting for message on {result.get('topic') or signal_target}.", data)
+
+        self._set_task_status(
+            node,
+            "stopped",
+            "State machine run stopped.",
+            self._topic_wait_status_data("stopped", signal_target, baseline, after_sequence=after_sequence),
+        )
+        return "stopped", "State machine run stopped."
+
+    def _execute_topic_publish(self, node):
+        """Publish a true Bool signal through the configured ROS topic."""
+        params = node.get("params") or {}
+        topic_name = self._topic_param(params, ("topicName", "topic"))
+        action_key = self._topic_param(params, ("actionKey", "writeKey", "key"))
+        signal_target = topic_name or action_key
+        if not signal_target:
+            detail = "Topic publish requires topicName."
+            self._set_task_status(node, "failed", detail, self._topic_publish_status_data("failed", signal_target))
+            return "failed", detail
+
+        payload = {"data": True}
+        self._set_task_status(
+            node,
+            "running",
+            f"Publishing true to {signal_target}.",
+            self._topic_publish_status_data("publishing", signal_target, payload=payload),
+        )
+        writer = get_ros_writer()
+        result = writer.publish_bool_topic(topic_name, True) if topic_name else writer.publish(action_key, payload)
+        detail = result.get("detail") or result.get("code") or f"Published true to {signal_target}."
+        phase = "completed" if result.get("ok") else "failed"
+        data = self._topic_publish_status_data(phase, signal_target, result, payload=payload)
+        if result.get("ok"):
+            self._set_task_status(node, "completed", detail, data)
+            return "completed", detail
+        self._set_task_status(node, "failed", detail, data)
+        return "failed", detail
+
     def _read_wait_joint_positions(self, reader):
         snapshot = {"joints": [], "grippers": []}
         for side, keys in (("left", WAIT_LEFT_JOINT_STATE_KEYS), ("right", WAIT_RIGHT_JOINT_STATE_KEYS)):
@@ -450,6 +552,51 @@ class StateMachineExecutor:
             "stableElapsedSec": stable_elapsed,
             "maxDeltaRad": max_delta_rad,
             "maxGripperDeltaM": max_gripper_delta_m,
+        }
+
+    @staticmethod
+    def _topic_param(params, keys):
+        for key in keys:
+            if key in params:
+                value = str(params.get(key) or "").strip()
+                return value
+        return ""
+
+    @staticmethod
+    def _nonnegative_float(value, field):
+        parsed = _finite_float(value, field)
+        if parsed < 0:
+            raise ValueError(f"{field} must be >= 0.")
+        return parsed
+
+    @staticmethod
+    def _topic_wait_status_data(phase, topic_key, result=None, after_sequence=None):
+        result = result or {}
+        return {
+            "phase": phase,
+            "key": topic_key,
+            "topic": result.get("topic", ""),
+            "messageType": result.get("messageType", ""),
+            "code": result.get("code", ""),
+            "sequence": result.get("sequence"),
+            "afterSequence": after_sequence,
+            "receivedAt": result.get("receivedAt", ""),
+            "ageMs": result.get("ageMs"),
+            "stale": result.get("stale"),
+            "data": copy.deepcopy(result.get("data")) if "data" in result else None,
+        }
+
+    @staticmethod
+    def _topic_publish_status_data(phase, action_key, result=None, payload=None):
+        result = result or {}
+        return {
+            "phase": phase,
+            "key": action_key,
+            "topic": result.get("topic", ""),
+            "messageType": result.get("messageType", ""),
+            "code": result.get("code", ""),
+            "publishedAt": result.get("publishedAt", ""),
+            "payload": copy.deepcopy(payload) if payload is not None else None,
         }
 
     def _execute_grasp_inference(self, params):

@@ -76,3 +76,36 @@ class RosTopicWriter:
             messageType=spec.message_type,
             publishedAt=time.strftime("%H:%M:%S"),
         )
+
+    def publish_bool_topic(self, topic, value=True):
+        topic_name = str(topic or "").strip()
+        key = f"state_machine_bool:{topic_name}"
+        message_type = "std_msgs/msg/Bool"
+        try:
+            message_class = import_message_class(message_type)
+            message = message_class()
+            message.data = bool(value)
+            publisher = self._runtime.get_publisher(key, message_type, topic_name, qos_depth=10)
+            publisher.publish(message)
+        except (RosRuntimeError, RosMessageImportError) as exc:
+            return _result(
+                False,
+                "ROS-W-UNAVAILABLE",
+                str(exc),
+                key=key,
+                name=f"State machine bool signal {topic_name}",
+                topic=topic_name,
+                messageType=message_type,
+            )
+
+        return _result(
+            True,
+            "ROS-W-PUBLISHED",
+            f"Published bool signal to {topic_name}.",
+            key=key,
+            name=f"State machine bool signal {topic_name}",
+            topic=topic_name,
+            messageType=message_type,
+            data=bool(value),
+            publishedAt=time.strftime("%H:%M:%S"),
+        )

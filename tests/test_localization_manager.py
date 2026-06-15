@@ -104,8 +104,11 @@ def test_localization_manager_start_resolves_saved_map_and_builds_command(tmp_pa
     assert commands[0][:4] == ["localizer", "--ros-args", "-p", f"map_path:={map_path}"]
     assert "map_name:=lab_map" in commands[0]
     assert "base_frame:=base_link" in commands[0]
+    assert "odom_topic:=/odom" in commands[0]
     assert "voxel_leaf:=0.08" in commands[0]
     assert "use_ndt_when_tracking:=true" in commands[0]
+    assert "use_odom_retry:=true" in commands[0]
+    assert "odom_max_age_sec:=1.0" in commands[0]
     assert result["process"]["running"] is True
 
 
@@ -153,6 +156,9 @@ def test_localization_manager_start_passes_localization_tuning(tmp_path, monkeyp
             "backend": "gpu",
             "voxelLeafM": 0.12,
             "useNdtWhenTracking": True,
+            "odomTopic": "/wheel_odom",
+            "useOdomRetry": False,
+            "odomMaxAgeSec": 2.5,
             "ndtResolutionM": 0.8,
             "ndtMaxIterations": 18,
             "gicpMaxCorrespondenceM": 0.35,
@@ -163,8 +169,14 @@ def test_localization_manager_start_passes_localization_tuning(tmp_path, monkeyp
     assert result["ok"] is True
     assert result["map"]["settings"]["voxelLeafM"] == 0.12
     assert result["map"]["settings"]["useNdtWhenTracking"] is True
+    assert result["map"]["settings"]["odomTopic"] == "/wheel_odom"
+    assert result["map"]["settings"]["useOdomRetry"] is False
+    assert result["map"]["settings"]["odomMaxAgeSec"] == 2.5
     assert "voxel_leaf:=0.12" in commands[0]
     assert "use_ndt_when_tracking:=true" in commands[0]
+    assert "odom_topic:=/wheel_odom" in commands[0]
+    assert "use_odom_retry:=false" in commands[0]
+    assert "odom_max_age_sec:=2.5" in commands[0]
     assert "ndt_resolution:=0.8" in commands[0]
     assert "ndt_max_iterations:=18" in commands[0]
     assert "gicp_max_correspondence:=0.35" in commands[0]
