@@ -230,7 +230,6 @@ const state = {
     selectedGraphId: "",
     modal: null,
     draftSyncTimer: null,
-    runTimer: null,
     realRun: {
       active: false,
       status: "idle",
@@ -825,7 +824,6 @@ const robotWorkModalMeta = {
 const stateMachineDraftStorageKey = "robotStation.stateMachineDraft.v1";
 const stateMachineDraftGraphId = "__draft__";
 const stateMachineDraftSyncDelayMs = 800;
-const stateMachineRunDelayMs = 900;
 const stateMachineCanvasSize = {
   width: 980,
   height: 620,
@@ -871,6 +869,12 @@ const stateMachineTaskTypes = {
       { key: "localizationStaleSec", label: "定位超时", type: "number", step: "0.1", min: "0.1", unit: "s", advanced: true },
       { key: "controlRateHz", label: "控制频率", type: "number", step: "1", min: "5", unit: "Hz", advanced: true },
     ],
+  },
+  reset_odom: {
+    label: "/odom 归零",
+    summary: "将底盘里程计重置为 0",
+    fields: [],
+    allowCreate: false,
   },
   grasp: {
     label: "抓取",
@@ -935,8 +939,18 @@ const stateMachineTaskTypeDefaults = {
     controlRateHz: 20,
   },
   grasp: { graspMethod: "inference", leftTarget: "", rightTarget: "", prompt: "", leftPose: "", rightPose: "" },
+  reset_odom: {},
   wait: { stableSec: 2 },
 };
+const stateMachineBuiltInLibraryEntries = [
+  {
+    id: "sm_builtin_reset_odom",
+    title: "/odom 归零",
+    taskType: "reset_odom",
+    params: {},
+    builtIn: true,
+  },
+];
 
 const chassisMotionModeLabels = {
   0: "阿克曼",
@@ -1309,12 +1323,23 @@ function stateMachineTaskMeta(taskType) {
   return stateMachineTaskTypes[taskType] || stateMachineTaskTypes.navigation;
 }
 
+function stateMachineTaskEditable(taskType) {
+  return Boolean((stateMachineTaskMeta(taskType).fields || []).length);
+}
+
+function stateMachineBuiltInLibraryById(libraryId) {
+  return stateMachineBuiltInLibraryEntries.find((entry) => entry.id === libraryId) || null;
+}
+
 function stateMachineLibraryById(libraryId) {
-  return state.stateMachine.library.find((entry) => entry.id === libraryId) || null;
+  return stateMachineBuiltInLibraryById(libraryId) || state.stateMachine.library.find((entry) => entry.id === libraryId) || null;
 }
 
 function stateMachineLibraryForTask(taskType) {
-  return state.stateMachine.library.filter((entry) => entry.taskType === taskType);
+  return [
+    ...stateMachineBuiltInLibraryEntries.filter((entry) => entry.taskType === taskType),
+    ...state.stateMachine.library.filter((entry) => entry.taskType === taskType),
+  ];
 }
 
 async function stateMachineApiGet(path) {
@@ -1613,8 +1638,6 @@ async function restoreStateMachineDraftFromBackend() {
 }
 
 function resetStateMachineRun() {
-  window.clearTimeout(state.stateMachine.runTimer);
-  state.stateMachine.runTimer = null;
   state.stateMachine.run = {
     active: false,
     status: "idle",
@@ -1629,7 +1652,7 @@ function resetStateMachineRun() {
 }
 
 function mutateStateMachine(options = {}) {
-  if (!options.keepRun) stopStateMachinePreview({ quiet: true });
+  if (!options.keepRun && !state.stateMachine.realRun.active) resetStateMachineRun();
   ensureStateMachineGraph();
   saveStateMachineDraft();
   renderStateMachine();
@@ -1737,6 +1760,7 @@ function stateMachineParamSummary(node) {
       .join(" ") || "未配置目标";
     return `${method} / ${arms}`;
   }
+  if (node.taskType === "reset_odom") return "调用 /reset_odom，将 /odom 重置为 0";
   if (node.taskType === "wait") return `运动后静止 ${params.stableSec ?? "--"}s`;
   return stateMachineTaskMeta(node.taskType).summary;
 }
@@ -1820,6 +1844,13 @@ function stateMachineTaskStatusRows(taskStatus) {
       ["静止计时", `${formatLocalizationNumber(data.stableElapsedSec, 1)} / ${formatLocalizationNumber(data.stableSec, 1)} s`],
       ["关节变化", formatLocalizationNumber(data.maxDeltaRad, 4, " rad")],
       ["夹爪变化", formatLocalizationNumber(data.maxGripperDeltaM, 4, " m")],
+    );
+  }
+  if (taskStatus?.taskType === "reset_odom") {
+    rows.push(
+      ["阶段", data.phase || "--"],
+      ["服务", data.service || "/reset_odom"],
+      ["结果", data.code || "--"],
     );
   }
   return rows;
@@ -1966,6 +1997,7 @@ function renderStateMachineNodeCard(node) {
   const nodeClass = node.type === "task" ? `is-${node.taskType}` : `is-${node.type}`;
   const canConnect = node.type !== "end";
   const canShowTaskDetail = stateMachineCanShowTaskDetail(node);
+  const canEdit = node.type === "task" && stateMachineTaskEditable(node.taskType);
   const outputText = node.type === "end"
     ? "无出口"
     : outgoing.length > 1
@@ -1992,7 +2024,7 @@ function renderStateMachineNodeCard(node) {
       <div class="state-machine-node-tools" aria-label="state 操作">
         ${canConnect ? `<button type="button" data-sm-connect-from="${escapeHtml(node.id)}">${connecting ? "选择目标" : "连线"}</button>` : ""}
         ${canShowTaskDetail ? `<button type="button" data-sm-task-detail="${escapeHtml(node.id)}">详情</button>` : ""}
-        ${node.type === "task" ? `<button type="button" data-sm-edit="${escapeHtml(node.id)}">编辑</button>` : ""}
+        ${canEdit ? `<button type="button" data-sm-edit="${escapeHtml(node.id)}">编辑</button>` : ""}
         ${node.type === "task" ? `<button type="button" data-sm-duplicate="${escapeHtml(node.id)}">复制</button>` : ""}
         ${node.type === "task" ? `<button type="button" data-sm-delete="${escapeHtml(node.id)}">删除</button>` : ""}
       </div>
@@ -2200,11 +2232,14 @@ function renderStateMachineTaskLibrary() {
                 <strong>${escapeHtml(entry.title)}</strong>
                 <span>${escapeHtml(stateMachineLibrarySummary(entry))}</span>
               </button>
-              <button type="button" class="state-machine-library-remove" data-sm-library-remove="${escapeHtml(entry.id)}" title="从状态库删除" aria-label="从状态库删除">×</button>
+              ${entry.builtIn ? "" : `<button type="button" class="state-machine-library-remove" data-sm-library-remove="${escapeHtml(entry.id)}" title="从状态库删除" aria-label="从状态库删除">×</button>`}
             </div>
           `,
         )
         .join("");
+      const addButton = taskMeta.allowCreate === false
+        ? ""
+        : `<button type="button" class="state-machine-task-add" data-sm-add-type="${escapeHtml(taskType)}" title="新建${escapeHtml(taskMeta.label)}状态" aria-label="新建${escapeHtml(taskMeta.label)}状态">＋</button>`;
       const emptyHint = state.stateMachine.libraryLoaded
         ? `<div class="state-machine-library-empty">点击 + 新建${taskMeta.label}状态</div>`
         : `<div class="state-machine-library-empty">状态库加载中…</div>`;
@@ -2215,7 +2250,7 @@ function renderStateMachineTaskLibrary() {
               <strong>${escapeHtml(taskMeta.label)}</strong>
               <span>${escapeHtml(taskMeta.summary)}</span>
             </div>
-            <button type="button" class="state-machine-task-add" data-sm-add-type="${escapeHtml(taskType)}" title="新建${escapeHtml(taskMeta.label)}状态" aria-label="新建${escapeHtml(taskMeta.label)}状态">＋</button>
+            ${addButton}
           </div>
           <div class="state-machine-task-buttons">${entries || emptyHint}</div>
         </section>
@@ -2260,7 +2295,6 @@ function loadStateMachineGraphFromBackend() {
   const sm = state.stateMachine;
   const graph = sm.graphs.find((item) => item.id === sm.selectedGraphId);
   if (!graph) return;
-  stopStateMachinePreview({ quiet: true });
   applyStateMachineSnapshot(graph);
   sm.connectingFromId = "";
   resetStateMachineRun();
@@ -2313,9 +2347,7 @@ function renderStateMachine() {
   setText("#stateMachineSummary", `${taskCount} 个任务 state / ${edgeCount} 条连线 / 多出口随机执行`);
 
   if (sm.realRun.active) {
-    setStateBadge("#stateMachineBadge", "真实运行中", "ok");
-  } else if (sm.run.active) {
-    setStateBadge("#stateMachineBadge", "预演中", "ok");
+    setStateBadge("#stateMachineBadge", "运行中", "ok");
   } else if (sm.run.status === "completed") {
     setStateBadge("#stateMachineBadge", "运行完成", "ok");
   } else if (sm.run.status === "failed") {
@@ -2329,89 +2361,17 @@ function renderStateMachine() {
   }
 
   const hasStartExit = Boolean(stateMachineNodeById("sm_start")?.outgoingIds?.length);
-  const runButton = $("#stateMachineRunButton");
-  if (runButton) runButton.disabled = sm.run.active || sm.realRun.active || !hasStartExit;
-  const stopButton = $("#stateMachineStopButton");
-  if (stopButton) stopButton.disabled = !sm.run.active;
   const realRunButton = $("#stateMachineRealRunButton");
-  if (realRunButton) realRunButton.disabled = sm.run.active || sm.realRun.active || !hasStartExit;
+  if (realRunButton) {
+    const canRerun = ["completed", "failed", "stopped"].includes(sm.run.status);
+    realRunButton.disabled = sm.realRun.active || !hasStartExit;
+    realRunButton.textContent = sm.realRun.active ? "运行中" : canRerun ? "重新运行" : "运行";
+  }
   const realStopButton = $("#stateMachineRealStopButton");
   if (realStopButton) realStopButton.disabled = !sm.realRun.active;
 
   renderStateMachineCanvas();
   renderStateMachineGraphBar();
-}
-
-function startStateMachinePreview() {
-  const start = stateMachineNodeById("sm_start");
-  if (!start || state.stateMachine.run.active || state.stateMachine.realRun.active || !start.outgoingIds?.length) return;
-  const sm = state.stateMachine;
-  window.clearTimeout(sm.runTimer);
-  sm.run = {
-    active: true,
-    status: "running",
-    currentId: "sm_start",
-    completedIds: [],
-    activeEdge: null,
-    edgePath: [],
-    path: ["sm_start"],
-    startedAt: formatTime(),
-    completedAt: null,
-  };
-  sm.connectingFromId = "";
-  addLog("状态机", `开始前端预演：${sm.name || "未命名状态机"}`);
-  renderStateMachine();
-  sm.runTimer = window.setTimeout(advanceStateMachinePreview, stateMachineRunDelayMs);
-}
-
-function finishStateMachinePreview(status = "completed", detail = "状态机前端预演完成", options = {}) {
-  const sm = state.stateMachine;
-  window.clearTimeout(sm.runTimer);
-  sm.runTimer = null;
-  const wasActive = sm.run.active;
-  sm.run.active = false;
-  sm.run.status = status;
-  sm.run.currentId = null;
-  sm.run.activeEdge = null;
-  sm.run.completedAt = formatTime();
-  if (!options.quiet && wasActive) addLog("状态机", detail);
-  renderStateMachine();
-}
-
-function stopStateMachinePreview(options = {}) {
-  if (!state.stateMachine.run.active && !state.stateMachine.runTimer) return;
-  finishStateMachinePreview("stopped", "状态机前端预演已停止", options);
-}
-
-function advanceStateMachinePreview() {
-  const sm = state.stateMachine;
-  if (!sm.run.active) return;
-  const current = stateMachineNodeById(sm.run.currentId);
-  if (!current) {
-    finishStateMachinePreview("stopped", "当前 state 不存在，预演已停止");
-    return;
-  }
-  if (!sm.run.completedIds.includes(current.id)) sm.run.completedIds.push(current.id);
-  if (current.type === "end") {
-    finishStateMachinePreview("completed", "状态机前端预演完成");
-    return;
-  }
-  const outgoing = (current.outgoingIds || []).filter((id) => stateMachineNodeById(id));
-  if (!outgoing.length) {
-    finishStateMachinePreview("stopped", `${current.title} 没有出口，预演已停止`);
-    return;
-  }
-  const nextId = outgoing[Math.floor(Math.random() * outgoing.length)];
-  if (sm.run.path.includes(nextId) && nextId !== "sm_end") {
-    finishStateMachinePreview("stopped", "检测到循环链接，预演已停止");
-    return;
-  }
-  sm.run.activeEdge = { from: current.id, to: nextId };
-  sm.run.edgePath.push({ from: current.id, to: nextId });
-  sm.run.currentId = nextId;
-  sm.run.path.push(nextId);
-  renderStateMachine();
-  sm.runTimer = window.setTimeout(advanceStateMachinePreview, stateMachineRunDelayMs);
 }
 
 function applyStateMachineBackendRun(run) {
@@ -2446,9 +2406,9 @@ async function pollStateMachineRunStatus() {
     applyStateMachineBackendRun(run);
     if (!run.active) {
       stopStateMachineRunPolling();
-      if (run.status === "completed") addLog("状态机", "真实运行完成");
-      if (run.status === "failed") addLog("状态机", `真实运行失败：${run.error || "未知原因"}`);
-      if (run.status === "stopped") addLog("状态机", "真实运行已停止");
+      if (run.status === "completed") addLog("状态机", "运行完成");
+      if (run.status === "failed") addLog("状态机", `运行失败：${run.error || "未知原因"}`);
+      if (run.status === "stopped") addLog("状态机", "运行已停止");
     }
     renderStateMachine();
   } catch (error) {
@@ -2461,28 +2421,28 @@ async function pollStateMachineRunStatus() {
 
 async function startStateMachineRealRun() {
   const sm = state.stateMachine;
-  if (sm.run.active || sm.realRun.active) return;
+  if (sm.realRun.active) return;
   const snapshot = stateMachineSnapshot();
   try {
     const payload = await stateMachineApiPost("run/start", { name: snapshot.name, nodes: snapshot.nodes });
     applyStateMachineBackendRun(payload.run || { active: true, status: "running", currentId: "sm_start", path: ["sm_start"] });
-    addLog("状态机", `真实运行已启动：${snapshot.name}`);
+    addLog("状态机", `运行已启动：${snapshot.name}`);
     stopStateMachineRunPolling();
     sm.realRun.pollTimer = window.setInterval(pollStateMachineRunStatus, 1000);
     pollStateMachineRunStatus();
     renderStateMachine();
   } catch (error) {
-    addLog("状态机", `真实运行启动失败：${error.message}`);
+    addLog("状态机", `运行启动失败：${error.message}`);
   }
 }
 
 async function stopStateMachineRealRun() {
   try {
     await stateMachineApiPost("run/stop");
-    addLog("状态机", "已请求停止真实运行");
+    addLog("状态机", "已请求停止运行");
     pollStateMachineRunStatus();
   } catch (error) {
-    addLog("状态机", `停止真实运行失败：${error.message}`);
+    addLog("状态机", `停止运行失败：${error.message}`);
   }
 }
 
@@ -2497,7 +2457,6 @@ async function copyStateMachineJson() {
 }
 
 function clearStateMachine() {
-  stopStateMachinePreview({ quiet: true });
   state.stateMachine.nodes = [createStateMachineSystemNode("start"), createStateMachineSystemNode("end")];
   state.stateMachine.selectedId = "sm_start";
   state.stateMachine.connectingFromId = "";
@@ -2519,6 +2478,7 @@ function stateMachineCanvasPointFromEvent(event) {
 function openStateMachineNodeEditor(nodeId) {
   const node = stateMachineNodeById(nodeId);
   if (!node || node.type !== "task") return;
+  if (!stateMachineTaskEditable(node.taskType)) return;
   state.stateMachine.selectedId = node.id;
   openStateMachineModal({
     mode: "edit-node",
@@ -11299,8 +11259,6 @@ function bindEvents() {
   document.addEventListener("pointermove", updateStateMachineNodeDrag);
   document.addEventListener("pointerup", finishStateMachineNodeDrag);
   $("#stateMachineNameInput")?.addEventListener("change", (event) => updateStateMachineName(event.currentTarget.value));
-  $("#stateMachineRunButton")?.addEventListener("click", startStateMachinePreview);
-  $("#stateMachineStopButton")?.addEventListener("click", () => stopStateMachinePreview());
   $("#stateMachineClearButton")?.addEventListener("click", clearStateMachine);
   $("#stateMachineCopyJsonButton")?.addEventListener("click", copyStateMachineJson);
   $("#stateMachineGraphSaveButton")?.addEventListener("click", saveStateMachineGraphToBackend);

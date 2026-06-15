@@ -35,6 +35,8 @@ Execution semantics (agreed, to implement):
     navigation       -> modules.navigation get_navigation_manager().start(params)
                         then poll status() until completed/failed.
                         params: {targetName, x, y, yawDeg, mode}
+    reset_odom       -> modules.control.chassis.reset_chassis_odometry({})
+                        once, no params.
     wait             -> waits until arm/gripper feedback has moved once and
                         then stayed stable for params: {stableSec}
     grasp(inference) -> modules.inference manager (remote WS inference).
@@ -52,6 +54,7 @@ import random
 import threading
 import time
 
+from modules.control.chassis import reset_chassis_odometry
 from modules.control.piper.feedback import joint_state_key_candidates, read_joint_state_candidate
 from modules.navigation import get_navigation_manager
 from modules.ros_io import get_ros_reader
@@ -248,6 +251,8 @@ class StateMachineExecutor:
         task_type = str(node.get("taskType") or "")
         if task_type == "navigation":
             return self._execute_navigation(node)
+        if task_type == "reset_odom":
+            return self._execute_reset_odom(node)
         if task_type == "wait":
             return self._execute_wait(node)
         if task_type == "grasp":
@@ -289,6 +294,24 @@ class StateMachineExecutor:
         status_result = manager.status()
         self._set_task_status(node, "stopped", status_result.get("detail", "State machine stopped navigation."), status_result)
         return "stopped", "State machine run stopped."
+
+    def _execute_reset_odom(self, node):
+        """Reset chassis odometry once via the existing /reset_odom Trigger service."""
+        self._set_task_status(
+            node,
+            "running",
+            "Resetting chassis odometry.",
+            {"phase": "calling_service", "action": "reset_odom"},
+        )
+        result = reset_chassis_odometry({})
+        detail = result.get("detail") or result.get("code") or "Chassis odometry reset finished."
+        data = copy.deepcopy(result)
+        data["phase"] = "completed" if result.get("ok") else "failed"
+        if result.get("ok"):
+            self._set_task_status(node, "completed", detail, data)
+            return "completed", detail
+        self._set_task_status(node, "failed", detail, data)
+        return "failed", detail
 
     def _execute_wait(self, node):
         """Wait for arm/gripper motion, then require continuous stillness."""

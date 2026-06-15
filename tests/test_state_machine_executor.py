@@ -168,6 +168,81 @@ def test_navigation_state_runs_to_completed(monkeypatch):
     assert run["taskStatus"]["data"]["phase"] == "completed"
 
 
+def test_reset_odom_state_runs_once_and_continues(monkeypatch):
+    calls = []
+
+    def fake_reset(payload):
+        calls.append(payload)
+        return {
+            "ok": True,
+            "code": "CHASSIS-C-ODOM-RESET",
+            "detail": "reset ok",
+            "action": "reset_odom",
+            "service": "/reset_odom",
+        }
+
+    monkeypatch.setattr(executor_module, "reset_chassis_odometry", fake_reset)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    result = manager.start(
+        {
+            "name": "归零流程",
+            "nodes": [
+                _start(["reset"]),
+                _node("reset", "reset_odom", outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert result["ok"] is True
+    assert calls == [{}]
+    assert run["status"] == "completed"
+    assert run["path"] == ["sm_start", "reset", "sm_end"]
+    assert run["completedIds"] == ["sm_start", "reset", "sm_end"]
+    assert run["taskStatus"]["nodeId"] == "reset"
+    assert run["taskStatus"]["taskType"] == "reset_odom"
+    assert run["taskStatus"]["status"] == "completed"
+    assert run["taskStatus"]["data"]["phase"] == "completed"
+    assert run["taskStatus"]["data"]["service"] == "/reset_odom"
+
+
+def test_reset_odom_state_failure_fails_state_machine(monkeypatch):
+    def fake_reset(payload):
+        return {
+            "ok": False,
+            "code": "CHASSIS-C-ODOM-RESET-FAILED",
+            "detail": "reset failed",
+            "action": "reset_odom",
+            "service": "/reset_odom",
+        }
+
+    monkeypatch.setattr(executor_module, "reset_chassis_odometry", fake_reset)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    result = manager.start(
+        {
+            "name": "归零失败流程",
+            "nodes": [
+                _start(["reset"]),
+                _node("reset", "reset_odom", outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert result["ok"] is True
+    assert run["status"] == "failed"
+    assert run["currentId"] == "reset"
+    assert run["error"] == "reset failed"
+    assert run["taskStatus"]["nodeId"] == "reset"
+    assert run["taskStatus"]["taskType"] == "reset_odom"
+    assert run["taskStatus"]["status"] == "failed"
+    assert run["taskStatus"]["data"]["phase"] == "failed"
+
+
 def test_wait_state_completes_after_gripper_moves_then_stays_stable(monkeypatch):
     fake_ros = FakeRosReader(
         [

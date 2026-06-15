@@ -3452,6 +3452,10 @@ body[data-active-view="state-machine"] #drawerToggle {
   --node-accent: #b45309;
 }
 
+.state-machine-node.is-reset_odom {
+  --node-accent: #4f46e5;
+}
+
 .state-machine-node.is-inference {
   --node-accent: #2563eb;
 }
