@@ -9,6 +9,10 @@ CONTROL_PORT="${CONTROL_PORT:-9998}"
 LIDAR_HOST_IP_CIDR="${ROBOT_STATION_LIDAR_HOST_IP_CIDR:-192.168.1.100/24}"
 LIDAR_INTERFACE="${ROBOT_STATION_LIDAR_INTERFACE:-enp11s0}"
 CONFIGURE_LIDAR_HOST_IP="${ROBOT_STATION_CONFIGURE_LIDAR_HOST_IP:-true}"
+LIDAR_ROUTE_DEST="${ROBOT_STATION_LIDAR_ROUTE_DEST:-192.168.1.154/32}"
+LIDAR_ROUTE_VIA="${ROBOT_STATION_LIDAR_ROUTE_VIA:-172.16.18.1}"
+LIDAR_ROUTE_INTERFACE="${ROBOT_STATION_LIDAR_ROUTE_INTERFACE:-eno1}"
+CONFIGURE_LIDAR_ROUTE="${ROBOT_STATION_CONFIGURE_LIDAR_ROUTE:-true}"
 
 if [[ ! -f "${FRONTEND_DIR}/index.html" ]]; then
   echo "frontend/index.html not found"
@@ -120,8 +124,46 @@ configure_lidar_host_ip() {
   echo "WARN:   sudo ip addr add ${LIDAR_HOST_IP_CIDR} dev ${LIDAR_INTERFACE}" >&2
 }
 
+configure_lidar_route() {
+  local enabled
+  enabled="$(printf '%s' "${CONFIGURE_LIDAR_ROUTE}" | tr '[:upper:]' '[:lower:]')"
+  case "${enabled}" in
+    1|true|yes|on) ;;
+    *) return ;;
+  esac
+
+  if [[ -z "${LIDAR_ROUTE_DEST}" || -z "${LIDAR_ROUTE_VIA}" || -z "${LIDAR_ROUTE_INTERFACE}" ]]; then
+    return
+  fi
+  if ! command -v ip >/dev/null 2>&1; then
+    echo "WARN: ip command not found; cannot configure LiDAR route ${LIDAR_ROUTE_DEST} via ${LIDAR_ROUTE_VIA} dev ${LIDAR_ROUTE_INTERFACE}." >&2
+    return
+  fi
+  if ! ip link show dev "${LIDAR_ROUTE_INTERFACE}" >/dev/null 2>&1; then
+    echo "WARN: LiDAR route interface ${LIDAR_ROUTE_INTERFACE} not found; skip ${LIDAR_ROUTE_DEST}." >&2
+    return
+  fi
+
+  if [[ "${EUID}" -eq 0 ]]; then
+    if ip route replace "${LIDAR_ROUTE_DEST}" via "${LIDAR_ROUTE_VIA}" dev "${LIDAR_ROUTE_INTERFACE}" 2>/dev/null; then
+      echo "Configured LiDAR route ${LIDAR_ROUTE_DEST} via ${LIDAR_ROUTE_VIA} dev ${LIDAR_ROUTE_INTERFACE}."
+      return
+    fi
+  elif command -v sudo >/dev/null 2>&1; then
+    if sudo -n ip route replace "${LIDAR_ROUTE_DEST}" via "${LIDAR_ROUTE_VIA}" dev "${LIDAR_ROUTE_INTERFACE}" 2>/dev/null; then
+      echo "Configured LiDAR route ${LIDAR_ROUTE_DEST} via ${LIDAR_ROUTE_VIA} dev ${LIDAR_ROUTE_INTERFACE}."
+      return
+    fi
+  fi
+
+  echo "WARN: LiDAR route ${LIDAR_ROUTE_DEST} via ${LIDAR_ROUTE_VIA} dev ${LIDAR_ROUTE_INTERFACE} is not configured." >&2
+  echo "WARN: Run 'bash scripts/install_lidar_ip_sudoers.sh' once, or add it manually with:" >&2
+  echo "WARN:   sudo ip route replace ${LIDAR_ROUTE_DEST} via ${LIDAR_ROUTE_VIA} dev ${LIDAR_ROUTE_INTERFACE}" >&2
+}
+
 configure_cuda_runtime
 configure_lidar_host_ip
+configure_lidar_route
 
 cleanup_stale_localizers() {
   local pids

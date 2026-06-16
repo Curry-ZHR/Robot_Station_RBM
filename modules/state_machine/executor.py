@@ -15,16 +15,20 @@ API contract (served by backend/server.py):
          completedIds: [str],          # nodes finished in this run
          edgePath: [{"from": str, "to": str}],  # edges taken, for UI highlight
          path: [str],                  # node ids visited in order
+         loop: bool,                   # true for continuous repeat mode
+         iteration: int,               # current 1-based loop iteration
+         completedIterations: int,     # full start->end passes completed
          error: str,                   # failure reason when status == "failed"
          taskStatus: dict | None,      # current task status wrapper
-	       }}
+       }}
 
 - POST /api/state-machine/run/start   body: {name: str, nodes: [node]}
     Node shape matches the editor snapshot (id/type/taskType/title/params/outgoingIds).
-	    Returns the same result shape.
+    Optional loop: true keeps restarting from sm_start after sm_end until stopped.
+    Returns the same result shape.
 
 - POST /api/state-machine/run/stop
-	    Stops the current run.
+    Stops the current run.
 
 Execution semantics (agreed, to implement):
 - Walk the graph from sm_start; multiple outgoingIds -> random choice.
@@ -63,6 +67,7 @@ _EXECUTOR = None
 _EXECUTOR_LOCK = threading.Lock()
 _TERMINAL_RUN_STATUSES = {"completed", "failed", "stopped"}
 _TERMINAL_NAVIGATION_STATUSES = {"completed", "failed", "stopped"}
+LOOP_RESTART_PAUSE_SEC = 0.05
 WAIT_LEFT_JOINT_STATE_KEYS = joint_state_key_candidates(
     "left",
     list_env="STATE_MACHINE_WAIT_LEFT_JOINT_STATE_KEYS",
@@ -98,6 +103,9 @@ def _idle_run():
         "completedIds": [],
         "edgePath": [],
         "path": [],
+        "loop": False,
+        "iteration": 0,
+        "completedIterations": 0,
         "error": "",
         "taskStatus": None,
     }
@@ -151,6 +159,7 @@ class StateMachineExecutor:
         if not isinstance(nodes, list):
             return _result(False, "SM-RUN-PAYLOAD", "nodes must be a JSON array.")
         name = str(payload.get("name") or "未命名状态机")
+        loop = payload.get("loop") is True
 
         with self._lock:
             if self._run.get("active"):
@@ -164,6 +173,9 @@ class StateMachineExecutor:
                     "graphName": name,
                     "currentId": "sm_start",
                     "path": ["sm_start"],
+                    "loop": loop,
+                    "iteration": 1,
+                    "completedIterations": 0,
                     "error": "",
                     "taskStatus": None,
                 }
@@ -171,7 +183,7 @@ class StateMachineExecutor:
             worker_nodes = copy.deepcopy(nodes)
             thread = threading.Thread(
                 target=self._run_loop,
-                args=(name, worker_nodes),
+                args=(worker_nodes, loop),
                 name="robot_station_state_machine",
                 daemon=True,
             )
@@ -201,48 +213,65 @@ class StateMachineExecutor:
 
     # ----- run loop -----
 
-    def _run_loop(self, name, nodes):
+    def _run_loop(self, nodes, loop=False):
         """Walk the graph from sm_start; random choice on multiple outgoing."""
         nodes_by_id = {str(node.get("id")): node for node in nodes if isinstance(node, dict) and node.get("id")}
+        iteration = 1
+
+        while True:
+            if not self._begin_iteration(iteration):
+                return
+            outcome, detail, current_id = self._run_iteration(nodes_by_id)
+            if outcome == "completed":
+                self._mark_iteration_completed()
+                if not loop:
+                    self._finish_run("completed", "State machine run completed.", current_id=None)
+                    return
+                if self._stop_event.wait(LOOP_RESTART_PAUSE_SEC):
+                    self._finish_run("stopped", "State machine run stopped.", current_id=None)
+                    return
+                iteration += 1
+                continue
+            if outcome == "stopped":
+                self._finish_run("stopped", detail or "State machine run stopped.", current_id=current_id)
+                return
+            self._fail_run(detail or "State machine run failed.", current_id=current_id)
+            return
+
+    def _run_iteration(self, nodes_by_id):
+        """Run one start-to-end pass. Loop mode restarts this whole pass."""
         current_id = "sm_start"
         visited = set()
 
         while True:
             if self._stop_event.is_set():
-                self._finish_run("stopped", "State machine run stopped.", current_id=current_id)
-                return
+                return "stopped", "State machine run stopped.", current_id
 
             node = nodes_by_id.get(current_id)
             if node is None:
-                self._fail_run(f"State not found: {current_id}", current_id=current_id)
-                return
+                return "failed", f"State not found: {current_id}", current_id
 
             self._set_current_node(current_id)
             if current_id in visited and current_id != "sm_end":
-                self._fail_run(f"Cycle detected at state: {_node_title(node) or current_id}", current_id=current_id)
-                return
+                return "failed", f"Cycle detected at state: {_node_title(node) or current_id}", current_id
             visited.add(current_id)
 
             node_type = node.get("type")
             if node_type == "end" or current_id == "sm_end":
                 self._mark_node_completed(current_id)
-                self._finish_run("completed", "State machine run completed.", current_id=None)
-                return
+                return "completed", "State machine run completed.", None
 
             if node_type != "start":
                 outcome, detail = self._execute_task(node)
                 if outcome == "stopped":
-                    self._finish_run("stopped", detail or "State machine run stopped.", current_id=current_id)
-                    return
+                    return "stopped", detail or "State machine run stopped.", current_id
                 if outcome != "completed":
-                    self._fail_run(detail or f"State failed: {_node_title(node) or current_id}", current_id=current_id)
-                    return
+                    return "failed", detail or f"State failed: {_node_title(node) or current_id}", current_id
 
             self._mark_node_completed(current_id)
             outgoing_ids = [str(item) for item in node.get("outgoingIds") or []]
             if not outgoing_ids:
-                self._fail_run(f"State has no outgoing edge: {_node_title(node) or current_id}", current_id=current_id)
-                return
+                return "failed", f"State has no outgoing edge: {_node_title(node) or current_id}", current_id
             next_id = random.choice(outgoing_ids)
             self._mark_edge_taken(current_id, next_id)
             current_id = next_id
@@ -419,7 +448,7 @@ class StateMachineExecutor:
         return "stopped", "State machine run stopped."
 
     def _execute_topic_wait(self, node):
-        """Wait until a configured ROS topic receives the next message."""
+        """Wait until a configured ROS topic receives the next true Bool message."""
         params = node.get("params") or {}
         topic_name = self._topic_param(params, ("topicName", "topic"))
         topic_key = self._topic_param(params, ("topicKey", "readKey", "key"))
@@ -447,8 +476,8 @@ class StateMachineExecutor:
             return "failed", detail
 
         after_sequence = baseline.get("sequence") if baseline.get("ok") else None
-        topic_data = self._topic_wait_status_data("waiting_message", signal_target, baseline, after_sequence=after_sequence)
-        self._set_task_status(node, "running", f"Waiting for message on {signal_target}.", topic_data)
+        topic_data = self._topic_wait_status_data("waiting_true", signal_target, baseline, after_sequence=after_sequence)
+        self._set_task_status(node, "running", f"Waiting for true message on {signal_target}.", topic_data)
 
         deadline = time.monotonic() + timeout_sec if timeout_sec > 0 else None
         while not self._stop_event.is_set():
@@ -467,17 +496,28 @@ class StateMachineExecutor:
             else:
                 result = reader.read_after(topic_key, after_sequence=after_sequence, timeout_sec=wait_sec)
             if result.get("ok"):
+                if not self._topic_wait_result_is_true(result):
+                    after_sequence = result.get("sequence", after_sequence)
+                    baseline = result
+                    data = self._topic_wait_status_data("waiting_true", signal_target, result, after_sequence=after_sequence)
+                    self._set_task_status(
+                        node,
+                        "running",
+                        f"Waiting for true message on {result.get('topic') or signal_target}.",
+                        data,
+                    )
+                    continue
                 data = self._topic_wait_status_data("completed", signal_target, result, after_sequence=after_sequence)
-                self._set_task_status(node, "completed", f"Received message on {result.get('topic') or topic_key}.", data)
-                return "completed", f"Received message on {result.get('topic') or topic_key}."
+                self._set_task_status(node, "completed", f"Received true message on {result.get('topic') or topic_key}.", data)
+                return "completed", f"Received true message on {result.get('topic') or topic_key}."
             if result.get("code") != "ROS-R-NODATA":
                 detail = result.get("detail") or result.get("code") or f"Topic wait failed: {signal_target}"
                 data = self._topic_wait_status_data("failed", signal_target, result, after_sequence=after_sequence)
                 self._set_task_status(node, "failed", detail, data)
                 return "failed", detail
 
-            data = self._topic_wait_status_data("waiting_message", signal_target, result, after_sequence=after_sequence)
-            self._set_task_status(node, "running", f"Waiting for message on {result.get('topic') or signal_target}.", data)
+            data = self._topic_wait_status_data("waiting_true", signal_target, result, after_sequence=after_sequence)
+            self._set_task_status(node, "running", f"Waiting for true message on {result.get('topic') or signal_target}.", data)
 
         self._set_task_status(
             node,
@@ -587,6 +627,13 @@ class StateMachineExecutor:
         }
 
     @staticmethod
+    def _topic_wait_result_is_true(result):
+        payload = result.get("data")
+        if isinstance(payload, dict):
+            payload = payload.get("data")
+        return payload is True
+
+    @staticmethod
     def _topic_publish_status_data(phase, action_key, result=None, payload=None):
         result = result or {}
         return {
@@ -609,6 +656,31 @@ class StateMachineExecutor:
 
     # ----- run state helpers -----
 
+    def _begin_iteration(self, iteration):
+        with self._lock:
+            if self._run.get("status") in _TERMINAL_RUN_STATUSES:
+                return False
+            self._run.update(
+                {
+                    "active": True,
+                    "status": "running",
+                    "currentId": "sm_start",
+                    "completedIds": [],
+                    "edgePath": [],
+                    "path": ["sm_start"],
+                    "iteration": iteration,
+                    "error": "",
+                    "taskStatus": None,
+                }
+            )
+            return True
+
+    def _mark_iteration_completed(self):
+        with self._lock:
+            if self._run.get("status") in _TERMINAL_RUN_STATUSES:
+                return
+            self._run["completedIterations"] = int(self._run.get("completedIterations") or 0) + 1
+
     def _set_current_node(self, node_id):
         with self._lock:
             if self._run.get("status") in _TERMINAL_RUN_STATUSES:
@@ -619,11 +691,15 @@ class StateMachineExecutor:
 
     def _mark_node_completed(self, node_id):
         with self._lock:
+            if self._run.get("status") in _TERMINAL_RUN_STATUSES:
+                return
             if node_id not in self._run["completedIds"]:
                 self._run["completedIds"].append(node_id)
 
     def _mark_edge_taken(self, from_id, to_id):
         with self._lock:
+            if self._run.get("status") in _TERMINAL_RUN_STATUSES:
+                return
             self._run["edgePath"].append({"from": from_id, "to": to_id})
             self._run["currentId"] = to_id
             if not self._run["path"] or self._run["path"][-1] != to_id:

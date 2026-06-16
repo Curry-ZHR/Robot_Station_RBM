@@ -4,6 +4,9 @@ set -euo pipefail
 TARGET_USER="${SUDO_USER:-${USER}}"
 LIDAR_HOST_IP_CIDR="${ROBOT_STATION_LIDAR_HOST_IP_CIDR:-192.168.1.100/24}"
 LIDAR_INTERFACE="${ROBOT_STATION_LIDAR_INTERFACE:-enp11s0}"
+LIDAR_ROUTE_DEST="${ROBOT_STATION_LIDAR_ROUTE_DEST:-192.168.1.154/32}"
+LIDAR_ROUTE_VIA="${ROBOT_STATION_LIDAR_ROUTE_VIA:-172.16.18.1}"
+LIDAR_ROUTE_INTERFACE="${ROBOT_STATION_LIDAR_ROUTE_INTERFACE:-eno1}"
 IP_BIN="$(command -v ip || true)"
 SUDOERS_FILE="/etc/sudoers.d/robot-station-lidar-ip"
 TMP_FILE="$(mktemp)"
@@ -29,10 +32,11 @@ if [[ "${TARGET_USER}" == "root" ]]; then
 fi
 
 cat >"${TMP_FILE}" <<EOF
-# Robot Station LiDAR host IP whitelist.
-# Allows ${TARGET_USER} to add the LiDAR receive IP used by RoboSense UDP packets.
+# Robot Station LiDAR network whitelist.
+# Allows ${TARGET_USER} to configure the LiDAR receive IP and route.
 Cmnd_Alias ROBOT_STATION_LIDAR_IP = \\
-    ${IP_BIN} addr add ${LIDAR_HOST_IP_CIDR} dev ${LIDAR_INTERFACE}
+    ${IP_BIN} addr add ${LIDAR_HOST_IP_CIDR} dev ${LIDAR_INTERFACE}, \\
+    ${IP_BIN} route replace ${LIDAR_ROUTE_DEST} via ${LIDAR_ROUTE_VIA} dev ${LIDAR_ROUTE_INTERFACE}
 
 ${TARGET_USER} ALL=(root) NOPASSWD: ROBOT_STATION_LIDAR_IP
 EOF
@@ -44,4 +48,5 @@ sudo visudo -cf "${SUDOERS_FILE}" >/dev/null
 echo "已安装 LiDAR IP sudoers 白名单: ${SUDOERS_FILE}"
 echo "允许命令:"
 echo "  sudo -n ${IP_BIN} addr add ${LIDAR_HOST_IP_CIDR} dev ${LIDAR_INTERFACE}"
-echo "run.sh 会在缺少 ${LIDAR_HOST_IP_CIDR} 时自动补到 ${LIDAR_INTERFACE}。"
+echo "  sudo -n ${IP_BIN} route replace ${LIDAR_ROUTE_DEST} via ${LIDAR_ROUTE_VIA} dev ${LIDAR_ROUTE_INTERFACE}"
+echo "run.sh 会自动补 ${LIDAR_HOST_IP_CIDR}，并配置 ${LIDAR_ROUTE_DEST} 路由。"

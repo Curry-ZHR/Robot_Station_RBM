@@ -245,6 +245,9 @@ const state = {
       activeEdge: null,
       edgePath: [],
       path: [],
+      loop: false,
+      iteration: 0,
+      completedIterations: 0,
       startedAt: null,
       completedAt: null,
     },
@@ -931,7 +934,7 @@ const stateMachineTaskTypes = {
   },
   topic_wait: {
     label: "监听消息",
-    summary: "收到消息后继续",
+    summary: "收到 true 信号后继续",
     fields: [
       { key: "topicName", label: "监听话题名", type: "text", placeholder: "/data_collection/start" },
     ],
@@ -1662,6 +1665,9 @@ function resetStateMachineRun() {
     activeEdge: null,
     edgePath: [],
     path: [],
+    loop: false,
+    iteration: 0,
+    completedIterations: 0,
     startedAt: null,
     completedAt: null,
   };
@@ -1779,7 +1785,7 @@ function stateMachineParamSummary(node) {
   if (node.taskType === "reset_odom") return "调用 /reset_odom，将 /odom 重置为 0";
   if (node.taskType === "wait") return `运动后静止 ${params.stableSec ?? "--"}s`;
   if (node.taskType === "topic_publish") return `发布 true：${params.topicName || params.actionKey || "--"}`;
-  if (node.taskType === "topic_wait") return `等待消息：${params.topicName || params.topicKey || "--"}`;
+  if (node.taskType === "topic_wait") return `等待 true：${params.topicName || params.topicKey || "--"}`;
   return stateMachineTaskMeta(node.taskType).summary;
 }
 
@@ -2400,9 +2406,16 @@ function renderStateMachine() {
   const nameInput = $("#stateMachineNameInput");
   if (nameInput && document.activeElement !== nameInput) nameInput.value = sm.name || "";
   setText("#stateMachineTitle", sm.name || "状态机草稿");
-  setText("#stateMachineSummary", `${taskCount} 个任务 state / ${edgeCount} 条连线 / 多出口随机执行`);
+  const summaryParts = [`${taskCount} 个任务 state`, `${edgeCount} 条连线`, "多出口随机执行"];
+  if (sm.run.loop) {
+    summaryParts.push(`循环第 ${sm.run.iteration || 1} 轮`);
+    summaryParts.push(`已完成 ${sm.run.completedIterations || 0} 轮`);
+  }
+  setText("#stateMachineSummary", summaryParts.join(" / "));
 
-  if (sm.realRun.active) {
+  if (sm.realRun.active && sm.run.loop) {
+    setStateBadge("#stateMachineBadge", "循环运行中", "ok");
+  } else if (sm.realRun.active) {
     setStateBadge("#stateMachineBadge", "运行中", "ok");
   } else if (sm.run.status === "completed") {
     setStateBadge("#stateMachineBadge", "运行完成", "ok");
@@ -2422,6 +2435,11 @@ function renderStateMachine() {
     const canRerun = ["completed", "failed", "stopped"].includes(sm.run.status);
     realRunButton.disabled = sm.realRun.active || !hasStartExit;
     realRunButton.textContent = sm.realRun.active ? "运行中" : canRerun ? "重新运行" : "运行";
+  }
+  const realLoopButton = $("#stateMachineRealLoopButton");
+  if (realLoopButton) {
+    realLoopButton.disabled = sm.realRun.active || !hasStartExit;
+    realLoopButton.textContent = sm.realRun.active && sm.run.loop ? "循环中" : "循环运行";
   }
   const realStopButton = $("#stateMachineRealStopButton");
   if (realStopButton) realStopButton.disabled = !sm.realRun.active;
@@ -2446,6 +2464,9 @@ function applyStateMachineBackendRun(run) {
     activeEdge: null,
     edgePath: Array.isArray(run.edgePath) ? run.edgePath : [],
     path: Array.isArray(run.path) ? run.path : [],
+    loop: run.loop === true,
+    iteration: Number.isFinite(Number(run.iteration)) ? Number(run.iteration) : 0,
+    completedIterations: Number.isFinite(Number(run.completedIterations)) ? Number(run.completedIterations) : 0,
   };
 }
 
@@ -2464,7 +2485,10 @@ async function pollStateMachineRunStatus() {
       stopStateMachineRunPolling();
       if (run.status === "completed") addLog("状态机", "运行完成");
       if (run.status === "failed") addLog("状态机", `运行失败：${run.error || "未知原因"}`);
-      if (run.status === "stopped") addLog("状态机", "运行已停止");
+      if (run.status === "stopped") {
+        const completedText = run.loop ? `，已完成 ${run.completedIterations || 0} 轮` : "";
+        addLog("状态机", `运行已停止${completedText}`);
+      }
     }
     renderStateMachine();
   } catch (error) {
@@ -2475,14 +2499,15 @@ async function pollStateMachineRunStatus() {
   }
 }
 
-async function startStateMachineRealRun() {
+async function startStateMachineRealRun(options = {}) {
   const sm = state.stateMachine;
   if (sm.realRun.active) return;
   const snapshot = stateMachineSnapshot();
+  const loop = options.loop === true;
   try {
-    const payload = await stateMachineApiPost("run/start", { name: snapshot.name, nodes: snapshot.nodes });
-    applyStateMachineBackendRun(payload.run || { active: true, status: "running", currentId: "sm_start", path: ["sm_start"] });
-    addLog("状态机", `运行已启动：${snapshot.name}`);
+    const payload = await stateMachineApiPost("run/start", { name: snapshot.name, nodes: snapshot.nodes, loop });
+    applyStateMachineBackendRun(payload.run || { active: true, status: "running", currentId: "sm_start", path: ["sm_start"], loop });
+    addLog("状态机", `${loop ? "循环运行" : "运行"}已启动：${snapshot.name}`);
     stopStateMachineRunPolling();
     sm.realRun.pollTimer = window.setInterval(pollStateMachineRunStatus, 1000);
     pollStateMachineRunStatus();
@@ -11325,6 +11350,7 @@ function bindEvents() {
     renderStateMachine();
   });
   $("#stateMachineRealRunButton")?.addEventListener("click", startStateMachineRealRun);
+  $("#stateMachineRealLoopButton")?.addEventListener("click", () => startStateMachineRealRun({ loop: true }));
   $("#stateMachineRealStopButton")?.addEventListener("click", stopStateMachineRealRun);
   $("#stateMachineModalClose")?.addEventListener("click", closeStateMachineModal);
   $("#stateMachineModalCancelButton")?.addEventListener("click", closeStateMachineModal);

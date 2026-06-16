@@ -119,9 +119,17 @@ class ExternalPiperRosReader:
 class FakeTopicReader:
     def __init__(self, baseline, next_result):
         self.baseline = dict(baseline)
-        self.next_result = dict(next_result)
+        if isinstance(next_result, list):
+            self.next_results = [dict(item) for item in next_result]
+        else:
+            self.next_results = [dict(next_result)]
         self.read_calls = []
         self.read_after_calls = []
+
+    def _next_result(self):
+        if len(self.next_results) > 1:
+            return dict(self.next_results.pop(0))
+        return dict(self.next_results[0])
 
     def read(self, key, timeout_sec=0.0):
         self.read_calls.append((key, timeout_sec))
@@ -129,7 +137,7 @@ class FakeTopicReader:
 
     def read_after(self, key, after_sequence=None, timeout_sec=0.0):
         self.read_after_calls.append((key, after_sequence, timeout_sec))
-        return dict(self.next_result)
+        return self._next_result()
 
     def read_bool_topic(self, topic, timeout_sec=0.0):
         self.read_calls.append((topic, timeout_sec))
@@ -137,7 +145,7 @@ class FakeTopicReader:
 
     def read_bool_topic_after(self, topic, after_sequence=None, timeout_sec=0.0):
         self.read_after_calls.append((topic, after_sequence, timeout_sec))
-        return dict(self.next_result)
+        return self._next_result()
 
 
 class FakeRosWriter:
@@ -260,6 +268,62 @@ def test_reset_odom_state_runs_once_and_continues(monkeypatch):
     assert run["taskStatus"]["status"] == "completed"
     assert run["taskStatus"]["data"]["phase"] == "completed"
     assert run["taskStatus"]["data"]["service"] == "/reset_odom"
+
+
+def test_loop_run_restarts_after_end_until_stopped(monkeypatch):
+    calls = []
+
+    def fake_reset(payload):
+        calls.append(payload)
+        return {
+            "ok": True,
+            "code": "CHASSIS-C-ODOM-RESET",
+            "detail": "reset ok",
+            "action": "reset_odom",
+            "service": "/reset_odom",
+        }
+
+    monkeypatch.setattr(executor_module, "reset_chassis_odometry", fake_reset)
+    monkeypatch.setattr(executor_module, "LOOP_RESTART_PAUSE_SEC", 0.005)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    result = manager.start(
+        {
+            "name": "循环归零流程",
+            "loop": True,
+            "nodes": [
+                _start(["reset"]),
+                _node("reset", "reset_odom", outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+
+    deadline = time.time() + 1.0
+    run = manager.status()["run"]
+    while time.time() < deadline:
+        run = manager.status()["run"]
+        if run["completedIterations"] >= 2:
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError(f"State machine did not loop twice: {run}")
+
+    assert result["ok"] is True
+    assert run["active"] is True
+    assert run["status"] == "running"
+    assert run["loop"] is True
+    assert run["iteration"] >= 2
+    assert run["completedIterations"] >= 2
+    assert len(calls) >= 2
+
+    stop_result = manager.stop()
+    stopped_run = stop_result["run"]
+
+    assert stopped_run["status"] == "stopped"
+    assert stopped_run["active"] is False
+    assert stopped_run["loop"] is True
+    assert stopped_run["completedIterations"] >= 2
 
 
 def test_reset_odom_state_failure_fails_state_machine(monkeypatch):
@@ -482,6 +546,65 @@ def test_topic_wait_state_waits_for_next_message_and_continues(monkeypatch):
     assert run["taskStatus"]["status"] == "completed"
     assert run["taskStatus"]["data"]["phase"] == "completed"
     assert run["taskStatus"]["data"]["sequence"] == 8
+
+
+def test_topic_wait_state_ignores_false_until_true(monkeypatch):
+    fake_reader = FakeTopicReader(
+        {
+            "ok": True,
+            "code": "ROS-R-OK",
+            "detail": "Latest message from /data_collection/start is 10 ms old.",
+            "key": "data_collection_start",
+            "topic": "/data_collection/start",
+            "messageType": "std_msgs/msg/Bool",
+            "sequence": 7,
+            "data": {"data": False},
+        },
+        [
+            {
+                "ok": True,
+                "code": "ROS-R-OK",
+                "detail": "Latest message from /data_collection/start is 0 ms old.",
+                "key": "data_collection_start",
+                "topic": "/data_collection/start",
+                "messageType": "std_msgs/msg/Bool",
+                "sequence": 8,
+                "data": {"data": False},
+            },
+            {
+                "ok": True,
+                "code": "ROS-R-OK",
+                "detail": "Latest message from /data_collection/start is 0 ms old.",
+                "key": "data_collection_start",
+                "topic": "/data_collection/start",
+                "messageType": "std_msgs/msg/Bool",
+                "sequence": 9,
+                "data": {"data": True},
+            },
+        ],
+    )
+    monkeypatch.setattr(executor_module, "get_ros_reader", lambda: fake_reader)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    result = manager.start(
+        {
+            "name": "监听 true 信号流程",
+            "nodes": [
+                _start(["wait_signal"]),
+                _node("wait_signal", "topic_wait", params={"topicName": "/data_collection/start"}, outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert result["ok"] is True
+    assert fake_reader.read_after_calls[0][1] == 7
+    assert fake_reader.read_after_calls[1][1] == 8
+    assert run["status"] == "completed"
+    assert run["taskStatus"]["status"] == "completed"
+    assert run["taskStatus"]["data"]["sequence"] == 9
+    assert run["taskStatus"]["data"]["data"] == {"data": True}
 
 
 def test_external_navigation_stop_fails_state_machine(monkeypatch):
