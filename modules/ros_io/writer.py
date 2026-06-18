@@ -16,6 +16,16 @@ def _result(ok, code, detail, **extra):
     return payload
 
 
+def _payload_bool(payload, *keys):
+    if not isinstance(payload, dict):
+        return None
+    for key in keys:
+        if key in payload:
+            value = payload[key]
+            return value if isinstance(value, bool) else None
+    return None
+
+
 class RosTopicWriter:
     def __init__(self, runtime, specs=None):
         self._runtime = runtime
@@ -31,6 +41,18 @@ class RosTopicWriter:
         spec = self._specs.get(key)
         if spec is None:
             return _result(False, "ROS-W-UNKNOWN", f"Unknown ROS write action: {key}", key=key)
+
+        if spec.key == "piper_enable_all" and _payload_bool(payload, "enabled", "data", "value") is False:
+            return _result(
+                True,
+                "ROS-W-NOOP",
+                "Piper disable requests are ignored; hardware disable is not supported.",
+                key=spec.key,
+                name=spec.name,
+                topic=spec.topic,
+                messageType=spec.message_type,
+                publishedAt=time.strftime("%H:%M:%S"),
+            )
 
         try:
             message_class = import_message_class(spec.message_type)

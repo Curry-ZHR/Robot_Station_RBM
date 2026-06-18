@@ -28,6 +28,9 @@ const state = {
   piperRuntime: {
     status: "stopped",
   },
+  piperRemoteRuntime: {
+    status: "stopped",
+  },
   liftingRuntime: {
     status: "stopped",
   },
@@ -483,7 +486,7 @@ const state = {
 };
 
 const healthItems = [
-  ["机械臂", "ok", "反馈 100 Hz", 92, "未使能"],
+  ["机械臂", "ok", "反馈 100 Hz", 92, "状态待确认"],
   ["底盘", "ok", "里程计在线", 86, "速度 0.00 m/s"],
   ["相机", "idle", "服务状态", 0, "按需启动"],
   ["LiDAR", "ok", "点云在线", 82, "8 Hz"],
@@ -532,6 +535,7 @@ const selfCheckItems = [
 
 const runtimePrepItems = [
   { key: "piper", name: "Piper", source: "机械臂", view: "device-control" },
+  { key: "piper_remote", name: "主从直通", source: "机械臂", view: "device-control" },
   { key: "lifting", name: "升降轴", source: "升降轴", view: "platform-control" },
   { key: "chassis", name: "底盘", source: "底盘", view: "platform-control" },
   { key: "camera", name: "Camera", source: "相机", view: "sensors" },
@@ -715,6 +719,17 @@ const piperRuntimeLabels = {
   failed: { title: "Piper 启动失败，点击重试", level: "danger", pressed: false },
   error: { title: "Piper 异常，点击重试", level: "danger", pressed: false },
   unknown: { title: "Piper 状态未知，点击刷新", level: "idle", pressed: false },
+};
+
+const piperRemoteRuntimeLabels = {
+  stopped: { title: "主从直通未启动，点击启动", level: "idle", pressed: false },
+  starting: { title: "主从直通启动中", level: "warn", pressed: false, busy: true },
+  running: { title: "主从直通运行中，点击清理关闭", level: "ok", pressed: true },
+  stopping: { title: "主从直通清理关闭中", level: "warn", pressed: true, busy: true },
+  external: { title: "检测到旧主从直通 ROS，点击清理", level: "warn", pressed: true },
+  failed: { title: "主从直通启动失败，点击重试", level: "danger", pressed: false },
+  error: { title: "主从直通异常，点击重试", level: "danger", pressed: false },
+  unknown: { title: "主从直通状态未知，点击刷新", level: "idle", pressed: false },
 };
 
 const liftingRuntimeLabels = {
@@ -1218,6 +1233,30 @@ function piperReady() {
   return state.piperRuntime.status === "running";
 }
 
+function piperRemoteReady() {
+  return state.piperRemoteRuntime.status === "running" || state.piperRemoteRuntime.status === "external";
+}
+
+function piperRemoteBlocksControl() {
+  return ["starting", "running", "stopping", "external"].includes(state.piperRemoteRuntime.status);
+}
+
+function piperFeedbackReady() {
+  return piperReady() || piperRemoteReady();
+}
+
+function piperControlAvailable() {
+  return piperReady() && !piperRemoteBlocksControl();
+}
+
+function piperControlUnavailableDetail() {
+  if (piperRemoteReady()) return "主从直通正在运行";
+  if (state.piperRemoteRuntime.status === "starting") return "主从直通正在启动";
+  if (state.piperRemoteRuntime.status === "stopping") return "主从直通正在清理";
+  if (!piperReady()) return "Piper 控制节点未运行";
+  return "";
+}
+
 function liftingReady() {
   return state.liftingRuntime.status === "running" || state.liftingRuntime.status === "external";
 }
@@ -1232,6 +1271,10 @@ function liftingInitialized() {
 
 function getPiperRuntimeLabel() {
   return piperRuntimeLabels[state.piperRuntime.status] || piperRuntimeLabels.error;
+}
+
+function getPiperRemoteRuntimeLabel() {
+  return piperRemoteRuntimeLabels[state.piperRemoteRuntime.status] || piperRemoteRuntimeLabels.error;
 }
 
 function getLiftingRuntimeLabel() {
@@ -1252,12 +1295,26 @@ function getLidarRuntimeLabel() {
 
 function setPiperRuntime(status) {
   state.piperRuntime.status = piperRuntimeLabels[status] ? status : "unknown";
-  if (state.piperRuntime.status !== "running" && state.armControl.active) {
+  if (!piperControlAvailable() && state.armControl.active) {
     window.clearTimeout(state.armControl.publishTimer);
     state.armControl.active = false;
     state.armControl.busy = false;
   }
   renderPiperRuntime();
+  renderPiperJointFeedback();
+  renderInferenceStatus();
+  renderActionLocks();
+  renderRuntimePrep();
+}
+
+function setPiperRemoteRuntime(status) {
+  state.piperRemoteRuntime.status = piperRemoteRuntimeLabels[status] ? status : "unknown";
+  if (!piperControlAvailable() && state.armControl.active) {
+    window.clearTimeout(state.armControl.publishTimer);
+    state.armControl.active = false;
+    state.armControl.busy = false;
+  }
+  renderPiperRemoteRuntime();
   renderPiperJointFeedback();
   renderInferenceStatus();
   renderActionLocks();
@@ -2880,9 +2937,18 @@ function renderSelfCheck(items = selfCheckItems) {
 }
 
 function runtimePrepState(item) {
-  const status = state[`${item.key}Runtime`]?.status || "unknown";
+  const runtimeStates = {
+    piper: state.piperRuntime,
+    piper_remote: state.piperRemoteRuntime,
+    lifting: state.liftingRuntime,
+    chassis: state.chassisRuntime,
+    camera: state.cameraRuntime,
+    lidar: state.lidarRuntime,
+  };
+  const status = runtimeStates[item.key]?.status || "unknown";
   const labelGetters = {
     piper: getPiperRuntimeLabel,
+    piper_remote: getPiperRemoteRuntimeLabel,
     lifting: getLiftingRuntimeLabel,
     chassis: getChassisRuntimeLabel,
     camera: getCameraRuntimeLabel,
@@ -3062,10 +3128,10 @@ function renderInferenceStatus() {
   const requestButton = $("#requestChunkButton");
   if (requestButton) requestButton.disabled = info.busy || !info.connected || info.looping;
   const executeButton = $("#executeChunkButton");
-  if (executeButton) executeButton.disabled = info.busy || !info.chunkId || info.looping;
+  if (executeButton) executeButton.disabled = info.busy || !info.chunkId || info.looping || !piperControlAvailable();
   const enableButton = $("#inferenceEnablePiperButton");
   if (enableButton) {
-    enableButton.disabled = info.busy || state.piperEnableBusy || !piperReady();
+    enableButton.disabled = info.busy || state.piperEnableBusy || !piperControlAvailable();
     enableButton.textContent = state.piperEnableBusy ? "使能中" : "使能 Piper";
   }
   renderInferenceMetrics();
@@ -3074,10 +3140,11 @@ function renderInferenceStatus() {
 function renderPreflight() {
   const selfCheckFresh = Boolean(state.selfCheckRanAt);
   const idle = state.task === "idle";
-  const runtimeReady = piperReady();
+  const runtimeReady = piperControlAvailable();
+  const piperControlDetail = piperControlUnavailableDetail();
   $("#preflightList").innerHTML = [
     ["任务控制权", idle ? "正常" : "警告", idle ? "当前空闲。" : "已有任务占用机器人。"],
-    ["Piper 控制", runtimeReady ? "正常" : "警告", runtimeReady ? "双臂控制节点运行中。" : "Piper 控制节点未启动。"],
+    ["Piper 控制", runtimeReady ? "正常" : "警告", runtimeReady ? "双臂控制节点运行中。" : `${piperControlDetail || "Piper 控制不可用"}。`],
     ["最近自检", selfCheckFresh ? "正常" : "警告", selfCheckFresh ? "自检结果可用。" : "建议先执行整机自检。"],
     ["人工停止", "正常", "顶部停止按钮可用。"],
   ]
@@ -3158,7 +3225,7 @@ function armStatusText(side) {
   if (feedback.ok) {
     return feedbackLatencyMeta(feedback);
   }
-  if (!piperReady()) {
+  if (!piperFeedbackReady()) {
     return { level: "idle", text: "未启动", detail: "等待 Piper" };
   }
   const level = feedbackLevel(feedback);
@@ -3188,7 +3255,7 @@ function renderArmCompareBadge() {
     setStateBadge("#armCompareBadge", "部分在线", "warn");
     return;
   }
-  setStateBadge("#armCompareBadge", piperReady() ? "等待反馈" : "未启动", piperReady() ? "warn" : "idle");
+  setStateBadge("#armCompareBadge", piperFeedbackReady() ? "等待反馈" : "未启动", piperFeedbackReady() ? "warn" : "idle");
 }
 
 function stateValueFor(feedback, index) {
@@ -3484,11 +3551,11 @@ function renderArmControlButtons() {
   const controlButton = $("#armControlToggleButton");
   if (controlButton) {
     controlButton.textContent = state.armControl.active ? "退出接管" : "接管控制";
-    controlButton.disabled = state.armControl.busy || (!state.armControl.active && !piperReady());
+    controlButton.disabled = state.armControl.busy || (!state.armControl.active && !piperControlAvailable());
     controlButton.classList.toggle("is-active", state.armControl.active);
   }
   const homeButton = $("#armHomeButton");
-  if (homeButton) homeButton.disabled = state.armControl.busy;
+  if (homeButton) homeButton.disabled = state.armControl.busy || !piperControlAvailable();
   renderJointSpeedInput();
 }
 
@@ -3580,6 +3647,12 @@ function updateArmActionFromInput(input, options = {}) {
 async function publishArmActionsNow(options = {}) {
   const source = options.source || "接管控制";
   const logSuccess = options.logSuccess !== false;
+  const unavailableDetail = piperControlUnavailableDetail();
+  if (unavailableDetail) {
+    if (logSuccess) addLog("机械臂", `${source}未启动：${unavailableDetail}`);
+    renderArmComparisons();
+    return null;
+  }
   if (!allActionsReady()) {
     if (logSuccess) addLog("机械臂", `${source}未启动：左右臂 Action 参数未就绪`);
     renderArmComparisons();
@@ -3655,6 +3728,7 @@ function resumeBackgroundPollsNow() {
     if (state.inference.looping) return;
     refreshInferenceStatus();
     fetchPiperRuntimeStatus({ silent: true });
+    fetchPiperRemoteRuntimeStatus({ silent: true });
     fetchLiftingRuntimeStatus({ silent: true });
     fetchChassisRuntimeStatus({ silent: true });
     fetchCameraRuntimeStatus({ silent: true });
@@ -3702,8 +3776,9 @@ function requestPiperJointHold(reason = "停止") {
 
 async function toggleArmDirectControl() {
   if (state.armControl.busy) return;
-  if (!state.armControl.active && !piperReady()) {
-    addLog("机械臂", "接管控制未启动：Piper 控制节点未运行");
+  const unavailableDetail = piperControlUnavailableDetail();
+  if (!state.armControl.active && unavailableDetail) {
+    addLog("机械臂", `接管控制未启动：${unavailableDetail}`);
     renderArmComparisons();
     return;
   }
@@ -7275,6 +7350,15 @@ function renderPiperRuntime() {
   });
 }
 
+function renderPiperRemoteRuntime() {
+  const label = getPiperRemoteRuntimeLabel();
+  renderStatusSwitch("#piperRemoteRuntimeStatus", "主从直通", label.level, {
+    pressed: label.pressed,
+    busy: label.busy,
+    title: label.title,
+  });
+}
+
 function renderLogs() {
   const html = state.logs
     .map(
@@ -7295,7 +7379,7 @@ function renderLogs() {
 
 function renderActionLocks() {
   const busy = state.task !== "idle";
-  const runtimeReady = piperReady();
+  const runtimeReady = piperControlAvailable();
   $$("[data-action]").forEach((button) => {
     const action = button.dataset.action;
     const requiresPiper = action === "homing" || action === "inference";
@@ -7877,7 +7961,7 @@ function renderPlaybackExecution() {
   const stopButton = $("#playbackStopButton");
   const speedInput = $("#playbackJointSpeedInput");
 
-  if (enableButton) enableButton.textContent = state.playback.robotEnabled ? "取消回放使能" : "机器人使能";
+  if (enableButton) enableButton.textContent = state.playback.robotEnabled ? "清除回放准备" : "回放准备";
   if (enableButton) enableButton.disabled = state.playback.busy;
   if (replayButton) replayButton.disabled = !state.playback.robotEnabled || state.playback.running || state.playback.loading || state.playback.busy || !String(state.playback.path || "").trim();
   if (stopButton) stopButton.disabled = !state.playback.running || state.playback.busy;
@@ -7892,12 +7976,12 @@ function renderPlaybackExecution() {
     : state.playback.lastError
     ? state.playback.lastError
     : state.playback.robotEnabled
-      ? "机器人已使能"
-      : "机器人未使能";
+      ? "回放已准备"
+      : "回放未准备";
   setText("#playbackExecutionStatus", status);
   setStateBadge(
     "#playbackSourceBadge",
-    state.playback.loading ? "加载中" : state.playback.running ? "回放中" : state.playback.robotEnabled ? "已使能" : "未使能",
+    state.playback.loading ? "加载中" : state.playback.running ? "回放中" : state.playback.robotEnabled ? "已准备" : "待准备",
     state.playback.loading || state.playback.running ? "warn" : state.playback.robotEnabled ? "ok" : "idle",
   );
 }
@@ -7936,7 +8020,7 @@ function renderPlayback() {
 
   setText("#playbackSummary", file.name);
   setText("#playbackTimeLabel", `${formatPlaybackTime(state.playback.elapsedSec)} / ${formatPlaybackTime(file.durationSec)}`);
-  setStateBadge("#playbackBadge", state.playback.running ? "回放中" : state.playback.robotEnabled ? "已使能" : "待使能", state.playback.running ? "warn" : state.playback.robotEnabled ? "ok" : "idle");
+  setStateBadge("#playbackBadge", state.playback.running ? "回放中" : state.playback.robotEnabled ? "已准备" : "待准备", state.playback.running ? "warn" : state.playback.robotEnabled ? "ok" : "idle");
 
   const fileInfo = $("#playbackFileInfo");
   if (fileInfo) {
@@ -7975,8 +8059,8 @@ async function togglePlaybackRobotEnable() {
     const result = await requestPlaybackAction("enable", { enabled, repeat: 3, intervalMs: 80 });
     state.playback.robotEnabled = Boolean(result.robotEnabled);
     state.playback.status = enabled ? "idle" : "stopped";
-    setStatusPill("#enableStatus", enabled ? "已使能" : "未使能", enabled ? "ok" : "idle");
-    addLog("回放", enabled ? "数据回放 Piper 使能已打开" : "数据回放已取消，Piper 保持使能");
+    setStatusPill("#enableStatus", enabled ? "已使能" : "保持使能", enabled ? "ok" : "idle");
+    addLog("回放", enabled ? "数据回放 Piper 使能已打开" : "数据回放准备已清除，Piper 保持使能");
     await refreshPlaybackStatus({ silent: true });
   } catch (error) {
     state.playback.lastError = error.message;
@@ -7989,7 +8073,7 @@ async function togglePlaybackRobotEnable() {
 
 async function startPlaybackRun() {
   if (!state.playback.robotEnabled) {
-    addLog("回放", "数据回放未启动：机器人未使能");
+    addLog("回放", "数据回放未启动：回放未准备");
     renderPlayback();
     return;
   }
@@ -8419,8 +8503,9 @@ async function rerunProblemChecks() {
 
 async function startHoming() {
   if (state.task !== "idle") return;
-  if (!piperReady()) {
-    addLog("机械臂", "归位未启动：Piper 控制节点未运行");
+  const unavailableDetail = piperControlUnavailableDetail();
+  if (unavailableDetail) {
+    addLog("机械臂", `归位未启动：${unavailableDetail}`);
     showView("device-control");
     return;
   }
@@ -8976,8 +9061,9 @@ function handleMaskClick(event) {
 }
 
 async function enablePiperForInference() {
-  if (!piperReady()) {
-    addLog("推理", "Piper 使能失败：控制节点未运行");
+  const unavailableDetail = piperControlUnavailableDetail();
+  if (unavailableDetail) {
+    addLog("推理", `Piper 使能失败：${unavailableDetail}`);
     showView("device-control");
     return;
   }
@@ -9001,8 +9087,9 @@ async function connectInference() {
     addLog("推理", "连接失败：远端地址为空");
     return;
   }
-  if (!piperReady()) {
-    addLog("推理", "提示：Piper 控制节点未运行，执行前请先启动");
+  const unavailableDetail = piperControlUnavailableDetail();
+  if (unavailableDetail) {
+    addLog("推理", `提示：${unavailableDetail}，执行前请切换到 Piper 控制`);
   }
   state.inference.busy = true;
   renderInferenceStatus();
@@ -9231,10 +9318,36 @@ function togglePiperRuntime() {
   startPiperRuntime();
 }
 
+async function startPiperRemoteRuntime() {
+  if (state.piperRemoteRuntime.status === "running" || state.piperRemoteRuntime.status === "starting") return;
+  await requestPiperRemoteRuntimeAction("start");
+}
+
+async function stopPiperRemoteRuntime() {
+  if (state.piperRemoteRuntime.status === "stopped" || state.piperRemoteRuntime.status === "stopping") return;
+  await requestPiperRemoteRuntimeAction("stop");
+}
+
+function togglePiperRemoteRuntime() {
+  if (state.piperRemoteRuntime.status === "starting" || state.piperRemoteRuntime.status === "stopping") return;
+  if (state.piperRemoteRuntime.status === "running" || state.piperRemoteRuntime.status === "external") {
+    stopPiperRemoteRuntime();
+    return;
+  }
+  startPiperRemoteRuntime();
+}
+
 function applyPiperServicePayload(payload) {
   const service = payload && payload.service;
   if (!service || !service.status) return false;
   setPiperRuntime(service.status);
+  return true;
+}
+
+function applyPiperRemoteServicePayload(payload) {
+  const service = payload && payload.service;
+  if (!service || !service.status) return false;
+  setPiperRemoteRuntime(service.status);
   return true;
 }
 
@@ -9250,6 +9363,23 @@ async function fetchPiperRuntimeStatus(options = {}) {
     if (!options.silent) {
       setPiperRuntime("error");
       addLog("机械臂", `Piper 状态查询失败：${error.message}`);
+    }
+    return null;
+  }
+}
+
+async function fetchPiperRemoteRuntimeStatus(options = {}) {
+  try {
+    const response = await fetch("/api/runtime/services/piper_remote", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok || !applyPiperRemoteServicePayload(payload)) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    return payload;
+  } catch (error) {
+    if (!options.silent) {
+      setPiperRemoteRuntime("error");
+      addLog("机械臂", `主从直通状态查询失败：${error.message}`);
     }
     return null;
   }
@@ -9511,6 +9641,7 @@ async function startRuntimePrepService(key) {
   if (state.runtimePrepBusy[key]) return;
   const actions = {
     piper: () => requestPiperRuntimeAction("start"),
+    piper_remote: () => requestPiperRemoteRuntimeAction("start"),
     lifting: () => requestLiftingRuntimeAction("start"),
     chassis: () => requestChassisRuntimeAction("start"),
     camera: () => requestCameraRuntimeAction("start"),
@@ -10193,7 +10324,39 @@ async function requestPiperRuntimeAction(action) {
     addLog("机械臂", `Piper 服务动作失败：${error.message}`);
     return null;
   } finally {
-    window.setTimeout(() => fetchPiperRuntimeStatus({ silent: true }), 800);
+    window.setTimeout(() => {
+      fetchPiperRuntimeStatus({ silent: true });
+      fetchPiperRemoteRuntimeStatus({ silent: true });
+    }, 800);
+  }
+}
+
+async function requestPiperRemoteRuntimeAction(action) {
+  const nextStatus = action === "stop" ? "stopping" : "starting";
+  setPiperRemoteRuntime(nextStatus);
+  addLog("机械臂", action === "stop" ? "请求清理主从直通 ROS" : "请求启动主从直通服务");
+  try {
+    const response = await fetch(`/api/runtime/services/piper_remote/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const payload = await response.json();
+    applyPiperRemoteServicePayload(payload);
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    addLog("机械臂", `主从直通服务动作完成：${payload.code}`);
+    return payload;
+  } catch (error) {
+    setPiperRemoteRuntime("error");
+    addLog("机械臂", `主从直通服务动作失败：${error.message}`);
+    return null;
+  } finally {
+    window.setTimeout(() => {
+      fetchPiperRuntimeStatus({ silent: true });
+      fetchPiperRemoteRuntimeStatus({ silent: true });
+    }, 800);
   }
 }
 
@@ -11397,6 +11560,7 @@ function bindEvents() {
   $("#rerunProblemChecksButton").addEventListener("click", rerunProblemChecks);
   $("#canStatus").addEventListener("click", () => activateCanInterface(currentCanCheckResult(), { confirm: false }));
   $("#piperRuntimeStatus").addEventListener("click", togglePiperRuntime);
+  $("#piperRemoteRuntimeStatus").addEventListener("click", togglePiperRemoteRuntime);
   $("#liftingRuntimeStatus").addEventListener("click", toggleLiftingRuntime);
   $("#chassisRuntimeStatus").addEventListener("click", toggleChassisRuntime);
   $("#chassisKeyboardButton").addEventListener("click", toggleChassisKeyboardListening);
@@ -11770,6 +11934,7 @@ function init() {
   renderDeviceBaseMetrics();
   renderDeviceControls();
   renderPiperRuntime();
+  renderPiperRemoteRuntime();
   renderLiftingRuntime();
   renderChassisRuntime();
   renderCameraRuntime();
@@ -11794,6 +11959,7 @@ function init() {
   fetchCachedSelfCheckStatus({ silent: true });
   refreshCanInterfaceStatus({ silent: true, updateSelfCheck: false });
   fetchPiperRuntimeStatus({ silent: true });
+  fetchPiperRemoteRuntimeStatus({ silent: true });
   fetchLiftingLimits();
   fetchLiftingRuntimeStatus({ silent: true });
   fetchChassisRuntimeStatus({ silent: true });
@@ -11805,6 +11971,7 @@ function init() {
   syncClock();
   window.setInterval(syncClock, 1000);
   window.setInterval(() => runBackgroundPoll(() => fetchPiperRuntimeStatus({ silent: true })), 3000);
+  window.setInterval(() => runBackgroundPoll(() => fetchPiperRemoteRuntimeStatus({ silent: true })), 3000);
   window.setInterval(() => runBackgroundPoll(() => fetchLiftingRuntimeStatus({ silent: true })), 3000);
   window.setInterval(() => runBackgroundPoll(() => fetchChassisRuntimeStatus({ silent: true })), 3000);
   window.setInterval(() => runBackgroundPoll(() => fetchCameraRuntimeStatus({ silent: true })), 3000);

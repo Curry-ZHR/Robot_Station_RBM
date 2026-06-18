@@ -34,6 +34,10 @@ class C_PiperRosNode(Node):
         self.declare_parameter('rviz_ctrl_flag', False)
         self.declare_parameter('piper_name', 'left')
         self.declare_parameter('joint_speed_percent', 10)
+        self.declare_parameter('joint_state_topic', '')
+        self.declare_parameter('joint_command_topic', 'joint_ctrl_single')
+        self.declare_parameter('joint_control_echo_topic', '')
+        self.declare_parameter('publish_joint_control_echo', True)
 
         self.can_port = self.get_parameter('can_port').get_parameter_value().string_value
         self.auto_enable = self.get_parameter('auto_enable').get_parameter_value().bool_value
@@ -41,6 +45,16 @@ class C_PiperRosNode(Node):
         self.rviz_ctrl_flag = self.get_parameter('rviz_ctrl_flag').get_parameter_value().bool_value	
         self.piper_name = self.get_parameter('piper_name').get_parameter_value().string_value
         self.joint_speed_percent = self.clamp_speed_percent(self.get_parameter('joint_speed_percent').value)
+        self.joint_state_topic = self.get_parameter('joint_state_topic').get_parameter_value().string_value.strip()
+        if not self.joint_state_topic:
+            self.joint_state_topic = f'/puppet/joint_{self.piper_name}'
+        self.joint_command_topic = self.get_parameter('joint_command_topic').get_parameter_value().string_value.strip()
+        if not self.joint_command_topic:
+            self.joint_command_topic = 'joint_ctrl_single'
+        self.joint_control_echo_topic = self.get_parameter('joint_control_echo_topic').get_parameter_value().string_value.strip()
+        if not self.joint_control_echo_topic:
+            self.joint_control_echo_topic = f'/master/joint_{self.piper_name}'
+        self.publish_joint_control_echo = self.get_parameter('publish_joint_control_echo').get_parameter_value().bool_value
 
         self.get_logger().info(f"can_port is {self.can_port}")
         self.get_logger().info(f"auto_enable is {self.auto_enable}")
@@ -48,9 +62,18 @@ class C_PiperRosNode(Node):
         self.get_logger().info(f"rviz_ctrl_flag is {self.rviz_ctrl_flag}")
         self.get_logger().info(f"piper_name is {self.piper_name}")
         self.get_logger().info(f"joint_speed_percent is {self.joint_speed_percent}")
+        self.get_logger().info(f"joint_state_topic is {self.joint_state_topic}")
+        self.get_logger().info(f"joint_command_topic is {self.joint_command_topic}")
+        self.get_logger().info(
+            f"joint_control_echo_topic is {self.joint_control_echo_topic if self.publish_joint_control_echo else '<not published>'}"
+        )
         # Publisher
-        self.joint_pub = self.create_publisher(JointState, f'/puppet/joint_{self.piper_name}', 1)
-        self.joint_ctrl_pub = self.create_publisher(JointState, f'/master/joint_{self.piper_name}', 1)
+        self.joint_pub = self.create_publisher(JointState, self.joint_state_topic, 1)
+        self.joint_ctrl_pub = (
+            self.create_publisher(JointState, self.joint_control_echo_topic, 1)
+            if self.publish_joint_control_echo and self.joint_control_echo_topic
+            else None
+        )
         self.arm_status_pub = self.create_publisher(PiperStatusMsg, self.get_name()+'/arm_status', 1)
         self.end_pose_pub = self.create_publisher(Pose, self.get_name()+'/end_pose', 1)
         self.end_pose_stamp_pub = self.create_publisher(PoseStamped, f'/puppet/end_pose_{self.piper_name}', 1)
@@ -76,7 +99,7 @@ class C_PiperRosNode(Node):
 
         # 启动订阅线程
         self.create_subscription(PosCmd, 'pos_cmd', self.pos_callback, 1)
-        self.create_subscription(JointState, 'joint_ctrl_single', self.joint_callback, 1)
+        self.create_subscription(JointState, self.joint_command_topic, self.joint_callback, 1)
         self.create_subscription(Bool, 'enable_flag', self.enable_callback, 1)
         
         self.publisher_thread = threading.Thread(target=self.publish_thread)
@@ -123,7 +146,6 @@ class C_PiperRosNode(Node):
                         self.piper.GetArmLowSpdInfoMsgs().motor_6.foc_status.driver_enable_status
                     print("使能状态:",enable_flag)
                     self.piper.EnableArm(7)
-                    self.piper.GripperCtrl(0,1000,0x02, 0)
                     self.piper.GripperCtrl(0,1000,0x01, 0)
                     if(enable_flag):
                         self.__enable_flag = True
@@ -219,7 +241,8 @@ class C_PiperRosNode(Node):
         joint_5: float = (self.piper.GetArmJointCtrl().joint_ctrl.joint_6/1000) * 0.017444
         joint_6: float = self.piper.GetArmGripperCtrl().gripper_ctrl.grippers_angle * 0.001 * 0.001
         self.joint_ctrl.position = [joint_0, joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]  # Example values
-        self.joint_ctrl_pub.publish(self.joint_ctrl)
+        if self.joint_ctrl_pub is not None:
+            self.joint_ctrl_pub.publish(self.joint_ctrl)
 
     def PubilsArmEndPose(self):
         new_time = self.piper.GetArmEndPoseMsgs().time_stamp
@@ -289,6 +312,10 @@ class C_PiperRosNode(Node):
         Args:
             joint_data (): 
         """
+        if len(joint_data.position) < 6:
+            self.get_logger().warning("Ignoring JointState with fewer than 6 joint positions.")
+            return
+
         factor = 57324.840764 #1000*180/3.14
         #self.get_logger().info(f"Received Joint States:")
         #self.get_logger().info(f"joint_0: {joint_data.position[0]}")
@@ -304,7 +331,7 @@ class C_PiperRosNode(Node):
         joint_3 = round(joint_data.position[3]*factor)
         joint_4 = round(joint_data.position[4]*factor)
         joint_5 = round(joint_data.position[5]*factor)
-        joint_6 = round(joint_data.position[6]*1000*1000)
+        joint_6 = 0
         if(len(joint_data.position) >= 7):
             joint_6 = round(joint_data.position[6]*1000*1000)
             if(self.rviz_ctrl_flag):
@@ -360,13 +387,14 @@ class C_PiperRosNode(Node):
             if(self.girpper_exist):
                 self.piper.GripperCtrl(0,1000,0x01, 0)
         else:
-            self.__enable_flag = False
-            self.piper.DisableArm(7)
-            if(self.girpper_exist):
-                self.piper.GripperCtrl(0,1000,0x00, 0)
+            self.get_logger().warning("Ignoring enable_flag false; hardware disable is not supported.")
 
     def handle_enable_service(self, req, resp):
         self.get_logger().info(f"Received request:: {req.enable_request}")
+        if not req.enable_request:
+            self.get_logger().warning("Ignoring disable service request; hardware disable is not supported.")
+            resp.enable_response = True
+            return resp
         enable_flag = False
         loop_flag = False
         # 设置超时时间（秒）
@@ -384,14 +412,9 @@ class C_PiperRosNode(Node):
             enable_list.append(self.piper.GetArmLowSpdInfoMsgs().motor_4.foc_status.driver_enable_status)
             enable_list.append(self.piper.GetArmLowSpdInfoMsgs().motor_5.foc_status.driver_enable_status)
             enable_list.append(self.piper.GetArmLowSpdInfoMsgs().motor_6.foc_status.driver_enable_status)
-            if(req.enable_request):
-                enable_flag = all(enable_list)
-                self.piper.EnableArm(7)
-                self.piper.GripperCtrl(0,1000,0x01, 0)
-            else:
-                enable_flag = any(enable_list)
-                self.piper.DisableArm(7)
-                self.piper.GripperCtrl(0,1000,0x02, 0)
+            enable_flag = all(enable_list)
+            self.piper.EnableArm(7)
+            self.piper.GripperCtrl(0,1000,0x01, 0)
             self.get_logger().info(f"使能状态: {enable_flag}")
             self.__enable_flag = enable_flag
             self.get_logger().info(f"--------------------")

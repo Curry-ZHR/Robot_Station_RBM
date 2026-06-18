@@ -44,6 +44,10 @@
               <span>Piper</span>
               <i aria-hidden="true"></i>
             </button>
+            <button class="status-switch" id="piperRemoteRuntimeStatus" type="button" title="启动或关闭主从直通">
+              <span>主从直通</span>
+              <i aria-hidden="true"></i>
+            </button>
             <button class="status-switch is-idle" id="liftingRuntimeStatus" type="button" aria-pressed="false" title="启动或关闭 Lifting">
               <span>Lifting</span>
               <i aria-hidden="true"></i>
@@ -881,7 +885,7 @@
                   <p class="eyebrow">传感器数据</p>
                   <h1>数据回放</h1>
                 </div>
-                <span class="state-badge idle" id="playbackSourceBadge">未使能</span>
+                <span class="state-badge idle" id="playbackSourceBadge">待准备</span>
               </div>
 
               <article class="panel playback-control-panel">
@@ -890,7 +894,7 @@
                     <h2>回放控制</h2>
                     <p id="playbackSummary">replay.parquet</p>
                   </div>
-                  <span class="state-badge idle" id="playbackBadge">待使能</span>
+                  <span class="state-badge idle" id="playbackBadge">待准备</span>
                 </div>
                 <form class="config-form playback-form">
                   <label class="field-wide"><span class="field-label">数据文件</span><input id="playbackPathInput" type="text" value="/data/robot_station/replay.parquet"></label>
@@ -902,11 +906,11 @@
                 <div class="playback-run-row">
                   <div class="playback-run-status">
                     <span class="field-label">回放状态</span>
-                    <strong id="playbackExecutionStatus">机器人未使能</strong>
+                    <strong id="playbackExecutionStatus">回放未准备</strong>
                     <small id="playbackTimeLabel">00:00 / 07:12</small>
                   </div>
                   <div class="button-group playback-actions">
-                    <button class="secondary-button" id="playbackEnableRobotButton" type="button">机器人使能</button>
+                    <button class="secondary-button" id="playbackEnableRobotButton" type="button">回放准备</button>
                     <button class="primary-button" id="playbackReplayButton" type="button" disabled>数据回放</button>
                     <button class="secondary-button" id="playbackStopButton" type="button" disabled>停止</button>
                   </div>

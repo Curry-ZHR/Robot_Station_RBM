@@ -206,6 +206,7 @@ def static_transform_service_spec(ros_distro=None, config=None):
 def default_service_specs():
     ros_distro = os.environ.get("ROS_DISTRO", "humble")
     piper_joint_speed_percent = os.environ.get("PIPER_JOINT_SPEED_PERCENT", "10")
+    piper_remote_joint_speed_percent = os.environ.get("PIPER_REMOTE_JOINT_SPEED_PERCENT", piper_joint_speed_percent)
     piper_install = ROOT_DIR / "ros_packages" / "control" / "piper" / "install" / "setup.bash"
     lifting_install = ROOT_DIR / "ros_packages" / "control" / "lifting" / "install" / "setup.bash"
     chassis_install = ROOT_DIR / "ros_packages" / "control" / "chassis" / "install" / "setup.bash"
@@ -252,6 +253,7 @@ def default_service_specs():
             ),
             cleanup_process_patterns=(
                 "start_double_piper.launch.py",
+                "start_remote_master_piper.launch.py",
                 "start_two_piper.launch.py",
                 "start_single_piper.launch.py",
                 "start_single_piper_rviz.launch.py",
@@ -261,6 +263,36 @@ def default_service_specs():
             ),
             cwd=str(ROOT_DIR),
             description="Launch the dual-arm Piper ROS control nodes.",
+        ),
+        "piper_remote": ManagedServiceSpec(
+            key="piper_remote",
+            name="Piper remote master control",
+            command=(
+                "ros2",
+                "launch",
+                "piper",
+                "start_remote_master_piper.launch.py",
+                "can_left_port:=can_left",
+                "can_right_port:=can_right",
+                "auto_enable:=true",
+                f"joint_speed_percent:={piper_remote_joint_speed_percent}",
+            ),
+            setup_scripts=(
+                f"/opt/ros/{ros_distro}/setup.bash",
+                str(piper_install),
+            ),
+            cleanup_process_patterns=(
+                "start_remote_master_piper.launch.py",
+                "start_double_piper.launch.py",
+                "start_two_piper.launch.py",
+                "start_single_piper.launch.py",
+                "start_single_piper_rviz.launch.py",
+                "piper_single_ctrl",
+                "piper_joint_smoother",
+                "piper_ms_ctrl",
+            ),
+            cwd=str(ROOT_DIR),
+            description="Launch dual-arm Piper control directly from remote /master joint topics.",
         ),
         "lifting": ManagedServiceSpec(
             key="lifting",

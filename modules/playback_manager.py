@@ -170,7 +170,7 @@ class PlaybackManager:
         interval_ms = _positive_float(payload.get("intervalMs", 80), 80.0)
 
         if not enabled:
-            self.stop(reason="disable")
+            self.stop(reason="clear_prepare")
             self._set(robot_enabled=False, status="stopped", last_error=None)
             return _result(
                 True,

@@ -2,6 +2,12 @@ from modules.runtime.managed_service import ManagedService
 from modules.runtime.service_specs import default_service_specs
 
 
+EXCLUSIVE_SERVICE_PEERS = {
+    "piper": ("piper_remote",),
+    "piper_remote": ("piper",),
+}
+
+
 def _result(ok, code, detail, **extra):
     payload = {
         "ok": ok,
@@ -41,6 +47,13 @@ class ServiceManager:
         service = self._services.get(key)
         if service is None:
             return _result(False, "SVC-UNKNOWN", f"Unknown service: {key}", key=key)
+        for peer_key in EXCLUSIVE_SERVICE_PEERS.get(key, ()):
+            peer = self._services.get(peer_key)
+            if peer is None:
+                continue
+            result = peer.stop()
+            if not result.get("ok"):
+                return result
         return service.start()
 
     def stop_service(self, key):
@@ -50,10 +63,10 @@ class ServiceManager:
         return service.stop()
 
     def restart_service(self, key):
-        service = self._services.get(key)
-        if service is None:
-            return _result(False, "SVC-UNKNOWN", f"Unknown service: {key}", key=key)
-        return service.restart()
+        stop_result = self.stop_service(key)
+        if not stop_result.get("ok"):
+            return stop_result
+        return self.start_service(key)
 
     def perform(self, key, action):
         if action == "start":
@@ -67,4 +80,3 @@ class ServiceManager:
     def shutdown(self):
         for service in self._services.values():
             service.shutdown()
-
