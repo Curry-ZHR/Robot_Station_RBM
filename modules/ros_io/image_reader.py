@@ -138,15 +138,26 @@ class CameraImageReader:
         self._sequence = {}
         self._subscribed = set()
 
-    def list_images(self):
+    def _list_specs(self, kind=None):
+        normalized_kind = str(kind or "").strip().lower()
+        specs = list(self._specs.values())
+        if not normalized_kind:
+            return specs
+        return [spec for spec in specs if spec.kind == normalized_kind]
+
+    def list_images(self, kind=None):
+        specs = self._list_specs(kind)
+        if kind and not specs:
+            return _result(False, "CAM-R-UNKNOWN", f"Unknown camera image kind: {kind}.", feeds=[], errors=[])
+
         errors = []
-        for spec in self._specs.values():
+        for spec in specs:
             result = self._ensure_subscription(spec)
             if not result["ok"]:
                 errors.append(result)
 
         with self._lock:
-            feeds = [self._feed_status(spec) for spec in self._specs.values()]
+            feeds = [self._feed_status(spec) for spec in specs]
 
         return _result(
             not errors,

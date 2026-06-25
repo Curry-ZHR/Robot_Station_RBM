@@ -363,7 +363,7 @@ button:disabled {
 
 .workbench {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   padding: 14px;
 }
@@ -2646,68 +2646,15 @@ body.robot-modal-open {
   line-height: 1.45;
 }
 
-.event-drawer {
-  position: sticky;
-  top: 76px;
-  height: calc(100vh - 90px);
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
-}
-
-.event-drawer:not(.is-open) {
-  display: none;
-}
-
-body[data-active-view="robot-view"] .event-drawer {
-  display: none;
-}
-
-body[data-active-view="state-machine"] .event-drawer,
-body[data-active-view="state-machine"] #drawerToggle {
-  display: none;
-}
-
-.drawer-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px;
-  border-bottom: 1px solid var(--line);
-}
-
-.drawer-head strong,
-.drawer-head span {
-  display: block;
-}
-
-.drawer-head span {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.drawer-tabs,
 .segmented {
   display: flex;
   gap: 4px;
-  padding: 6px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-2);
-}
-
-.segmented {
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 8px;
+  background: var(--surface-2);
 }
 
-.drawer-tabs button,
 .segmented button,
 .filter-row button {
   min-height: 30px;
@@ -2718,31 +2665,15 @@ body[data-active-view="state-machine"] #drawerToggle {
   font-size: 12px;
 }
 
-.drawer-tabs button {
-  flex: 1;
-}
-
 .segmented button {
   padding: 0 12px;
 }
 
-.drawer-tabs button.is-active,
 .segmented button.is-active,
 .filter-row button.is-active {
   background: var(--surface);
   color: var(--text);
   box-shadow: inset 0 0 0 1px var(--line);
-}
-
-.drawer-panel {
-  display: none;
-  min-height: 0;
-  overflow: auto;
-  padding: 10px;
-}
-
-.drawer-panel.is-active {
-  display: block;
 }
 
 .log-list {
@@ -4575,10 +4506,20 @@ body[data-active-view="state-machine"] #drawerToggle {
   background: var(--surface);
 }
 
+.camera-strip-title {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
 .camera-strip span {
   color: var(--muted);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.camera-kind-tabs {
+  flex: 0 1 auto;
 }
 
 .sensor-preview-actions {
@@ -4603,6 +4544,116 @@ body[data-active-view="state-machine"] #drawerToggle {
 
 .camera-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-active {
+  min-height: 0;
+}
+
+@media (min-width: 1180px) {
+  body[data-active-view="sensors"] .workbench {
+    height: calc(100vh - 62px);
+    overflow: hidden;
+    padding: 10px 12px 12px;
+  }
+
+  body[data-active-view="sensors"] .content-area,
+  body[data-active-view="sensors"] .view[data-view-panel="sensors"].is-active {
+    min-height: 0;
+    height: 100%;
+  }
+
+  body[data-active-view="sensors"] .view[data-view-panel="sensors"].is-active {
+    display: flex;
+    flex-direction: column;
+  }
+
+  body[data-active-view="sensors"] .view[data-view-panel="sensors"] .page-head.compact {
+    min-height: 48px;
+    flex: 0 0 auto;
+    margin-bottom: 10px;
+  }
+
+  body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-active {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+  }
+
+  body[data-active-view="sensors"] .camera-strip {
+    flex: 0 0 auto;
+    margin-bottom: 10px;
+    padding: 8px 10px;
+  }
+
+  body[data-active-view="sensors"] .camera-grid {
+    display: grid;
+    height: min(calc(100vh - 214px), calc((100vw - 244px) / 2));
+    max-height: 100%;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  body[data-active-view="sensors"] .camera-grid .camera-frame-card {
+    position: relative;
+    min-height: 0;
+    display: block;
+    background: #0f172a;
+  }
+
+  body[data-active-view="sensors"] .camera-grid .camera-frame-card:first-child {
+    grid-row: 1 / span 2;
+  }
+
+  body[data-active-view="sensors"] .camera-grid .camera-frame-visual {
+    height: 100%;
+    aspect-ratio: auto;
+  }
+
+  body[data-active-view="sensors"] .camera-grid .camera-frame-meta {
+    position: absolute;
+    right: 10px;
+    bottom: 34px;
+    left: 10px;
+    z-index: 2;
+    gap: 8px;
+    padding: 7px 9px;
+    border: 1px solid rgba(226, 232, 240, 0.18);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.68);
+    color: #f8fafc;
+    backdrop-filter: blur(4px);
+  }
+
+  body[data-active-view="sensors"] .camera-grid .camera-frame-meta strong {
+    color: #ffffff;
+    font-size: 16px;
+    line-height: 1.1;
+  }
+
+  body[data-active-view="sensors"] .camera-grid .camera-frame-status {
+    min-height: 22px;
+    background: rgba(15, 23, 42, 0.72);
+    font-size: 12px;
+  }
+
+  body[data-active-view="sensors"] .camera-grid .camera-frame-card > p {
+    position: absolute;
+    right: 12px;
+    bottom: 10px;
+    left: 12px;
+    z-index: 2;
+    min-height: 0;
+    padding: 0;
+    color: rgba(248, 250, 252, 0.88);
+    font-size: 12px;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-shadow: 0 1px 2px rgba(15, 23, 42, 0.86);
+  }
 }
 
 .preview-card {
@@ -6951,7 +7002,7 @@ body[data-active-view="state-machine"] #drawerToggle {
   }
 
   .workbench {
-    grid-template-columns: minmax(0, 1fr) clamp(248px, 20vw, 286px);
+    grid-template-columns: minmax(0, 1fr);
     gap: 12px;
   }
 
@@ -6994,31 +7045,6 @@ body[data-active-view="state-machine"] #drawerToggle {
     grid-template-rows: auto;
   }
 
-  .event-drawer {
-    position: sticky;
-    top: 96px;
-    height: calc(100vh - 110px);
-  }
-
-  .event-drawer .log-item {
-    grid-template-columns: 54px 50px minmax(0, 1fr);
-    gap: 6px;
-  }
-
-  .event-drawer .log-source,
-  .event-drawer .log-item span:last-child {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .event-drawer .log-item span:last-child {
-    overflow-wrap: anywhere;
-  }
-
-  .event-drawer:not(.is-open) {
-    display: none;
-  }
 }
 
 @media (min-width: 1241px) and (max-width: 1480px) {
@@ -7041,7 +7067,7 @@ body[data-active-view="state-machine"] #drawerToggle {
 
 @media (max-width: 1240px) {
   .workbench {
-    grid-template-columns: minmax(0, 1fr) 248px;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .device-control-view.is-active,
@@ -7115,12 +7141,6 @@ body[data-active-view="state-machine"] #drawerToggle {
     grid-template-rows: auto;
   }
 
-  .event-drawer {
-    position: sticky;
-    top: 116px;
-    height: calc(100vh - 130px);
-  }
-
   .health-grid,
   .quick-actions {
     grid-template-columns: repeat(3, minmax(140px, 1fr));
@@ -7169,10 +7189,6 @@ body[data-active-view="state-machine"] #drawerToggle {
     align-items: stretch;
   }
 
-  .event-drawer {
-    top: 148px;
-    height: calc(100vh - 162px);
-  }
 }
 
 @media (max-width: 860px) {
@@ -7216,11 +7232,6 @@ body[data-active-view="state-machine"] #drawerToggle {
 
   .workbench {
     grid-template-columns: 1fr;
-  }
-
-  .event-drawer {
-    position: static;
-    height: 420px;
   }
 
   .camera-strip {

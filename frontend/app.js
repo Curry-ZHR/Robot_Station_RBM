@@ -41,7 +41,13 @@ const state = {
     status: "stopped",
   },
   cameraFrames: {
+    activeKind: "color",
     previewEnabled: false,
+    previewEnabledByKind: {
+      color: false,
+      depth: false,
+      ir: false,
+    },
     feeds: [],
     error: "",
     updatedAt: null,
@@ -776,6 +782,12 @@ const cameraFeedLayout = [
   { camera: "camera_l", kind: "ir", label: "Left IR" },
   { camera: "camera_r", kind: "ir", label: "Right IR" },
 ];
+const cameraKindOrder = ["color", "depth", "ir"];
+const cameraKindMeta = {
+  color: { label: "RGB", title: "RGB 相机", hint: "三路 RGB 压缩图" },
+  depth: { label: "深度", title: "深度相机", hint: "三路深度压缩图" },
+  ir: { label: "IR", title: "IR 相机", hint: "三路 IR 压缩图" },
+};
 const cameraFrameIntervalMs = 180;
 const cameraFrameStaggerMs = 70;
 const lidarViewerCloudKey = "rslidar_points";
@@ -1015,7 +1027,6 @@ function setTask(task, owner, label) {
   state.owner = owner;
   setText("#ownerLabel", owner);
   setText("#taskStatus", `当前任务：${label}`);
-  $("#drawerTask").textContent = label === "空闲" ? "当前空闲" : `当前任务：${label}`;
   renderActionLocks();
 }
 
@@ -2925,7 +2936,6 @@ function renderSelfCheck(items = selfCheckItems) {
           <span class="status-text ${level}">${escapeHtml(item.status)}</span>
           <span>${escapeHtml(item.advice)}</span>
           <div class="check-actions" aria-label="${item.name}操作">
-            <button data-check-action="log" data-check-index="${index}">事件</button>
             ${canActivate ? `<button data-check-action="activate" data-check-index="${index}">激活</button>` : ""}
             <button data-check-action="retry" data-check-index="${index}">复查</button>
           </div>
@@ -3021,7 +3031,6 @@ function renderAdvice() {
     .join("");
   const adviceList = $("#adviceList");
   if (adviceList) adviceList.innerHTML = html;
-  $("#drawerAlerts").innerHTML = html;
   setText("#alertStatus", `告警 ${state.alerts.length}`);
 }
 
@@ -3732,7 +3741,7 @@ function resumeBackgroundPollsNow() {
     fetchLiftingRuntimeStatus({ silent: true });
     fetchChassisRuntimeStatus({ silent: true });
     fetchCameraRuntimeStatus({ silent: true });
-    if (state.cameraFrames.previewEnabled) fetchCameraFrames({ silent: true });
+    if (cameraPreviewEnabled()) fetchCameraFrames({ silent: true });
     fetchLidarRuntimeStatus({ silent: true });
     if (state.lidarCloud.previewEnabled) fetchLidarCloudStatus({ silent: true });
     fetchLiftingMotorState();
@@ -7360,21 +7369,7 @@ function renderPiperRemoteRuntime() {
 }
 
 function renderLogs() {
-  const html = state.logs
-    .map(
-      (log) => `
-        <div class="log-item">
-          <time>${log.time}</time>
-          <span class="log-source">${log.source}</span>
-          <span>${log.message}</span>
-        </div>
-      `,
-    )
-    .join("");
-  const drawerEvents = $("#drawerEvents");
-  if (drawerEvents) {
-    drawerEvents.innerHTML = html || `<div class="log-item"><time>--:--</time><span class="log-source">系统</span><span>暂无事件</span></div>`;
-  }
+  // Logs remain in memory; the realtime event drawer was removed from the UI.
 }
 
 function renderActionLocks() {
@@ -10360,6 +10355,39 @@ async function requestPiperRemoteRuntimeAction(action) {
   }
 }
 
+function normalizeCameraKind(kind) {
+  return cameraKindMeta[kind] ? kind : "color";
+}
+
+function currentCameraKind() {
+  state.cameraFrames.activeKind = normalizeCameraKind(state.cameraFrames.activeKind);
+  return state.cameraFrames.activeKind;
+}
+
+function currentCameraKindMeta() {
+  return cameraKindMeta[currentCameraKind()];
+}
+
+function cameraPreviewEnabled(kind = currentCameraKind()) {
+  const normalized = normalizeCameraKind(kind);
+  return Boolean(state.cameraFrames.previewEnabledByKind?.[normalized]);
+}
+
+function syncCameraPreviewEnabled() {
+  state.cameraFrames.previewEnabled = cameraPreviewEnabled(currentCameraKind());
+}
+
+function setCameraPreviewFlag(kind, enabled) {
+  const targetKind = normalizeCameraKind(kind);
+  if (!state.cameraFrames.previewEnabledByKind) {
+    state.cameraFrames.previewEnabledByKind = {};
+  }
+  cameraKindOrder.forEach((entry) => {
+    state.cameraFrames.previewEnabledByKind[entry] = entry === targetKind ? Boolean(enabled) : false;
+  });
+  syncCameraPreviewEnabled();
+}
+
 function cameraFeedKey(feed) {
   return `${feed.camera}_${feed.kind}`;
 }
@@ -10378,12 +10406,37 @@ function mergeCameraFeeds(feeds = []) {
   });
 }
 
+function activeCameraFeeds(feeds = state.cameraFrames.feeds) {
+  const kind = currentCameraKind();
+  const allFeeds = feeds.length ? feeds : mergeCameraFeeds();
+  return allFeeds.filter((feed) => normalizeCameraKind(feed.kind) === kind);
+}
+
+function isCameraFeedPreviewActive(feed) {
+  const kind = normalizeCameraKind(feed.kind);
+  return kind === currentCameraKind() && cameraPreviewEnabled(kind);
+}
+
+function renderCameraKindTabs() {
+  const activeKind = currentCameraKind();
+  const meta = currentCameraKindMeta();
+  $$("#cameraKindTabs [data-camera-kind-tab]").forEach((button) => {
+    const isActive = normalizeCameraKind(button.dataset.cameraKindTab) === activeKind;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+  setText("#cameraKindTitle", meta.title);
+  setText("#cameraKindHint", meta.hint);
+}
+
 function renderCameraPreviewToggle() {
   const button = $("#cameraPreviewToggleButton");
   if (!button) return;
-  const enabled = Boolean(state.cameraFrames.previewEnabled);
+  syncCameraPreviewEnabled();
+  const enabled = cameraPreviewEnabled();
+  const meta = currentCameraKindMeta();
   button.textContent = enabled ? "回显开启" : "回显关闭";
-  button.title = enabled ? "关闭相机图像回显" : "开启相机图像回显";
+  button.title = enabled ? `关闭${meta.label}相机图像回显` : `开启${meta.label}相机图像回显`;
   button.classList.toggle("is-active", enabled);
   button.setAttribute("aria-pressed", enabled ? "true" : "false");
 }
@@ -10409,24 +10462,37 @@ function clearCameraFrameDisplay() {
   });
 }
 
+function setCameraKind(kind) {
+  const nextKind = normalizeCameraKind(kind);
+  if (currentCameraKind() === nextKind) return;
+  state.cameraFrames.activeKind = nextKind;
+  setCameraPreviewFlag(nextKind, false);
+  clearCameraFrameDisplay();
+  renderCameraFrames();
+  addLog("相机", `切换到${cameraKindMeta[nextKind].label}相机，回显已关闭`);
+}
+
 function setCameraPreviewEnabled(enabled, options = {}) {
   const nextEnabled = Boolean(enabled);
-  if (state.cameraFrames.previewEnabled === nextEnabled && !options.force) return;
-  state.cameraFrames.previewEnabled = nextEnabled;
+  const kind = currentCameraKind();
+  const meta = currentCameraKindMeta();
+  if (cameraPreviewEnabled(kind) === nextEnabled && !options.force) return;
+  setCameraPreviewFlag(kind, nextEnabled);
   renderCameraPreviewToggle();
   if (!nextEnabled) {
     clearCameraFrameDisplay();
     renderCameraFrames();
-    if (!options.silent) addLog("相机", "相机图像回显已关闭");
+    if (!options.silent) addLog("相机", `${meta.label}相机图像回显已关闭`);
     return;
   }
+  clearCameraFrameDisplay();
   renderCameraFrames();
-  fetchCameraFrames({ silent: true });
-  if (!options.silent) addLog("相机", "相机图像回显已开启");
+  fetchCameraFrames({ silent: true, kind });
+  if (!options.silent) addLog("相机", `${meta.label}相机图像回显已开启`);
 }
 
 function toggleCameraPreview() {
-  setCameraPreviewEnabled(!state.cameraFrames.previewEnabled);
+  setCameraPreviewEnabled(!cameraPreviewEnabled());
 }
 
 function cameraFrameAgeText(feed) {
@@ -10437,7 +10503,7 @@ function cameraFrameAgeText(feed) {
 }
 
 function cameraFrameStatus(feed) {
-  if (!state.cameraFrames.previewEnabled) return { text: "关闭", level: "idle" };
+  if (!isCameraFeedPreviewActive(feed)) return { text: "关闭", level: "idle" };
   if (!feed.hasFrame) return { text: "无帧", level: "idle" };
   if (feed.stale) return { text: "过期", level: "warn" };
   return { text: "实时", level: "ok" };
@@ -10476,7 +10542,7 @@ function decodeCameraImage(url) {
 }
 
 function scheduleCameraFrame(feed, delayMs = cameraFrameIntervalMs) {
-  if (!state.cameraFrames.previewEnabled) return;
+  if (!isCameraFeedPreviewActive(feed)) return;
   const key = cameraFeedKey(feed);
   window.clearTimeout(state.cameraFrames.frameTimers[key]);
   state.cameraFrames.frameTimers[key] = window.setTimeout(() => {
@@ -10485,7 +10551,7 @@ function scheduleCameraFrame(feed, delayMs = cameraFrameIntervalMs) {
 }
 
 async function requestCameraFrame(feed) {
-  if (!state.cameraFrames.previewEnabled) return;
+  if (!isCameraFeedPreviewActive(feed)) return;
   const key = cameraFeedKey(feed);
   if (state.cameraFrames.activeRequests[key]) return;
 
@@ -10512,7 +10578,7 @@ async function requestCameraFrame(feed) {
       throw error;
     }
 
-    if (!state.cameraFrames.previewEnabled) {
+    if (!isCameraFeedPreviewActive(feed)) {
       URL.revokeObjectURL(objectUrl);
       return;
     }
@@ -10541,7 +10607,7 @@ async function requestCameraFrame(feed) {
     }
   } finally {
     delete state.cameraFrames.activeRequests[key];
-    if (state.cameraFrames.previewEnabled && card && card.isConnected) {
+    if (isCameraFeedPreviewActive(feed) && card && card.isConnected) {
       const elapsed = performance.now() - startedAt;
       scheduleCameraFrame(feed, Math.max(40, cameraFrameIntervalMs - elapsed));
     }
@@ -10549,7 +10615,7 @@ async function requestCameraFrame(feed) {
 }
 
 function ensureCameraFrameLoop(feed) {
-  if (!state.cameraFrames.previewEnabled) return;
+  if (!isCameraFeedPreviewActive(feed)) return;
   const key = cameraFeedKey(feed);
   if (state.cameraFrames.frameTimers[key] || state.cameraFrames.activeRequests[key]) return;
   const index = cameraFeedLayout.findIndex((entry) => cameraFeedKey(entry) === key);
@@ -10570,7 +10636,7 @@ function ensureCameraFrameCard(grid, feed) {
       <article class="preview-card camera-frame-card is-idle" data-feed-key="${escapeHtml(key)}">
         <figure class="camera-frame-visual">
           <img alt="${escapeHtml(feed.label)}" data-camera-frame="${escapeHtml(key)}">
-          <span class="camera-frame-placeholder">${state.cameraFrames.previewEnabled ? "等待画面" : "回显关闭"}</span>
+          <span class="camera-frame-placeholder">${isCameraFeedPreviewActive(feed) ? "等待画面" : "回显关闭"}</span>
         </figure>
         <div class="camera-frame-meta">
           <strong>${escapeHtml(feed.label)}</strong>
@@ -10608,7 +10674,7 @@ function updateCameraFrameCard(card, feed) {
   const detail = card.querySelector("p");
   if (detail) {
     const format = feed.format ? String(feed.format) : "compressed";
-    const text = !state.cameraFrames.previewEnabled ? "回显关闭" : feed.hasFrame ? `${cameraFrameAgeText(feed)} / ${format}` : feed.topic || "";
+    const text = !isCameraFeedPreviewActive(feed) ? "回显关闭" : feed.hasFrame ? `${cameraFrameAgeText(feed)} / ${format}` : feed.topic || "";
     detail.textContent = text;
     detail.title = feed.topic || "";
   }
@@ -10619,22 +10685,25 @@ function updateCameraFrameCard(card, feed) {
   }
   const placeholder = card.querySelector(".camera-frame-placeholder");
   if (placeholder) {
-    placeholder.textContent = state.cameraFrames.previewEnabled ? "等待画面" : "回显关闭";
+    placeholder.textContent = isCameraFeedPreviewActive(feed) ? "等待画面" : "回显关闭";
   }
 }
 
 function renderCameraFrames() {
-  const feeds = state.cameraFrames.feeds.length ? state.cameraFrames.feeds : mergeCameraFeeds();
+  const feeds = activeCameraFeeds();
+  const enabled = cameraPreviewEnabled();
+  renderCameraKindTabs();
   renderCameraPreviewToggle();
   const summary = $("#cameraFeedSummary");
   if (summary) {
     const liveCount = feeds.filter((feed) => feed.hasFrame && !feed.stale).length;
     const frameCount = feeds.filter((feed) => feed.hasFrame).length;
-    summary.textContent = !state.cameraFrames.previewEnabled
-      ? "回显关闭"
+    const meta = currentCameraKindMeta();
+    summary.textContent = !enabled
+      ? `${meta.label} 回显关闭`
       : state.cameraFrames.error
-      ? `异常：${state.cameraFrames.error}`
-      : `${liveCount} 路实时 / ${frameCount} 路有帧 / 共 ${feeds.length} 路`;
+      ? `${meta.label} 异常：${state.cameraFrames.error}`
+      : `${meta.label}：${liveCount} 路实时 / ${frameCount} 路有帧 / 共 ${feeds.length} 路`;
   }
 
   const grid = $("#cameraFrameGrid");
@@ -10659,15 +10728,20 @@ function renderCameraFrames() {
 }
 
 async function fetchCameraFrames(options = {}) {
-  if (!state.cameraFrames.previewEnabled) {
+  const kind = normalizeCameraKind(options.kind || currentCameraKind());
+  if (kind !== currentCameraKind() || !cameraPreviewEnabled(kind)) {
     renderCameraFrames();
     return null;
   }
   try {
-    const response = await fetch("/api/sensors/cameras", { cache: "no-store" });
+    const params = new URLSearchParams({ kind });
+    const response = await fetch(`/api/sensors/cameras?${params.toString()}`, { cache: "no-store" });
     const payload = await response.json();
     if (!payload || !Array.isArray(payload.feeds)) {
       throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    if (kind !== currentCameraKind() || !cameraPreviewEnabled(kind)) {
+      return payload;
     }
     state.cameraFrames.feeds = mergeCameraFeeds(payload.feeds);
     state.cameraFrames.error = payload.ok ? "" : payload.detail || `HTTP ${response.status}`;
@@ -11527,19 +11601,6 @@ function bindEvents() {
     submitStateMachineModal();
   });
 
-  $("#drawerToggle").addEventListener("click", () => $("#eventDrawer").classList.toggle("is-open"));
-  $("#clearEventsButton").addEventListener("click", () => {
-    state.logs = [];
-    renderLogs();
-  });
-
-  $$(".drawer-tabs button").forEach((button) => {
-    button.addEventListener("click", () => {
-      $$(".drawer-tabs button").forEach((item) => item.classList.toggle("is-active", item === button));
-      $$(".drawer-panel").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.drawerPanel === button.dataset.drawerTab));
-    });
-  });
-
   $$(".segmented button").forEach((button) => {
     button.addEventListener("click", () => {
       const group = button.closest(".segmented");
@@ -11549,6 +11610,9 @@ function bindEvents() {
       }
       if (button.dataset.sensorTab) {
         $$(".sensor-panel").forEach((panel) => panel.classList.toggle("is-active", panel.dataset.sensorPanel === button.dataset.sensorTab));
+      }
+      if (button.dataset.cameraKindTab) {
+        setCameraKind(button.dataset.cameraKindTab);
       }
       if (button.dataset.sensorTab === "lidar") {
         window.setTimeout(resizeLidarViewer, 0);
@@ -11762,11 +11826,6 @@ function bindEvents() {
     if (!button) return;
     const item = state.selfCheckResults[Number(button.dataset.checkIndex)];
     if (!item) return;
-    if (button.dataset.checkAction === "log") {
-      addLog(item.source, `查看检查项事件：${item.name} / ${item.code}`);
-      renderLogs();
-      $("#eventDrawer")?.classList.add("is-open");
-    }
     if (button.dataset.checkAction === "retry") {
       addLog(item.source, `复查检查项：${item.name}`);
       runSelfCheck();
@@ -11976,7 +12035,7 @@ function init() {
   window.setInterval(() => runBackgroundPoll(() => fetchChassisRuntimeStatus({ silent: true })), 3000);
   window.setInterval(() => runBackgroundPoll(() => fetchCameraRuntimeStatus({ silent: true })), 3000);
   window.setInterval(() => {
-    if (state.cameraFrames.previewEnabled) runBackgroundPoll(() => fetchCameraFrames({ silent: true }));
+    if (cameraPreviewEnabled()) runBackgroundPoll(() => fetchCameraFrames({ silent: true }));
   }, 1000);
   window.setInterval(() => runBackgroundPoll(() => fetchLidarRuntimeStatus({ silent: true })), 3000);
   window.setInterval(() => {

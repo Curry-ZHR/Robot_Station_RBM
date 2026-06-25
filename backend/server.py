@@ -493,7 +493,8 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         if camera_tail is not None:
             reader = get_camera_image_reader()
             if not camera_tail:
-                result = reader.list_images()
+                camera_kind = (parse_qs(parsed.query).get("kind") or [None])[0]
+                result = reader.list_images(kind=camera_kind)
                 self.write_json(result, status=camera_result_status(result))
                 return
             parts = [part for part in camera_tail.split("/") if part]

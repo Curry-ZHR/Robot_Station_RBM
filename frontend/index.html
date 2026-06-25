@@ -70,7 +70,6 @@
           <div class="top-actions">
             <button class="icon-button danger" id="estopButton" title="急停">急停</button>
             <button class="icon-button stop" id="stopTaskButton" title="停止当前任务">停止任务</button>
-            <button class="icon-button" id="drawerToggle" title="展开或收起事件抽屉">事件</button>
           </div>
         </header>
 
@@ -837,7 +836,15 @@
 
               <div class="sensor-panel is-active" data-sensor-panel="camera">
                 <div class="camera-strip">
-                  <strong>三路相机压缩图</strong>
+                  <div class="camera-strip-title">
+                    <strong id="cameraKindTitle">RGB 相机</strong>
+                    <span id="cameraKindHint">三路 RGB 压缩图</span>
+                  </div>
+                  <div class="segmented camera-kind-tabs" id="cameraKindTabs" role="tablist" aria-label="相机图像类型">
+                    <button class="is-active" data-camera-kind-tab="color" type="button">RGB</button>
+                    <button data-camera-kind-tab="depth" type="button">深度</button>
+                    <button data-camera-kind-tab="ir" type="button">IR</button>
+                  </div>
                   <div class="sensor-preview-actions">
                     <span id="cameraFeedSummary">回显关闭</span>
                     <button class="secondary-button sensor-preview-toggle" id="cameraPreviewToggleButton" type="button" aria-pressed="false">回显关闭</button>
@@ -938,29 +945,6 @@
 
           </section>
 
-          <aside class="event-drawer is-open" id="eventDrawer">
-            <div class="drawer-head">
-              <div>
-                <strong>实时事件</strong>
-                <span id="drawerTask">当前空闲</span>
-              </div>
-              <button class="small-button" id="clearEventsButton">清空</button>
-            </div>
-            <div class="drawer-tabs">
-              <button class="is-active" data-drawer-tab="events">事件</button>
-              <button data-drawer-tab="alerts">告警</button>
-              <button data-drawer-tab="steps">步骤</button>
-            </div>
-            <div class="drawer-panel is-active" data-drawer-panel="events">
-              <div class="log-list" id="drawerEvents"></div>
-            </div>
-            <div class="drawer-panel" data-drawer-panel="alerts">
-              <div class="advice-list" id="drawerAlerts"></div>
-            </div>
-            <div class="drawer-panel" data-drawer-panel="steps">
-              <ol class="step-list drawer-steps" id="drawerSteps"></ol>
-            </div>
-          </aside>
         </div>
       </main>
     </div>
