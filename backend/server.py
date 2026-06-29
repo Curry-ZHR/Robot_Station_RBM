@@ -378,6 +378,8 @@ def inference_result_status(result):
         "INFER-OBS-CAMERA": 503,
         "INFER-OBS-JOINT": 503,
         "INFER-OBS-LIFT": 503,
+        "INFER-OBS-POSE": 503,
+        "INFER-OBS-SPEED": 503,
         "INFER-MASK-NOFEEDBACK": 503,
     }
     return mapping.get(code, 500)

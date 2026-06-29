@@ -1,4 +1,5 @@
 import base64
+import math
 
 import pytest
 
@@ -33,14 +34,52 @@ def _joint_state(values):
     return {"ok": True, "data": {"position": values}}
 
 
+def _pose_state(x=1.2, y=-0.4, yaw=math.pi / 2):
+    return {
+        "ok": True,
+        "data": {
+            "pose": {
+                "position": {"x": x, "y": y, "z": 0.0},
+                "orientation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": math.sin(yaw / 2.0),
+                    "w": math.cos(yaw / 2.0),
+                },
+            },
+        },
+    }
+
+
+def _odom_state(vx=0.12, vy=-0.03, wz=0.25):
+    return {
+        "ok": True,
+        "data": {
+            "twist": {
+                "twist": {
+                    "linear": {"x": vx, "y": vy, "z": 0.0},
+                    "angular": {"x": 0.0, "y": 0.0, "z": wz},
+                },
+            },
+        },
+    }
+
+
+def _base_state():
+    return {
+        "localization_pose": _pose_state(),
+        "chassis_odom": _odom_state(),
+    }
+
+
 def _default_ros_reader():
-    return FakeRosReader(
-        {
-            "piper_left_joint_state_double": _joint_state([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.05]),
-            "piper_right_joint_state_double": _joint_state([-0.1, -0.2, -0.3, -0.4, -0.5, -0.6, 0.04]),
-            "lifting_motor_state": {"ok": True, "data": {"back_height": 420}},
-        }
-    )
+    data = {
+        "piper_left_joint_state_double": _joint_state([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.05]),
+        "piper_right_joint_state_double": _joint_state([-0.1, -0.2, -0.3, -0.4, -0.5, -0.6, 0.04]),
+        "lifting_motor_state": {"ok": True, "data": {"back_height": 420}},
+    }
+    data.update(_base_state())
+    return FakeRosReader(data)
 
 
 def test_build_observation_success():
@@ -55,15 +94,16 @@ def test_build_observation_success():
     assert state["left"]["joint1"] == pytest.approx(0.1)
     assert state["left"]["gripper"] == pytest.approx(0.05)
     assert state["right"]["joint6"] == pytest.approx(-0.6)
-    # back_height is millimetres; observation reports metres.
-    assert state["lift"]["height"] == pytest.approx(0.42)
-    # Observation must NOT include chassis velocity in v1.
-    assert "speed" not in state
+    # back_height is already reported in millimetres; observation keeps mm.
+    assert state["lift"]["height"] == pytest.approx(420.0)
+    assert state["pose"] == pytest.approx({"x": 1.2, "y": -0.4, "yaw": math.pi / 2})
+    assert state["speed"] == pytest.approx({"vx": 0.12, "vy": -0.03, "wz": 0.25})
 
 
 def test_build_observation_falls_back_to_external_piper_joint_topics():
     ros = FakeRosReader(
         {
+            **_base_state(),
             "piper_left_joint_state": _joint_state([0.7, 0.2, 0.3, 0.4, 0.5, 0.6, 0.05]),
             "piper_right_joint_state": _joint_state([-0.7, -0.2, -0.3, -0.4, -0.5, -0.6, 0.04]),
             "lifting_motor_state": {"ok": True, "data": {"back_height": 420}},
@@ -80,6 +120,7 @@ def test_build_observation_falls_back_to_external_piper_joint_topics():
 def test_build_observation_prefers_fresh_external_topic_over_stale_remap():
     ros = FakeRosReader(
         {
+            **_base_state(),
             "piper_left_joint_state_double": {**_joint_state([9.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]), "stale": True},
             "piper_right_joint_state_double": {**_joint_state([-9.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]), "stale": True},
             "piper_left_joint_state": _joint_state([0.8, 0.2, 0.3, 0.4, 0.5, 0.6, 0.05]),
@@ -112,6 +153,7 @@ def test_non_jpeg_camera_raises():
 def test_missing_joint_state_raises():
     ros = FakeRosReader(
         {
+            **_base_state(),
             "piper_right_joint_state_double": _joint_state([0.0] * 7),
             "lifting_motor_state": {"ok": True, "data": {"back_height": 0}},
         }
@@ -119,6 +161,22 @@ def test_missing_joint_state_raises():
     with pytest.raises(ObservationBuildError) as exc:
         build_observation("x", camera_reader=FakeCameraReader(), ros_reader=ros)
     assert exc.value.code == "INFER-OBS-JOINT"
+
+
+def test_missing_pose_raises():
+    ros = _default_ros_reader()
+    del ros.data["localization_pose"]
+    with pytest.raises(ObservationBuildError) as exc:
+        build_observation("x", camera_reader=FakeCameraReader(), ros_reader=ros)
+    assert exc.value.code == "INFER-OBS-POSE"
+
+
+def test_missing_odom_raises():
+    ros = _default_ros_reader()
+    del ros.data["chassis_odom"]
+    with pytest.raises(ObservationBuildError) as exc:
+        build_observation("x", camera_reader=FakeCameraReader(), ros_reader=ros)
+    assert exc.value.code == "INFER-OBS-SPEED"
 
 
 def test_short_joint_state_raises():

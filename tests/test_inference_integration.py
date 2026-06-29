@@ -19,8 +19,8 @@ def _chunk_payload():
         "type": "action_chunk",
         "chunk_id": "chunk_int",
         "actions": [
-            {"left": _arm(), "right": _arm(), "lift": {"height": 0.4}, "speed": {"vx": 0.0, "vy": 0.0, "wz": 0.0}},
-            {"left": _arm(), "right": _arm(), "lift": {"height": 0.41}, "speed": {"vx": 0.05, "vy": 0.0, "wz": 0.2}},
+            {"left": _arm(), "right": _arm(), "lift": {"height": 400.0}, "speed": {"vx": 0.0, "vy": 0.0, "wz": 0.0}},
+            {"left": _arm(), "right": _arm(), "lift": {"height": 410.0}, "speed": {"vx": 0.05, "vy": 0.0, "wz": 0.2}},
         ],
     }
 

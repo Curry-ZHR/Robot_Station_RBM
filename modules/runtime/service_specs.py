@@ -19,6 +19,7 @@ class ManagedServiceSpec:
     command: tuple[str, ...]
     setup_scripts: tuple[str, ...] = field(default_factory=tuple)
     cleanup_process_patterns: tuple[str, ...] = field(default_factory=tuple)
+    status_process_patterns: tuple[str, ...] = field(default_factory=tuple)
     cwd: str = "."
     shutdown_timeout_sec: float = 6.0
     startup_grace_sec: float = 0.8
@@ -29,6 +30,7 @@ class ManagedServiceSpec:
         payload["command"] = list(self.command)
         payload["setupScripts"] = payload.pop("setup_scripts")
         payload["cleanupProcessPatterns"] = payload.pop("cleanup_process_patterns")
+        payload["statusProcessPatterns"] = payload.pop("status_process_patterns")
         payload["shutdownTimeoutSec"] = payload.pop("shutdown_timeout_sec")
         payload["startupGraceSec"] = payload.pop("startup_grace_sec")
         return payload
@@ -261,6 +263,9 @@ def default_service_specs():
                 "piper_joint_smoother",
                 "piper_ms_ctrl",
             ),
+            status_process_patterns=(
+                "start_double_piper.launch.py",
+            ),
             cwd=str(ROOT_DIR),
             description="Launch the dual-arm Piper ROS control nodes.",
         ),
@@ -290,6 +295,9 @@ def default_service_specs():
                 "piper_single_ctrl",
                 "piper_joint_smoother",
                 "piper_ms_ctrl",
+            ),
+            status_process_patterns=(
+                "start_remote_master_piper.launch.py",
             ),
             cwd=str(ROOT_DIR),
             description="Launch dual-arm Piper control directly from remote /master joint topics.",

@@ -4,7 +4,9 @@ from types import SimpleNamespace
 
 import backend.server as server
 from modules.runtime import service_manager
+from modules.runtime.managed_service import ManagedService
 from modules.runtime.service_specs import default_service_specs, load_static_transform_config, static_transform_service_spec
+from modules.runtime.service_specs import ManagedServiceSpec
 
 
 def write_config(path, payload):
@@ -130,6 +132,8 @@ def test_piper_remote_service_launches_master_topic_control(monkeypatch):
     assert "joint_speed_percent:=12" in remote.command
     assert "start_double_piper.launch.py" in remote.cleanup_process_patterns
     assert "piper_joint_smoother" in remote.cleanup_process_patterns
+    assert piper.status_process_patterns == ("start_double_piper.launch.py",)
+    assert remote.status_process_patterns == ("start_remote_master_piper.launch.py",)
 
     launch_file = Path(__file__).resolve().parents[1] / "ros_packages/control/piper/piper/launch/start_remote_master_piper.launch.py"
     launch_text = launch_file.read_text(encoding="utf-8")
@@ -139,6 +143,29 @@ def test_piper_remote_service_launches_master_topic_control(monkeypatch):
     assert "'joint_state_topic': '/puppet/joint_right'" in launch_text
     assert "'publish_joint_control_echo': False" in launch_text
     assert "piper_joint_smoother" not in launch_text
+
+
+def test_managed_service_external_status_uses_status_patterns(monkeypatch):
+    spec = ManagedServiceSpec(
+        key="example",
+        name="Example",
+        command=("true",),
+        cleanup_process_patterns=("cleanup-only",),
+        status_process_patterns=("status-only",),
+    )
+    service = ManagedService(spec)
+    calls = []
+
+    def matching_processes(exclude_pids=None, patterns=None):
+        calls.append(tuple(patterns or ()))
+        if patterns == ("status-only",):
+            return [{"pid": 123, "cmdline": "status-only"}]
+        return []
+
+    monkeypatch.setattr(service, "_matching_processes_locked", matching_processes)
+
+    assert service.status()["status"] == "external"
+    assert calls == [("status-only",)]
 
 
 def test_piper_and_remote_services_are_mutually_exclusive(monkeypatch):

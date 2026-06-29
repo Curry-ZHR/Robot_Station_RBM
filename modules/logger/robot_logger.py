@@ -2,6 +2,7 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
+from types import MethodType
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -11,10 +12,19 @@ SUCCESS_LEVEL = 25
 logging.addLevelName(SUCCESS_LEVEL, "SUCCESS")
 
 
+def _success(self, message, *args, **kwargs):
+    if self.isEnabledFor(SUCCESS_LEVEL):
+        self._log(SUCCESS_LEVEL, message, args, **kwargs)
+
+
+def _ensure_success(logger):
+    if not hasattr(logger, "success"):
+        logger.success = MethodType(_success, logger)
+    return logger
+
+
 class RobotLogger(logging.Logger):
-    def success(self, message, *args, **kwargs):
-        if self.isEnabledFor(SUCCESS_LEVEL):
-            self._log(SUCCESS_LEVEL, message, args, **kwargs)
+    success = _success
 
 
 class ColorFormatter(logging.Formatter):
@@ -49,7 +59,7 @@ def setup_logger(name="robot_station"):
     global _configured, _log_file
 
     logging.setLoggerClass(RobotLogger)
-    logger = logging.getLogger(name)
+    logger = _ensure_success(logging.getLogger(name))
     logger.setLevel(logging.INFO)
     logger.propagate = False
 
@@ -80,5 +90,4 @@ def setup_logger(name="robot_station"):
 def get_logger(name="robot_station"):
     if not _configured:
         return setup_logger(name)
-    return logging.getLogger(name)
-
+    return _ensure_success(logging.getLogger(name))

@@ -16,7 +16,7 @@ def _chunk_message(steps, chunk_id="chunk_x"):
             {
                 "left": _arm(),
                 "right": _arm(),
-                "lift": {"height": 0.40 + 0.01 * i},
+                "lift": {"height": 400.0 + 10.0 * i},
                 "speed": {"vx": 0.0, "vy": 0.0},
             }
         )
@@ -199,7 +199,7 @@ def test_lift_dispatched_once_with_last_target():
     # Wait for the async lift thread to run.
     time.sleep(0.2)
     assert len(recorder.lift_calls) == 1
-    # The last executed step (index 2) has height 0.40 + 0.02.
+    # The last remote lift step is 420 mm; the lifting controller receives metres.
     assert abs(recorder.lift_calls[0]["height"] - 0.42) < 1e-6
 
 

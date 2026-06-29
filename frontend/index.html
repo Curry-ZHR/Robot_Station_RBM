@@ -780,8 +780,8 @@
                     <span class="state-badge idle" id="inferenceBadge">未连接</span>
                   </div>
                   <form class="config-form inference-config" id="inferenceConfigForm" autocomplete="off">
-                    <label class="field-wide"><span class="field-label">远端地址</span><input id="remoteUrlInput" type="text" value="ws://127.0.0.1:8000/infer" placeholder="ws://127.0.0.1:8000/infer" inputmode="url"></label>
-                    <label class="field-wide"><span class="field-label">任务指令 prompt</span><input id="promptInput" type="text" placeholder="grasp the bottle"></label>
+                    <label class="field-wide"><span class="field-label">远端地址</span><input id="remoteUrlInput" type="text" value="ws://192.168.1.154:8888/infer" placeholder="ws://192.168.1.154:8888/infer" inputmode="url"></label>
+                    <label class="field-wide"><span class="field-label">任务指令 prompt</span><input id="promptInput" type="text" value="Target: Grape Juice. Pick the Grape Juice from the shelf and place it into the cart." placeholder="Target: Grape Juice. Pick the Grape Juice from the shelf and place it into the cart."></label>
                     <label><span class="field-label">关节速度<em>deg/s</em></span><input id="inferenceJointSpeedInput" type="number" min="0.5" max="30" step="0.5" value="20" inputmode="decimal"></label>
                     <label><span class="field-label">发送频率<em>Hz</em></span><input id="inferenceFrequencyInput" type="number" min="1" max="30" step="1" value="10" inputmode="numeric"></label>
                     <label class="field-wide"><span class="field-label">执行步数 N<em>每轮执行的动作步数</em></span><input id="inferenceStepsInput" type="number" min="1" max="200" step="1" value="20" inputmode="numeric"></label>

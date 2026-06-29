@@ -29,7 +29,7 @@ def _action(**overrides):
     action = {
         "left": _arm(),
         "right": _arm(),
-        "lift": {"height": 0.4},
+        "lift": {"height": 400.0},
         "speed": {"vx": 0.0, "vy": 0.0, "wz": 0.0},
     }
     action.update(overrides)
@@ -53,6 +53,7 @@ def test_valid_chunk_parses_into_steps():
     step = result["steps"][0]
     assert len(step["left"]) == 7
     assert len(step["right"]) == 7
+    # Remote lift action is in mm; the normalized executor value is metres.
     assert step["lift_height"] == pytest.approx(0.4)
     assert step["speed"] == (0.0, 0.0, 0.0)
 
@@ -97,7 +98,7 @@ def test_side_specific_j1_limits():
 
 
 def test_out_of_limit_lift_clipped():
-    result = validate_action_chunk(_chunk([_action(lift={"height": 5.0})]))
+    result = validate_action_chunk(_chunk([_action(lift={"height": 5000.0})]))
     # Clipped to the upper height limit (>= 0) rather than rejected.
     assert result["steps"][0]["lift_height"] <= 0.8 + 1e-9
     assert result["clipped"] >= 1

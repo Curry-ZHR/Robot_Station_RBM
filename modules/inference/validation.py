@@ -44,6 +44,7 @@ GRIPPER_MIN_M = _env_float("INFERENCE_GRIPPER_MIN_M", 0.0)
 GRIPPER_MAX_M = _env_float("INFERENCE_GRIPPER_MAX_M", 0.1)
 
 DEFAULT_MAX_CHUNK_STEPS = int(_env_float("INFERENCE_MAX_CHUNK_STEPS", 200))
+MM_PER_M = 1000.0
 
 
 class ActionChunkValidationError(ValueError):
@@ -121,9 +122,10 @@ def _lift_height(action, step_index, clips):
     if not isinstance(lift, dict) or "height" not in lift:
         raise ActionChunkValidationError(f"actions[{step_index}].lift must contain a height.")
     limits = lifting_limits().get("limits", {})
-    low = float(limits.get("minHeightM", 0.0))
-    high = float(limits.get("maxHeightM", 0.8))
-    return _clip(lift["height"], f"actions[{step_index}].lift.height", low, high, clips)
+    low_mm = float(limits.get("minHeightM", 0.0)) * MM_PER_M
+    high_mm = float(limits.get("maxHeightM", 0.8)) * MM_PER_M
+    height_mm = _clip(lift["height"], f"actions[{step_index}].lift.height", low_mm, high_mm, clips)
+    return height_mm / MM_PER_M
 
 
 def _limit_override(override, keys, hard):
@@ -173,11 +175,12 @@ def _chassis_velocity(action, step_index, limits, clips):
 def validate_action_chunk(message, max_steps=DEFAULT_MAX_CHUNK_STEPS, chassis_limits_override=None):
     """Validate a remote action_chunk message and return a normalized chunk.
 
-    The normalized chunk is a dict with ``steps`` where each step is
+    The incoming ``actions[].lift.height`` is millimetres. The normalized chunk
+    is a dict with ``steps`` where each step is
     ``{"left": [7], "right": [7], "lift_height": float|None,
-    "speed": (vx, vy, wz)}`` ready for the executor. Chassis velocity is
-    validated against the operator supplied caps (bounded by the hardware
-    limits).
+    "speed": (vx, vy, wz)}`` ready for the executor; ``lift_height`` is metres
+    because the lifting controller uses metres. Chassis velocity is validated
+    against the operator supplied caps (bounded by the hardware limits).
     """
 
     if not isinstance(message, dict):

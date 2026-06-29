@@ -184,7 +184,10 @@ class ManagedService:
 
     def _status_payload_locked(self):
         pid = self._process.pid if self._process is not None else None
-        external_processes = self._matching_processes_locked(exclude_pids={pid} if pid else set())
+        external_processes = self._matching_processes_locked(
+            exclude_pids={pid} if pid else set(),
+            patterns=self._status_process_patterns_locked(),
+        )
         status = "external" if self._process is None and external_processes else self._status
         return {
             "key": self.spec.key,
@@ -247,8 +250,13 @@ class ManagedService:
             except subprocess.TimeoutExpired:
                 continue
 
-    def _matching_processes_locked(self, exclude_pids=None):
-        patterns = tuple(pattern for pattern in self.spec.cleanup_process_patterns if pattern)
+    def _status_process_patterns_locked(self):
+        source_patterns = self.spec.status_process_patterns or self.spec.cleanup_process_patterns
+        return tuple(pattern for pattern in source_patterns if pattern)
+
+    def _matching_processes_locked(self, exclude_pids=None, patterns=None):
+        source_patterns = patterns if patterns is not None else self.spec.cleanup_process_patterns
+        patterns = tuple(pattern for pattern in source_patterns if pattern)
         if not patterns:
             return []
 
