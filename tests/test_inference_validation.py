@@ -49,6 +49,7 @@ def _chunk(actions=None, **overrides):
 def test_valid_chunk_parses_into_steps():
     result = validate_action_chunk(_chunk())
     assert "chunk_id" not in result
+    assert result["isSuccess"] is False
     assert result["stepCount"] == 1
     step = result["steps"][0]
     assert len(step["left"]) == 7
@@ -56,6 +57,18 @@ def test_valid_chunk_parses_into_steps():
     # Remote lift action is in mm; the normalized executor value is metres.
     assert step["lift_height"] == pytest.approx(0.4)
     assert step["speed"] == (0.0, 0.0, 0.0)
+
+
+def test_success_message_can_complete_without_actions():
+    result = validate_action_chunk({"type": "action_chunk", "is_success": True})
+    assert result["isSuccess"] is True
+    assert result["stepCount"] == 0
+    assert result["steps"] == []
+
+
+def test_is_success_must_be_boolean():
+    with pytest.raises(ActionChunkValidationError):
+        validate_action_chunk({"type": "action_chunk", "is_success": "true"})
 
 
 def test_missing_arm_field_rejected():

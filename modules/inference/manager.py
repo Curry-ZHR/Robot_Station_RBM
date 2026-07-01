@@ -251,6 +251,39 @@ class InferenceManager:
                 self._safe_hold()
                 return _result(False, "INFER-CHUNK-INVALID", str(exc), chunkTiming=chunk_timing)
 
+            if chunk.get("isSuccess") is True:
+                self._action_logger.log_received_chunk(
+                    remote_url=self._session.url,
+                    prompt=str(prompt or ""),
+                    local_chunk_id=None,
+                    remote_chunk_id=remote_chunk_id,
+                    raw_chunk=message,
+                    valid=True,
+                    step_count=0,
+                    clipped=0,
+                    clipped_fields=[],
+                    normalized_chunk=chunk,
+                    timing=chunk_timing,
+                )
+                self._set(
+                    status="completed",
+                    last_chunk=None,
+                    last_chunk_timing=chunk_timing,
+                    last_error=None,
+                    executed_steps=0,
+                )
+                return _result(
+                    True,
+                    "INFER-SUCCESS",
+                    "Remote inference reported task success.",
+                    isSuccess=True,
+                    chunkId=None,
+                    chunkSteps=0,
+                    clipped=0,
+                    clippedFields=[],
+                    chunkTiming=chunk_timing,
+                )
+
             local_chunk_id = self._next_chunk_id()
             chunk["chunk_id"] = local_chunk_id
             self._action_logger.log_received_chunk(
@@ -273,6 +306,7 @@ class InferenceManager:
                 "Received and validated an action chunk.",
                 chunkId=chunk["chunk_id"],
                 chunkSteps=chunk["stepCount"],
+                isSuccess=False,
                 clipped=chunk.get("clipped", 0),
                 clippedFields=chunk.get("clippedFields", []),
                 chunkTiming=chunk_timing,

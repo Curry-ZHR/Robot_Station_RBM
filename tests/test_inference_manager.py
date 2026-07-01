@@ -129,6 +129,23 @@ def test_connect_request_execute_flow():
     assert recorder.joint_calls[0]["left"]["positions"][0] == 0.0
 
 
+def test_success_message_completes_without_chunk():
+    recorder = Recorder()
+    manager = _manager({"type": "action_chunk", "is_success": True}, recorder)
+
+    assert manager.connect("ws://localhost:1234/infer")["ok"]
+    req = manager.request_chunk({"prompt": "done"})
+    assert req["ok"]
+    assert req["code"] == "INFER-SUCCESS"
+    assert req["isSuccess"] is True
+    assert req["chunkSteps"] == 0
+
+    status = manager.status()
+    assert status["status"] == "completed"
+    assert status["chunkId"] is None
+    assert manager.execute_chunk({"steps": 1})["code"] == "INFER-NO-CHUNK"
+
+
 def test_inference_action_logs_record_received_and_executed_chunks(tmp_path):
     recorder = Recorder()
     action_logger = InferenceActionLogger(log_dir=tmp_path)

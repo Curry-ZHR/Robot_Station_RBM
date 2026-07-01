@@ -380,6 +380,7 @@ const state = {
     executionTiming: null,
     loopTiming: null,
     lastError: null,
+    isSuccess: false,
     looping: false,
     busy: false,
     chassisHardLimits: { maxLinearMps: 0.2, maxLateralMps: 0.15, maxAngularRadS: 0.5 },
@@ -873,6 +874,75 @@ const stateMachineSystemTypes = {
     summary: "固定终止状态，不执行任务",
   },
 };
+
+function stateMachinePiperJointSideFields(side) {
+  const sideLabel = piperArmLabels[side] || side;
+  const showWhen = { key: "side", values: [side, "both"] };
+  return [
+    ...armJointLimitsFor(side).map((limit, index) => ({
+      key: `${side}Joint${index + 1}Deg`,
+      label: `${sideLabel} ${limit.name}`,
+      type: "number",
+      step: "0.1",
+      min: String(limit.min),
+      max: String(limit.max),
+      unit: "deg",
+      showWhen,
+    })),
+    {
+      key: `${side}GripperM`,
+      label: `${sideLabel} 夹爪`,
+      type: "number",
+      step: "0.001",
+      min: "0",
+      max: "0.1",
+      unit: "m",
+      showWhen,
+    },
+  ];
+}
+
+function stateMachinePiperJointFields() {
+  return [
+    {
+      key: "side",
+      label: "控制臂",
+      type: "select",
+      refresh: true,
+      options: [
+        { value: "both", label: "双臂" },
+        { value: "left", label: "左臂" },
+        { value: "right", label: "右臂" },
+      ],
+    },
+    ...stateMachinePiperJointSideFields("left"),
+    ...stateMachinePiperJointSideFields("right"),
+    { key: "maxJointSpeedDegS", label: "最大关节速度", type: "number", step: "0.5", min: "0.5", max: "30", unit: "deg/s", advanced: true },
+    { key: "gripperEffort", label: "夹爪 effort", type: "number", step: "0.1", min: "0.5", max: "3", advanced: true },
+    { key: "toleranceDeg", label: "关节到位容差", type: "number", step: "0.1", min: "0.01", max: "30", unit: "deg", advanced: true },
+    { key: "stableSec", label: "到位保持时间", type: "number", step: "0.1", min: "0", max: "10", unit: "s", advanced: true },
+    { key: "timeoutSec", label: "到位超时", type: "number", step: "1", min: "0.1", max: "600", unit: "s", advanced: true },
+  ];
+}
+
+function stateMachinePiperJointDefaults() {
+  const defaults = {
+    side: "both",
+    maxJointSpeedDegS: 5,
+    gripperEffort: PIPER_GRIPPER_EFFORT,
+    toleranceDeg: 2,
+    stableSec: 2,
+    timeoutSec: 20,
+  };
+  ["left", "right"].forEach((side) => {
+    for (let index = 1; index <= 6; index += 1) {
+      defaults[`${side}Joint${index}Deg`] = 0;
+    }
+    defaults[`${side}GripperM`] = 0;
+  });
+  return defaults;
+}
+
 const stateMachineTaskTypes = {
   navigation: {
     label: "导航",
@@ -905,6 +975,34 @@ const stateMachineTaskTypes = {
     summary: "将底盘里程计重置为 0",
     fields: [],
     allowCreate: false,
+  },
+  inference: {
+    label: "推理",
+    summary: "远程推理闭环直到完成",
+    fields: [
+      { key: "remoteUrl", label: "远端地址", type: "text", placeholder: "ws://192.168.1.154:8888/infer" },
+      { key: "prompt", label: "任务指令 prompt", type: "text", placeholder: "Target: item. Pick it and place it into the cart." },
+      { key: "steps", label: "执行步数 N", type: "number", step: "1", min: "1", unit: "steps" },
+      { key: "frequencyHz", label: "发送频率", type: "number", step: "1", min: "1", unit: "Hz" },
+      { key: "maxJointSpeedDegS", label: "关节速度", type: "number", step: "0.5", min: "0.5", unit: "deg/s" },
+      {
+        key: "autoEnablePiper",
+        label: "自动使能 Piper",
+        type: "select",
+        options: [
+          { value: "true", label: "自动使能" },
+          { value: "false", label: "不自动使能" },
+        ],
+      },
+      { key: "maxLinearMps", label: "底盘 vx 上限", type: "number", step: "0.01", min: "0", unit: "m/s", advanced: true },
+      { key: "maxLateralMps", label: "底盘 vy 上限", type: "number", step: "0.01", min: "0", unit: "m/s", advanced: true },
+      { key: "maxAngularRadS", label: "底盘 wz 上限", type: "number", step: "0.01", min: "0", unit: "rad/s", advanced: true },
+    ],
+  },
+  piper_joint: {
+    label: "机械臂控制",
+    summary: "发布关节目标并等待到位",
+    fields: stateMachinePiperJointFields(),
   },
   grasp: {
     label: "抓取",
@@ -983,6 +1081,18 @@ const stateMachineTaskTypeDefaults = {
     controlRateHz: 20,
   },
   grasp: { graspMethod: "inference", leftTarget: "", rightTarget: "", prompt: "", leftPose: "", rightPose: "" },
+  inference: {
+    remoteUrl: "ws://192.168.1.154:8888/infer",
+    prompt: "",
+    steps: 20,
+    frequencyHz: 10,
+    maxJointSpeedDegS: 20,
+    autoEnablePiper: true,
+    maxLinearMps: 0.2,
+    maxLateralMps: 0.15,
+    maxAngularRadS: 0.5,
+  },
+  piper_joint: stateMachinePiperJointDefaults(),
   reset_odom: {},
   wait: { stableSec: 2 },
   topic_publish: { topicName: "" },
@@ -1548,6 +1658,7 @@ function createStateMachineNodeFromLibrary(entry, position = null) {
 
 function legacyStateMachineTaskType(type) {
   if (stateMachineTaskTypes[type]) return type;
+  if (type === "arm_control" || type === "piper") return "piper_joint";
   if (type === "inference" || type === "arm") return "grasp";
   if (type === "check") return "wait";
   return "navigation";
@@ -1827,6 +1938,78 @@ function parseStateMachineParamValue(input) {
   return input.value;
 }
 
+function normalizeStateMachinePiperJointSide(value) {
+  const side = String(value || "both").trim();
+  if (["left", "right", "both"].includes(side)) return side;
+  return "";
+}
+
+function stateMachinePiperJointSides(side) {
+  return side === "both" ? ["left", "right"] : [side];
+}
+
+function validateStateMachinePiperJointParams(rawParams) {
+  const merged = rawParams || {};
+  const side = normalizeStateMachinePiperJointSide(merged.side);
+  if (!side) {
+    return { ok: false, field: "side", detail: "控制臂必须选择左臂、右臂或双臂" };
+  }
+
+  const params = { side };
+  const readRequired = (key, label, min, max) => {
+    const raw = merged[key];
+    if (raw === null || raw === undefined || raw === "") {
+      return { ok: false, field: key, detail: `${label} 必须填写` };
+    }
+    const value = Number(raw);
+    if (!Number.isFinite(value)) {
+      return { ok: false, field: key, detail: `${label} 必须是数字` };
+    }
+    if (Number.isFinite(min) && value < min) {
+      return { ok: false, field: key, detail: `${label} 不能小于 ${min}` };
+    }
+    if (Number.isFinite(max) && value > max) {
+      return { ok: false, field: key, detail: `${label} 不能大于 ${max}` };
+    }
+    params[key] = value;
+    return { ok: true, value };
+  };
+  const readOptional = (key, label, fallback, min, max) => {
+    const raw = merged[key];
+    if (raw === null || raw === undefined || raw === "") {
+      params[key] = fallback;
+      return { ok: true, value: fallback };
+    }
+    return readRequired(key, label, min, max);
+  };
+
+  for (const sideName of stateMachinePiperJointSides(side)) {
+    const sideLabel = piperArmLabels[sideName] || sideName;
+    const jointLimits = armJointLimitsFor(sideName);
+    for (let index = 1; index <= 6; index += 1) {
+      const limit = jointLimits[index - 1];
+      const key = `${sideName}Joint${index}Deg`;
+      const result = readRequired(key, `${sideLabel} ${limit.name}`, limit.min, limit.max);
+      if (!result.ok) return result;
+    }
+    const gripper = readRequired(`${sideName}GripperM`, `${sideLabel} 夹爪`, 0, 0.1);
+    if (!gripper.ok) return gripper;
+  }
+
+  for (const item of [
+    ["maxJointSpeedDegS", "最大关节速度", 5, PIPER_JOINT_SPEED_MIN, PIPER_JOINT_SPEED_MAX],
+    ["gripperEffort", "夹爪 effort", PIPER_GRIPPER_EFFORT, 0.5, 3],
+    ["toleranceDeg", "关节到位容差", 2, 0.01, 30],
+    ["stableSec", "到位保持时间", 2, 0, 10],
+    ["timeoutSec", "到位超时", 20, 0.1, 600],
+  ]) {
+    const result = readOptional(...item);
+    if (!result.ok) return result;
+  }
+
+  return { ok: true, params };
+}
+
 function stateMachineParamSummary(node) {
   if (!node) return "--";
   if (node.type === "start") return "固定起始项";
@@ -1849,6 +2032,18 @@ function stateMachineParamSummary(node) {
       .filter(Boolean)
       .join(" ") || "未配置目标";
     return `${method} / ${arms}`;
+  }
+  if (node.taskType === "inference") {
+    const steps = Number(params.steps) || 20;
+    const frequencyHz = Number(params.frequencyHz) || 10;
+    const remote = params.remoteUrl || "--";
+    return `${steps} 步 @ ${frequencyHz} Hz / ${remote}`;
+  }
+  if (node.taskType === "piper_joint") {
+    const side = params.side === "left" ? "左臂" : params.side === "right" ? "右臂" : "双臂";
+    const speed = Number(params.maxJointSpeedDegS) || 5;
+    const tolerance = Number(params.toleranceDeg) || 2;
+    return `${side} / ${formatNumber(speed, 1)} deg/s / 容差 ${formatNumber(tolerance, 1)} deg`;
   }
   if (node.taskType === "reset_odom") return "调用 /reset_odom，将 /odom 重置为 0";
   if (node.taskType === "wait") return `运动后静止 ${params.stableSec ?? "--"}s`;
@@ -1943,6 +2138,42 @@ function stateMachineTaskStatusRows(taskStatus) {
       ["阶段", data.phase || "--"],
       ["服务", data.service || "/reset_odom"],
       ["结果", data.code || "--"],
+    );
+  }
+  if (taskStatus?.taskType === "inference") {
+    const chunkTiming = data.chunkTiming || {};
+    const executionTiming = data.executionTiming || {};
+    rows.push(
+      ["阶段", data.phase || "--"],
+      ["轮次", data.round ?? "--"],
+      ["远端", data.remoteUrl || "--"],
+      ["完成信号", data.isSuccess === true ? "true" : data.isSuccess === false ? "false" : "--"],
+      ["chunk", data.chunkId ? `${data.chunkId} (${data.chunkSteps || 0} 步)` : "--"],
+      ["本轮执行", `${data.executedSteps ?? 0} / ${data.requestedSteps ?? data.steps ?? "--"} 步`],
+      ["累计执行", `${data.totalExecutedSteps ?? 0} 步`],
+      ["执行参数", `${data.steps ?? "--"} 步 @ ${formatLocalizationNumber(data.frequencyHz, 1)} Hz / ${formatLocalizationNumber(data.maxJointSpeedDegS, 1)} deg/s`],
+      ["Piper 使能", data.autoEnablePiper ? data.enableCode || "自动" : "关闭"],
+      ["请求耗时", formatLocalizationNumber(chunkTiming.totalMs, 1, " ms")],
+      ["执行耗时", formatLocalizationNumber(executionTiming.totalMs, 1, " ms")],
+      ["结果", data.executeCode || data.requestCode || data.connectCode || "--"],
+    );
+  }
+  if (taskStatus?.taskType === "piper_joint") {
+    const sideText = Array.isArray(data.sides)
+      ? data.sides.map((side) => piperArmLabels[side] || side).join(" / ")
+      : data.side || "--";
+    rows.push(
+      ["阶段", data.phase || "--"],
+      ["控制臂", sideText],
+      ["关节误差", `${formatLocalizationNumber(data.maxJointErrorDeg, 2, " deg")} / ${formatLocalizationNumber(data.maxJointErrorRad, 4, " rad")}`],
+      ["夹爪误差", formatLocalizationNumber(data.maxGripperErrorM, 4, " m")],
+      ["稳定计时", `${formatLocalizationNumber(data.stableElapsedSec, 1)} / ${formatLocalizationNumber(data.stableSec, 1)} s`],
+      ["执行耗时", formatLocalizationNumber(data.elapsedSec, 1, " s")],
+      ["速度", formatLocalizationNumber(data.maxJointSpeedDegS, 1, " deg/s")],
+      ["关节容差", formatLocalizationNumber(data.toleranceDeg, 2, " deg")],
+      ["发布 Topic", Array.isArray(data.topics) && data.topics.length ? data.topics.join(" / ") : "--"],
+      ["反馈异常", data.lastFeedbackError || "--"],
+      ["结果", data.publishCode || data.holdCode || "--"],
     );
   }
   if (taskStatus?.taskType === "topic_wait") {
@@ -2167,6 +2398,7 @@ function renderStateMachineModalField(field, value) {
         value="${escapeHtml(fieldValue)}"
         ${field.step ? `step="${escapeHtml(field.step)}"` : ""}
         ${field.min ? `min="${escapeHtml(field.min)}"` : ""}
+        ${field.max ? `max="${escapeHtml(field.max)}"` : ""}
         ${field.placeholder ? `placeholder="${escapeHtml(field.placeholder)}"` : ""}
         ${field.type === "number" ? "inputmode=\"decimal\"" : ""}
       >
@@ -2181,7 +2413,12 @@ function renderStateMachineModalFields(fields, params) {
 function stateMachineModalVisibleFields(taskType, params) {
   return (stateMachineTaskMeta(taskType).fields || []).filter((field) => {
     if (!field.showWhen) return true;
-    return String(params?.[field.showWhen.key] ?? "") === String(field.showWhen.value);
+    const defaultParams = stateMachineTaskTypeDefaults[taskType] || {};
+    const value = String(params?.[field.showWhen.key] ?? defaultParams[field.showWhen.key] ?? "");
+    if (Array.isArray(field.showWhen.values)) {
+      return field.showWhen.values.map(String).includes(value);
+    }
+    return value === String(field.showWhen.value);
   });
 }
 
@@ -2296,6 +2533,44 @@ async function submitStateMachineModal() {
       return;
     }
     params = { topicName, timeoutSec: Number(config.params.timeoutSec) || 0 };
+  }
+  if (config.taskType === "inference") {
+    const merged = { ...config.params, ...values.params };
+    const remoteUrl = String(merged.remoteUrl || "").trim();
+    if (!remoteUrl) {
+      addLog("状态机", "推理远端地址不能为空");
+      $("#stateMachineModalForm [data-sm-modal-field='remoteUrl']")?.focus();
+      return;
+    }
+    const steps = clamp(Math.round(Number(merged.steps) || 20), 1, 200);
+    const frequencyHz = clamp(Number(merged.frequencyHz) || 10, 1, 30);
+    const maxJointSpeedDegS = clamp(Number(merged.maxJointSpeedDegS) || 20, 0.5, 30);
+    const limit = (key, fallback) => {
+      const value = Number(merged[key]);
+      return Number.isFinite(value) && value >= 0 ? value : fallback;
+    };
+    params = {
+      remoteUrl,
+      prompt: String(merged.prompt || ""),
+      steps,
+      frequencyHz,
+      maxJointSpeedDegS,
+      autoEnablePiper: String(merged.autoEnablePiper ?? "true") !== "false",
+      maxLinearMps: limit("maxLinearMps", 0.2),
+      maxLateralMps: limit("maxLateralMps", 0.15),
+      maxAngularRadS: limit("maxAngularRadS", 0.5),
+    };
+  }
+  if (config.taskType === "piper_joint") {
+    const validated = validateStateMachinePiperJointParams({ ...config.params, ...values.params });
+    if (!validated.ok) {
+      addLog("状态机", validated.detail);
+      if (validated.field) {
+        $("#stateMachineModalForm [data-sm-modal-field='" + validated.field + "']")?.focus();
+      }
+      return;
+    }
+    params = validated.params;
   }
 
   if (config.mode === "edit-node") {
@@ -3067,6 +3342,7 @@ const INFERENCE_STATUS_LABELS = {
   requesting: "请求中",
   chunk_ready: "chunk 就绪",
   executing: "执行中",
+  completed: "已完成",
   stopped: "已停止",
   error: "错误",
 };
@@ -3076,6 +3352,7 @@ const INFERENCE_STATUS_LEVELS = {
   requesting: "warn",
   chunk_ready: "ok",
   executing: "warn",
+  completed: "ok",
   stopped: "idle",
   error: "danger",
 };
@@ -3113,6 +3390,7 @@ function applyInferenceStatus(result) {
   if ("chunkTiming" in result) info.chunkTiming = result.chunkTiming || null;
   if ("executionTiming" in result) info.executionTiming = result.executionTiming || null;
   if ("lastError" in result) info.lastError = result.lastError || null;
+  if ("isSuccess" in result) info.isSuccess = result.isSuccess === true;
   renderInferenceStatus();
 }
 
@@ -9130,7 +9408,9 @@ async function requestInferenceChunk(options = {}) {
   try {
     const posted = await inferencePost("request-chunk", { prompt, chassisLimits: readInferenceChassisLimits() });
     result = posted.result;
-    if (result.ok && writeLog) {
+    if (result.ok && result.isSuccess === true) {
+      if (writeLog) addLog("推理", "远端报告任务已完成");
+    } else if (result.ok && writeLog) {
       const clipNote = result.clipped ? `，${result.clipped} 个值越限已裁剪` : "";
       addLog("推理", `收到 chunk ${result.chunkId}（${result.chunkSteps} 步）${clipNote}`);
     } else if (!result.ok) {
@@ -9193,6 +9473,13 @@ async function runInferenceLoop() {
     state.inference.loopTiming = { seq: loopSeq };
     if (!chunk || !chunk.ok) {
       renderInferenceStatus();
+      state.inference.looping = false;
+      const toggle = $("#inferenceLoopToggle");
+      if (toggle) toggle.checked = false;
+      break;
+    }
+    if (chunk.isSuccess === true) {
+      addLog("推理", `闭环 #${loopSeq} 完成：远端报告任务成功`);
       state.inference.looping = false;
       const toggle = $("#inferenceLoopToggle");
       if (toggle) toggle.checked = false;

@@ -1,3 +1,5 @@
+import math
+import threading
 import time
 
 from modules.state_machine import executor as executor_module
@@ -116,6 +118,33 @@ class ExternalPiperRosReader:
         return {"ok": False, "detail": f"no data for {key}"}
 
 
+class SequencedPiperJointReader:
+    def __init__(self, samples, advance_after_side="left"):
+        self.samples = list(samples)
+        self.advance_after_side = advance_after_side
+        self.index = 0
+        self.calls = []
+
+    def read(self, key, timeout_sec=0.0):
+        self.calls.append((key, timeout_sec))
+        sample = self.samples[min(self.index, len(self.samples) - 1)]
+        if key in executor_module.WAIT_LEFT_JOINT_STATE_KEYS:
+            side = "left"
+        elif key in executor_module.WAIT_RIGHT_JOINT_STATE_KEYS:
+            side = "right"
+        else:
+            return {"ok": False, "detail": f"no data for {key}"}
+        positions = sample[side]
+        if side == self.advance_after_side:
+            self.index += 1
+        return {
+            "ok": True,
+            "stale": False,
+            "topic": f"/{side}_joint_state",
+            "data": {"position": list(positions)},
+        }
+
+
 class FakeTopicReader:
     def __init__(self, baseline, next_result):
         self.baseline = dict(baseline)
@@ -176,6 +205,69 @@ class FakeRosWriter:
             "data": bool(value),
             "publishedAt": "12:00:00",
         }
+
+
+class FakeInferenceManager:
+    def __init__(self, request_results, execute_results=None):
+        self.request_results = [dict(item) for item in request_results]
+        self.execute_results = [dict(item) for item in (execute_results or [])]
+        self.connected = []
+        self.requests = []
+        self.executions = []
+        self.stopped = []
+
+    def _next(self, values, default):
+        if len(values) > 1:
+            return dict(values.pop(0))
+        if values:
+            return dict(values[0])
+        return dict(default)
+
+    def connect(self, url):
+        self.connected.append(url)
+        return {"ok": True, "code": "INFER-CONNECTED", "detail": "connected", "remoteUrl": url}
+
+    def request_chunk(self, payload):
+        self.requests.append(dict(payload))
+        return self._next(
+            self.request_results,
+            {"ok": True, "code": "INFER-SUCCESS", "detail": "success", "isSuccess": True, "chunkSteps": 0},
+        )
+
+    def execute_chunk(self, payload):
+        self.executions.append(dict(payload))
+        return self._next(
+            self.execute_results,
+            {"ok": True, "code": "INFER-EXECUTED", "detail": "executed", "executedSteps": payload.get("steps", 1), "requestedSteps": payload.get("steps", 1)},
+        )
+
+    def stop(self, reason="stop"):
+        self.stopped.append(reason)
+        return {"ok": True, "code": "INFER-STOPPED", "detail": f"stopped {reason}"}
+
+
+class BlockingInferenceManager(FakeInferenceManager):
+    def __init__(self):
+        super().__init__([{"ok": True, "code": "INFER-CHUNK-READY", "detail": "ready", "isSuccess": False, "chunkId": "chunk_0000", "chunkSteps": 1}])
+        self.executing = threading.Event()
+        self.stopped_event = threading.Event()
+
+    def execute_chunk(self, payload):
+        self.executions.append(dict(payload))
+        self.executing.set()
+        self.stopped_event.wait(timeout=1.0)
+        return {
+            "ok": False,
+            "code": "INFER-STOPPED",
+            "detail": "Execution stopped before completing the requested steps.",
+            "executedSteps": 0,
+            "requestedSteps": payload.get("steps", 1),
+        }
+
+    def stop(self, reason="stop"):
+        result = super().stop(reason=reason)
+        self.stopped_event.set()
+        return result
 
 
 def test_navigation_state_runs_to_completed(monkeypatch):
@@ -268,6 +360,355 @@ def test_reset_odom_state_runs_once_and_continues(monkeypatch):
     assert run["taskStatus"]["status"] == "completed"
     assert run["taskStatus"]["data"]["phase"] == "completed"
     assert run["taskStatus"]["data"]["service"] == "/reset_odom"
+
+
+def test_inference_state_loops_until_remote_success(monkeypatch):
+    fake_inference = FakeInferenceManager(
+        [
+            {
+                "ok": True,
+                "code": "INFER-CHUNK-READY",
+                "detail": "chunk ready",
+                "isSuccess": False,
+                "chunkId": "chunk_0000",
+                "chunkSteps": 2,
+            },
+            {
+                "ok": True,
+                "code": "INFER-SUCCESS",
+                "detail": "success",
+                "isSuccess": True,
+                "chunkSteps": 0,
+            },
+        ],
+        [
+            {
+                "ok": True,
+                "code": "INFER-EXECUTED",
+                "detail": "executed",
+                "executedSteps": 2,
+                "requestedSteps": 2,
+            }
+        ],
+    )
+    fake_writer = FakeRosWriter()
+    monkeypatch.setattr(executor_module, "get_inference_manager", lambda: fake_inference)
+    monkeypatch.setattr(executor_module, "get_ros_writer", lambda: fake_writer)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+    params = {
+        "remoteUrl": "ws://localhost:1234/infer",
+        "prompt": "pick grape juice",
+        "steps": 2,
+        "frequencyHz": 30,
+        "maxJointSpeedDegS": 25,
+        "maxLinearMps": 0.2,
+        "maxLateralMps": 0.15,
+        "maxAngularRadS": 0.5,
+    }
+
+    result = manager.start(
+        {
+            "name": "推理流程",
+            "nodes": [
+                _start(["infer"]),
+                _node("infer", "inference", params=params, outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert result["ok"] is True
+    assert fake_inference.connected == ["ws://localhost:1234/infer"]
+    assert len(fake_inference.requests) == 2
+    assert fake_inference.requests[0]["prompt"] == "pick grape juice"
+    assert fake_inference.executions == [{"steps": 2, "frequencyHz": 30.0, "maxJointSpeedDegS": 25.0}]
+    assert fake_writer.published == [("piper_enable_all", {"enabled": True})] * 3
+    assert run["status"] == "completed"
+    assert run["path"] == ["sm_start", "infer", "sm_end"]
+    assert run["taskStatus"]["nodeId"] == "infer"
+    assert run["taskStatus"]["taskType"] == "inference"
+    assert run["taskStatus"]["status"] == "completed"
+    assert run["taskStatus"]["data"]["phase"] == "success"
+    assert run["taskStatus"]["data"]["isSuccess"] is True
+    assert run["taskStatus"]["data"]["totalExecutedSteps"] == 2
+
+
+def test_inference_state_request_failure_fails_state_machine(monkeypatch):
+    fake_inference = FakeInferenceManager(
+        [
+            {
+                "ok": False,
+                "code": "INFER-WS-DISCONNECTED",
+                "detail": "remote disconnected",
+            }
+        ]
+    )
+    monkeypatch.setattr(executor_module, "get_inference_manager", lambda: fake_inference)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    result = manager.start(
+        {
+            "name": "推理失败流程",
+            "nodes": [
+                _start(["infer"]),
+                _node(
+                    "infer",
+                    "inference",
+                    params={"remoteUrl": "ws://localhost:1234/infer", "autoEnablePiper": False},
+                    outgoing=["sm_end"],
+                ),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert result["ok"] is True
+    assert run["status"] == "failed"
+    assert run["currentId"] == "infer"
+    assert run["error"] == "remote disconnected"
+    assert run["taskStatus"]["taskType"] == "inference"
+    assert run["taskStatus"]["status"] == "failed"
+    assert run["taskStatus"]["data"]["requestCode"] == "INFER-WS-DISCONNECTED"
+
+
+def test_state_machine_stop_stops_current_inference(monkeypatch):
+    fake_inference = BlockingInferenceManager()
+    monkeypatch.setattr(executor_module, "get_inference_manager", lambda: fake_inference)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    manager.start(
+        {
+            "name": "停止推理流程",
+            "nodes": [
+                _start(["infer"]),
+                _node(
+                    "infer",
+                    "inference",
+                    params={"remoteUrl": "ws://localhost:1234/infer", "autoEnablePiper": False},
+                    outgoing=["sm_end"],
+                ),
+                _end(),
+            ],
+        }
+    )
+    assert fake_inference.executing.wait(timeout=1.0)
+
+    stop_result = manager.stop()
+    run = stop_result["run"]
+
+    assert fake_inference.stopped == ["state_machine"]
+    assert run["status"] == "stopped"
+    assert run["active"] is False
+    assert run["taskStatus"]["taskType"] == "inference"
+    assert run["taskStatus"]["status"] == "stopped"
+
+
+def _left_piper_joint_params(**overrides):
+    params = {
+        "side": "left",
+        "leftJoint1Deg": 10,
+        "leftJoint2Deg": 20,
+        "leftJoint3Deg": -30,
+        "leftJoint4Deg": 5,
+        "leftJoint5Deg": 0,
+        "leftJoint6Deg": 0,
+        "leftGripperM": 0.03,
+        "maxJointSpeedDegS": 7,
+        "gripperEffort": 1.2,
+        "toleranceDeg": 0.5,
+        "gripperToleranceM": 0.001,
+        "stableSec": 0.01,
+        "timeoutSec": 1,
+    }
+    params.update(overrides)
+    return params
+
+
+def _left_piper_target_positions():
+    return [
+        math.radians(10),
+        math.radians(20),
+        math.radians(-30),
+        math.radians(5),
+        0.0,
+        0.0,
+        0.03,
+    ]
+
+
+def test_piper_joint_state_default_stable_sec_is_two_seconds():
+    params = _left_piper_joint_params()
+    params.pop("stableSec")
+
+    config = StateMachineExecutor._piper_joint_config(params)
+
+    assert config["stableSec"] == 2.0
+
+
+def test_piper_joint_state_publishes_and_waits_until_target_reached(monkeypatch):
+    target = _left_piper_target_positions()
+    reader = SequencedPiperJointReader(
+        [
+            _arm_sample(left=[0.0] * 7),
+            _arm_sample(left=target),
+            _arm_sample(left=target),
+        ],
+        advance_after_side="left",
+    )
+    published = []
+
+    def fake_publish(payload):
+        published.append(payload)
+        return {
+            "ok": True,
+            "code": "PIPER-C-PUBLISHED",
+            "detail": "ok",
+            "topics": ["/joint_states_gripper_l"],
+            "publishedAt": "12:00:00",
+        }
+
+    monkeypatch.setattr(executor_module, "get_ros_reader", lambda: reader)
+    monkeypatch.setattr(executor_module, "publish_joint_targets", fake_publish)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    result = manager.start(
+        {
+            "name": "机械臂控制流程",
+            "nodes": [
+                _start(["arm"]),
+                _node("arm", "piper_joint", params=_left_piper_joint_params(), outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert result["ok"] is True
+    assert run["status"] == "completed"
+    assert run["path"] == ["sm_start", "arm", "sm_end"]
+    assert len(published) == 1
+    payload = published[0]
+    assert payload["max_joint_speed_deg_s"] == 7.0
+    assert payload["gripper_effort"] == 1.2
+    assert all(abs(actual - expected) < 1e-9 for actual, expected in zip(payload["left"]["positions"], target))
+    assert "right" not in payload
+    assert run["taskStatus"]["taskType"] == "piper_joint"
+    assert run["taskStatus"]["status"] == "completed"
+    assert run["taskStatus"]["data"]["phase"] == "completed"
+    assert run["taskStatus"]["data"]["withinTolerance"] is True
+    assert run["taskStatus"]["data"]["topics"] == ["/joint_states_gripper_l"]
+
+
+def test_piper_joint_state_completion_ignores_gripper_error(monkeypatch):
+    target = _left_piper_target_positions()
+    clamped_gripper = list(target)
+    clamped_gripper[6] = 0.0
+    reader = SequencedPiperJointReader(
+        [
+            _arm_sample(left=[0.0] * 7),
+            _arm_sample(left=clamped_gripper),
+            _arm_sample(left=clamped_gripper),
+        ],
+        advance_after_side="left",
+    )
+    published = []
+
+    def fake_publish(payload):
+        published.append(payload)
+        return {
+            "ok": True,
+            "code": "PIPER-C-PUBLISHED",
+            "detail": "ok",
+            "topics": ["/joint_states_gripper_l"],
+        }
+
+    monkeypatch.setattr(executor_module, "get_ros_reader", lambda: reader)
+    monkeypatch.setattr(executor_module, "publish_joint_targets", fake_publish)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    result = manager.start(
+        {
+            "name": "机械臂夹取流程",
+            "nodes": [
+                _start(["arm"]),
+                _node("arm", "piper_joint", params=_left_piper_joint_params(), outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert result["ok"] is True
+    assert run["status"] == "completed"
+    assert len(published) == 1
+    data = run["taskStatus"]["data"]
+    assert data["withinTolerance"] is True
+    assert data["jointWithinTolerance"] is True
+    assert data["gripperWithinTolerance"] is False
+    assert data["maxGripperErrorM"] == 0.03
+
+
+def test_piper_joint_state_rejects_incomplete_target(monkeypatch):
+    published = []
+    monkeypatch.setattr(executor_module, "publish_joint_targets", lambda payload: published.append(payload))
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+    params = _left_piper_joint_params()
+    params.pop("leftJoint6Deg")
+
+    result = manager.start(
+        {
+            "name": "机械臂参数不完整",
+            "nodes": [
+                _start(["arm"]),
+                _node("arm", "piper_joint", params=params, outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert result["ok"] is True
+    assert run["status"] == "failed"
+    assert "leftJoint6Deg is required" in run["error"]
+    assert published == []
+
+
+def test_piper_joint_state_times_out_when_feedback_never_reaches_target(monkeypatch):
+    reader = SequencedPiperJointReader([_arm_sample(left=[0.0] * 7)], advance_after_side="left")
+    published = []
+
+    def fake_publish(payload):
+        published.append(payload)
+        return {
+            "ok": True,
+            "code": "PIPER-C-PUBLISHED",
+            "detail": "ok",
+            "topics": ["/joint_states_gripper_l"],
+        }
+
+    monkeypatch.setattr(executor_module, "get_ros_reader", lambda: reader)
+    monkeypatch.setattr(executor_module, "publish_joint_targets", fake_publish)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    result = manager.start(
+        {
+            "name": "机械臂到位超时",
+            "nodes": [
+                _start(["arm"]),
+                _node("arm", "piper_joint", params=_left_piper_joint_params(timeoutSec=0.1), outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert result["ok"] is True
+    assert run["status"] == "failed"
+    assert "not reached" in run["error"]
+    assert len(published) == 1
+    assert run["taskStatus"]["data"]["phase"] == "failed"
 
 
 def test_loop_run_restarts_after_end_until_stopped(monkeypatch):

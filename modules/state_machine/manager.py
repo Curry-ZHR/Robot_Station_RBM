@@ -19,7 +19,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 LIBRARY_FILE = DATA_DIR / "state_library.json"
 GRAPHS_FILE = DATA_DIR / "graphs.json"
 
-TASK_TYPES = ("navigation", "grasp", "wait", "topic_wait", "topic_publish")
+TASK_TYPES = ("navigation", "inference", "piper_joint", "grasp", "wait", "topic_wait", "topic_publish")
 DRAFT_GRAPH_ID = "__draft__"
 
 _STORE = None

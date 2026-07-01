@@ -74,6 +74,17 @@ def _finite_number(value, field):
     return parsed
 
 
+def _optional_bool(message, *keys):
+    for key in keys:
+        if key not in message:
+            continue
+        value = message[key]
+        if not isinstance(value, bool):
+            raise ActionChunkValidationError(f"{key} must be a boolean.")
+        return value
+    return None
+
+
 def _clip(value, field, low, high, clips):
     """Clamp an out-of-range value to the limit instead of rejecting it.
 
@@ -188,6 +199,16 @@ def validate_action_chunk(message, max_steps=DEFAULT_MAX_CHUNK_STEPS, chassis_li
     if message.get("type") != "action_chunk":
         raise ActionChunkValidationError("Message type must be 'action_chunk'.")
 
+    is_success = _optional_bool(message, "is_success", "isSuccess")
+    if is_success is True:
+        return {
+            "steps": [],
+            "stepCount": 0,
+            "clipped": 0,
+            "clippedFields": [],
+            "isSuccess": True,
+        }
+
     actions = message.get("actions")
     if not isinstance(actions, list) or not actions:
         raise ActionChunkValidationError("actions must be a non-empty list.")
@@ -215,4 +236,5 @@ def validate_action_chunk(message, max_steps=DEFAULT_MAX_CHUNK_STEPS, chassis_li
         "stepCount": len(steps),
         "clipped": len(clips),
         "clippedFields": clips[:10],
+        "isSuccess": False,
     }

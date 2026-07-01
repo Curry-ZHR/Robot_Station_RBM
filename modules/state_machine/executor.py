@@ -59,7 +59,9 @@ import threading
 import time
 
 from modules.control.chassis import reset_chassis_odometry
+from modules.control.piper import publish_joint_targets
 from modules.control.piper.feedback import joint_state_key_candidates, read_joint_state_candidate
+from modules.inference import get_inference_manager
 from modules.navigation import get_navigation_manager
 from modules.ros_io import get_ros_reader, get_ros_writer
 
@@ -86,6 +88,40 @@ WAIT_JOINT_MOVE_EPS_RAD = 0.01
 WAIT_JOINT_STABLE_EPS_RAD = 0.003
 WAIT_GRIPPER_MOVE_EPS_M = 0.002
 WAIT_GRIPPER_STABLE_EPS_M = 0.001
+PIPER_JOINT_DEFAULT_SPEED_DEG_S = 5.0
+PIPER_JOINT_MIN_SPEED_DEG_S = 0.5
+PIPER_JOINT_MAX_SPEED_DEG_S = 30.0
+PIPER_JOINT_DEFAULT_GRIPPER_EFFORT = 1.0
+PIPER_JOINT_MIN_GRIPPER_EFFORT = 0.5
+PIPER_JOINT_MAX_GRIPPER_EFFORT = 3.0
+PIPER_JOINT_DEFAULT_TOLERANCE_DEG = 2.0
+PIPER_JOINT_MIN_TOLERANCE_DEG = 0.01
+PIPER_JOINT_MAX_TOLERANCE_DEG = 30.0
+PIPER_JOINT_DEFAULT_GRIPPER_TOLERANCE_M = 0.005
+PIPER_JOINT_MIN_GRIPPER_TOLERANCE_M = 0.0001
+PIPER_JOINT_MAX_GRIPPER_TOLERANCE_M = 0.05
+PIPER_JOINT_DEFAULT_STABLE_SEC = 2.0
+PIPER_JOINT_MAX_STABLE_SEC = 10.0
+PIPER_JOINT_DEFAULT_TIMEOUT_SEC = 20.0
+PIPER_JOINT_MIN_TIMEOUT_SEC = 0.1
+PIPER_JOINT_MAX_TIMEOUT_SEC = 600.0
+INFERENCE_DEFAULT_STEPS = 20
+INFERENCE_MIN_STEPS = 1
+INFERENCE_MAX_STEPS = 200
+INFERENCE_DEFAULT_FREQUENCY_HZ = 10.0
+INFERENCE_MIN_FREQUENCY_HZ = 1.0
+INFERENCE_MAX_FREQUENCY_HZ = 30.0
+INFERENCE_DEFAULT_JOINT_SPEED_DEG_S = 20.0
+INFERENCE_MIN_JOINT_SPEED_DEG_S = 0.5
+INFERENCE_MAX_JOINT_SPEED_DEG_S = 30.0
+INFERENCE_DEFAULT_CHASSIS_LIMITS = {
+    "maxLinearMps": 0.2,
+    "maxLateralMps": 0.15,
+    "maxAngularRadS": 0.5,
+}
+INFERENCE_PIPER_ENABLE_ACTION_KEY = "piper_enable_all"
+INFERENCE_PIPER_ENABLE_REPEAT = 3
+INFERENCE_PIPER_ENABLE_INTERVAL_SEC = 0.08
 
 
 def _result(ok, code, detail, **extra):
@@ -129,6 +165,43 @@ def _finite_float(value, field):
     if not math.isfinite(parsed):
         raise ValueError(f"{field} must be finite.")
     return parsed
+
+
+def _blank(value):
+    return value is None or (isinstance(value, str) and value.strip() == "")
+
+
+def _bounded_float(value, field, default, minimum, maximum):
+    parsed = float(default) if _blank(value) else _finite_float(value, field)
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"{field} must be between {minimum:g} and {maximum:g}.")
+    return parsed
+
+
+def _bounded_int(value, field, default, minimum, maximum):
+    parsed_float = float(default) if _blank(value) else _finite_float(value, field)
+    parsed = int(parsed_float)
+    if parsed != parsed_float:
+        raise ValueError(f"{field} must be an integer.")
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"{field} must be between {minimum:g} and {maximum:g}.")
+    return parsed
+
+
+def _bool_param(value, default=False):
+    if _blank(value):
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("1", "true", "yes", "on"):
+            return True
+        if lowered in ("0", "false", "no", "off"):
+            return False
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    return bool(default)
 
 
 class StateMachineExecutor:
@@ -202,6 +275,10 @@ class StateMachineExecutor:
 
         if task_status.get("taskType") == "navigation":
             get_navigation_manager().stop(detail="State machine stopped navigation.")
+        if task_status.get("taskType") == "piper_joint":
+            publish_joint_targets({"hold": True})
+        if task_status.get("taskType") == "inference":
+            get_inference_manager().stop(reason="state_machine")
 
         self._finish_run(
             "stopped",
@@ -288,6 +365,10 @@ class StateMachineExecutor:
             return self._execute_topic_wait(node)
         if task_type == "topic_publish":
             return self._execute_topic_publish(node)
+        if task_type == "inference":
+            return self._execute_inference(node)
+        if task_type == "piper_joint":
+            return self._execute_piper_joint(node)
         if task_type == "grasp":
             params = node.get("params") or {}
             if params.get("graspMethod") == "auto":
@@ -645,6 +726,666 @@ class StateMachineExecutor:
             "publishedAt": result.get("publishedAt", ""),
             "payload": copy.deepcopy(payload) if payload is not None else None,
         }
+
+    def _execute_piper_joint(self, node):
+        """Publish complete Piper joint targets and wait until feedback reaches them."""
+        params = node.get("params") or {}
+        try:
+            config = self._piper_joint_config(params)
+        except ValueError as exc:
+            detail = f"Piper joint params invalid: {exc}"
+            self._set_task_status(node, "failed", detail, self._piper_joint_status_data("failed"))
+            return "failed", detail
+
+        self._set_task_status(
+            node,
+            "running",
+            "Publishing Piper joint target.",
+            self._piper_joint_status_data("publishing", config),
+        )
+        publish_result = publish_joint_targets(config["payload"])
+        if not publish_result.get("ok"):
+            detail = publish_result.get("detail") or publish_result.get("code") or "Piper joint target publish failed."
+            self._set_task_status(
+                node,
+                "failed",
+                detail,
+                self._piper_joint_status_data("failed", config, publish_result=publish_result),
+            )
+            return "failed", detail
+
+        reader = get_ros_reader()
+        started = time.monotonic()
+        stable_since = None
+        stable_elapsed = 0.0
+        last_feedback_error = ""
+        self._set_task_status(
+            node,
+            "running",
+            "Waiting for Piper joint feedback to reach target.",
+            self._piper_joint_status_data("waiting_feedback", config, publish_result=publish_result),
+        )
+
+        while not self._stop_event.is_set():
+            now = time.monotonic()
+            elapsed = now - started
+            if elapsed > config["timeoutSec"]:
+                detail = f"Piper joint target not reached within {config['timeoutSec']:.1f}s."
+                self._set_task_status(
+                    node,
+                    "failed",
+                    detail,
+                    self._piper_joint_status_data(
+                        "failed",
+                        config,
+                        publish_result=publish_result,
+                        stable_elapsed=stable_elapsed,
+                        elapsed=elapsed,
+                        last_feedback_error=last_feedback_error,
+                    ),
+                )
+                return "failed", detail
+
+            try:
+                feedback = self._read_piper_joint_feedback(reader, config["sides"])
+            except ValueError as exc:
+                last_feedback_error = str(exc)
+                stable_since = None
+                stable_elapsed = 0.0
+                self._set_task_status(
+                    node,
+                    "running",
+                    "Waiting for Piper joint feedback.",
+                    self._piper_joint_status_data(
+                        "waiting_feedback",
+                        config,
+                        publish_result=publish_result,
+                        stable_elapsed=stable_elapsed,
+                        elapsed=elapsed,
+                        last_feedback_error=last_feedback_error,
+                    ),
+                )
+                self._stop_event.wait(self._poll_interval_sec)
+                continue
+
+            last_feedback_error = ""
+            errors = self._piper_joint_target_errors(config, feedback)
+            if errors["withinTolerance"]:
+                if stable_since is None:
+                    stable_since = now
+                stable_elapsed = 0.0 if config["stableSec"] <= 0 else now - stable_since
+                if config["stableSec"] <= 0 or stable_elapsed >= config["stableSec"]:
+                    detail = "Piper joint target reached."
+                    self._set_task_status(
+                        node,
+                        "completed",
+                        detail,
+                        self._piper_joint_status_data(
+                            "completed",
+                            config,
+                            publish_result=publish_result,
+                            feedback=feedback,
+                            errors=errors,
+                            stable_elapsed=stable_elapsed,
+                            elapsed=elapsed,
+                        ),
+                    )
+                    return "completed", detail
+                phase = "stable_timing"
+                detail = f"Piper joint target reached, stable for {stable_elapsed:.1f}/{config['stableSec']:.1f}s."
+            else:
+                stable_since = None
+                stable_elapsed = 0.0
+                phase = "moving_to_target"
+                detail = "Waiting for Piper joint target to be reached."
+
+            self._set_task_status(
+                node,
+                "running",
+                detail,
+                self._piper_joint_status_data(
+                    phase,
+                    config,
+                    publish_result=publish_result,
+                    feedback=feedback,
+                    errors=errors,
+                    stable_elapsed=stable_elapsed,
+                    elapsed=elapsed,
+                ),
+            )
+            self._stop_event.wait(self._poll_interval_sec)
+
+        hold_result = publish_joint_targets({"hold": True})
+        self._set_task_status(
+            node,
+            "stopped",
+            "State machine run stopped.",
+            self._piper_joint_status_data("stopped", config, publish_result=publish_result, hold_result=hold_result),
+        )
+        return "stopped", "State machine run stopped."
+
+    @staticmethod
+    def _piper_joint_config(params):
+        sides = StateMachineExecutor._piper_joint_sides(params)
+        targets = {side: StateMachineExecutor._piper_joint_positions(params, side) for side in sides}
+        max_joint_speed = _bounded_float(
+            params.get("maxJointSpeedDegS", params.get("max_joint_speed_deg_s")),
+            "maxJointSpeedDegS",
+            PIPER_JOINT_DEFAULT_SPEED_DEG_S,
+            PIPER_JOINT_MIN_SPEED_DEG_S,
+            PIPER_JOINT_MAX_SPEED_DEG_S,
+        )
+        gripper_effort = _bounded_float(
+            params.get("gripperEffort", params.get("gripper_effort")),
+            "gripperEffort",
+            PIPER_JOINT_DEFAULT_GRIPPER_EFFORT,
+            PIPER_JOINT_MIN_GRIPPER_EFFORT,
+            PIPER_JOINT_MAX_GRIPPER_EFFORT,
+        )
+        if not _blank(params.get("toleranceRad")):
+            tolerance_rad = _bounded_float(params.get("toleranceRad"), "toleranceRad", math.radians(PIPER_JOINT_DEFAULT_TOLERANCE_DEG), 0.0001, math.pi)
+            tolerance_deg = math.degrees(tolerance_rad)
+        else:
+            tolerance_deg = _bounded_float(
+                params.get("toleranceDeg"),
+                "toleranceDeg",
+                PIPER_JOINT_DEFAULT_TOLERANCE_DEG,
+                PIPER_JOINT_MIN_TOLERANCE_DEG,
+                PIPER_JOINT_MAX_TOLERANCE_DEG,
+            )
+            tolerance_rad = math.radians(tolerance_deg)
+        gripper_tolerance = _bounded_float(
+            params.get("gripperToleranceM"),
+            "gripperToleranceM",
+            PIPER_JOINT_DEFAULT_GRIPPER_TOLERANCE_M,
+            PIPER_JOINT_MIN_GRIPPER_TOLERANCE_M,
+            PIPER_JOINT_MAX_GRIPPER_TOLERANCE_M,
+        )
+        stable_sec = _bounded_float(
+            params.get("stableSec"),
+            "stableSec",
+            PIPER_JOINT_DEFAULT_STABLE_SEC,
+            0.0,
+            PIPER_JOINT_MAX_STABLE_SEC,
+        )
+        timeout_sec = _bounded_float(
+            params.get("timeoutSec"),
+            "timeoutSec",
+            PIPER_JOINT_DEFAULT_TIMEOUT_SEC,
+            PIPER_JOINT_MIN_TIMEOUT_SEC,
+            PIPER_JOINT_MAX_TIMEOUT_SEC,
+        )
+        payload = {
+            "max_joint_speed_deg_s": max_joint_speed,
+            "gripper_effort": gripper_effort,
+        }
+        for side, positions in targets.items():
+            payload[side] = {"positions": list(positions)}
+        return {
+            "side": "both" if sides == ["left", "right"] else sides[0],
+            "sides": sides,
+            "targets": targets,
+            "payload": payload,
+            "maxJointSpeedDegS": max_joint_speed,
+            "gripperEffort": gripper_effort,
+            "toleranceRad": tolerance_rad,
+            "toleranceDeg": tolerance_deg,
+            "gripperToleranceM": gripper_tolerance,
+            "stableSec": stable_sec,
+            "timeoutSec": timeout_sec,
+        }
+
+    @staticmethod
+    def _piper_joint_sides(params):
+        has_side_param = any(key in params for key in ("side", "arm", "arms", "targetSide"))
+        raw = params.get("side", params.get("arm", params.get("arms", params.get("targetSide", ""))))
+        if not has_side_param:
+            present = [side for side in ("left", "right") if StateMachineExecutor._piper_side_target_present(params, side)]
+            if present:
+                return present
+
+        value = str(raw or "both").strip().lower()
+        aliases = {
+            "left": "left",
+            "l": "left",
+            "左": "left",
+            "左臂": "left",
+            "right": "right",
+            "r": "right",
+            "右": "right",
+            "右臂": "right",
+            "both": "both",
+            "all": "both",
+            "双臂": "both",
+            "左右": "both",
+            "左右臂": "both",
+        }
+        normalized = aliases.get(value)
+        if normalized is None:
+            raise ValueError("side must be left, right, or both.")
+        return ["left", "right"] if normalized == "both" else [normalized]
+
+    @staticmethod
+    def _piper_side_target_present(params, side):
+        side_payload = params.get(side)
+        if isinstance(side_payload, dict) and any(key in side_payload for key in ("positions", "position", "joints")):
+            return True
+        if any(key in params for key in (f"{side}Positions", f"{side}Position", f"{side}Joints")):
+            return True
+        return any(key in params for key in StateMachineExecutor._piper_joint_field_keys(side, 1))
+
+    @staticmethod
+    def _piper_joint_positions(params, side):
+        side_payload = params.get(side)
+        if isinstance(side_payload, dict):
+            for key in ("positions", "position", "joints"):
+                if key in side_payload:
+                    return StateMachineExecutor._piper_position_list(side_payload[key], f"{side}.{key}")
+
+        for key in (f"{side}Positions", f"{side}Position", f"{side}Joints"):
+            if key in params:
+                return StateMachineExecutor._piper_position_list(params[key], key)
+
+        positions = []
+        for index in range(1, 7):
+            deg = StateMachineExecutor._piper_required_number(
+                params,
+                StateMachineExecutor._piper_joint_field_keys(side, index),
+                f"{side}Joint{index}Deg",
+            )
+            positions.append(math.radians(deg))
+        positions.append(
+            StateMachineExecutor._piper_required_number(
+                params,
+                StateMachineExecutor._piper_gripper_field_keys(side),
+                f"{side}GripperM",
+            )
+        )
+        return positions
+
+    @staticmethod
+    def _piper_position_list(values, field):
+        if not isinstance(values, (list, tuple)):
+            raise ValueError(f"{field} must be a list of 7 numbers.")
+        parsed = [_finite_float(value, f"{field}[{index}]") for index, value in enumerate(values)]
+        if len(parsed) != 7:
+            raise ValueError(f"{field} must contain exactly 7 numbers.")
+        return parsed
+
+    @staticmethod
+    def _piper_required_number(params, keys, field):
+        for key in keys:
+            if key in params:
+                return _finite_float(params.get(key), field)
+        raise ValueError(f"{field} is required.")
+
+    @staticmethod
+    def _piper_joint_field_keys(side, index):
+        return (
+            f"{side}Joint{index}Deg",
+            f"{side}J{index}Deg",
+            f"{side}_joint{index}_deg",
+            f"{side}_j{index}_deg",
+        )
+
+    @staticmethod
+    def _piper_gripper_field_keys(side):
+        return (
+            f"{side}GripperM",
+            f"{side}Gripper",
+            f"{side}_gripper_m",
+            f"{side}_gripper",
+        )
+
+    def _read_piper_joint_feedback(self, reader, sides):
+        snapshot = {}
+        for side in sides:
+            keys = WAIT_LEFT_JOINT_STATE_KEYS if side == "left" else WAIT_RIGHT_JOINT_STATE_KEYS
+            try:
+                key, result, positions = read_joint_state_candidate(
+                    reader,
+                    side,
+                    keys,
+                    timeout_sec=WAIT_JOINT_READ_WAIT_SEC,
+                    min_positions=7,
+                    accept_stale=False,
+                )
+            except Exception as exc:
+                raise ValueError(str(exc)) from exc
+            snapshot[side] = {
+                "key": key,
+                "topic": result.get("topic", ""),
+                "positions": [_finite_float(value, f"{side}.position[{index}]") for index, value in enumerate(positions[:7])],
+            }
+        return snapshot
+
+    @staticmethod
+    def _piper_joint_target_errors(config, feedback):
+        side_errors = {}
+        max_joint_error = 0.0
+        max_gripper_error = 0.0
+        within_tolerance = True
+        for side in config["sides"]:
+            target = config["targets"][side]
+            current = feedback[side]["positions"]
+            joint_errors = [abs(current[index] - target[index]) for index in range(6)]
+            gripper_error = abs(current[6] - target[6])
+            side_max_joint_error = max(joint_errors) if joint_errors else 0.0
+            side_within = side_max_joint_error <= config["toleranceRad"]
+            gripper_within = gripper_error <= config["gripperToleranceM"]
+            side_errors[side] = {
+                "maxJointErrorRad": side_max_joint_error,
+                "maxJointErrorDeg": math.degrees(side_max_joint_error),
+                "gripperErrorM": gripper_error,
+                "withinTolerance": side_within,
+                "gripperWithinTolerance": gripper_within,
+            }
+            max_joint_error = max(max_joint_error, side_max_joint_error)
+            max_gripper_error = max(max_gripper_error, gripper_error)
+            within_tolerance = within_tolerance and side_within
+        return {
+            "withinTolerance": within_tolerance,
+            "jointWithinTolerance": within_tolerance,
+            "gripperWithinTolerance": max_gripper_error <= config["gripperToleranceM"],
+            "maxJointErrorRad": max_joint_error,
+            "maxJointErrorDeg": math.degrees(max_joint_error),
+            "maxGripperErrorM": max_gripper_error,
+            "sideErrors": side_errors,
+        }
+
+    @staticmethod
+    def _piper_joint_status_data(
+        phase,
+        config=None,
+        publish_result=None,
+        hold_result=None,
+        feedback=None,
+        errors=None,
+        stable_elapsed=0.0,
+        elapsed=0.0,
+        last_feedback_error="",
+    ):
+        data = {
+            "phase": phase,
+            "stableElapsedSec": stable_elapsed,
+            "elapsedSec": elapsed,
+        }
+        if config:
+            data.update(
+                {
+                    "side": config["side"],
+                    "sides": list(config["sides"]),
+                    "targets": copy.deepcopy(config["targets"]),
+                    "maxJointSpeedDegS": config["maxJointSpeedDegS"],
+                    "gripperEffort": config["gripperEffort"],
+                    "toleranceRad": config["toleranceRad"],
+                    "toleranceDeg": config["toleranceDeg"],
+                    "gripperToleranceM": config["gripperToleranceM"],
+                    "stableSec": config["stableSec"],
+                    "timeoutSec": config["timeoutSec"],
+                }
+            )
+        if publish_result:
+            data["publishCode"] = publish_result.get("code", "")
+            data["topics"] = copy.deepcopy(publish_result.get("topics", []))
+            data["publishedAt"] = publish_result.get("publishedAt", "")
+        if hold_result:
+            data["holdCode"] = hold_result.get("code", "")
+        if feedback:
+            data["feedback"] = copy.deepcopy(feedback)
+        if errors:
+            data.update(copy.deepcopy(errors))
+        if last_feedback_error:
+            data["lastFeedbackError"] = last_feedback_error
+        return data
+
+    def _execute_inference(self, node):
+        """Run remote inference closed-loop until the remote reports success."""
+        params = node.get("params") or {}
+        try:
+            config = self._inference_config(params)
+        except ValueError as exc:
+            detail = f"Inference params invalid: {exc}"
+            self._set_task_status(node, "failed", detail, self._inference_status_data("failed"))
+            return "failed", detail
+
+        manager = get_inference_manager()
+        self._set_task_status(
+            node,
+            "running",
+            f"Connecting to remote inference: {config['remoteUrl']}.",
+            self._inference_status_data("connecting", config),
+        )
+        connect_result = manager.connect(config["remoteUrl"])
+        if not connect_result.get("ok"):
+            detail = connect_result.get("detail") or connect_result.get("code") or "Inference connect failed."
+            self._set_task_status(node, "failed", detail, self._inference_status_data("failed", config, connect_result=connect_result))
+            return "failed", detail
+
+        if config["autoEnablePiper"]:
+            outcome, detail = self._enable_piper_for_inference(node, config)
+            if outcome != "completed":
+                return outcome, detail
+
+        round_index = 0
+        total_executed = 0
+        while not self._stop_event.is_set():
+            round_index += 1
+            request_payload = {
+                "prompt": config["prompt"],
+                "chassisLimits": copy.deepcopy(config["chassisLimits"]),
+            }
+            self._set_task_status(
+                node,
+                "running",
+                f"Requesting inference chunk #{round_index}.",
+                self._inference_status_data("requesting", config, round_index=round_index, total_executed=total_executed),
+            )
+            request_result = manager.request_chunk(request_payload)
+            request_data = self._inference_status_data(
+                "success" if request_result.get("isSuccess") is True else "chunk_ready",
+                config,
+                round_index=round_index,
+                total_executed=total_executed,
+                request_result=request_result,
+            )
+            if not request_result.get("ok"):
+                detail = request_result.get("detail") or request_result.get("code") or "Inference chunk request failed."
+                self._set_task_status(node, "failed", detail, self._inference_status_data("failed", config, round_index, total_executed, request_result))
+                return "failed", detail
+            if request_result.get("isSuccess") is True:
+                detail = "Remote inference reported task success."
+                self._set_task_status(node, "completed", detail, request_data)
+                return "completed", detail
+            if self._stop_event.is_set():
+                break
+
+            execute_payload = {
+                "steps": config["steps"],
+                "frequencyHz": config["frequencyHz"],
+                "maxJointSpeedDegS": config["maxJointSpeedDegS"],
+            }
+            self._set_task_status(
+                node,
+                "running",
+                f"Executing inference chunk #{round_index}.",
+                self._inference_status_data(
+                    "executing",
+                    config,
+                    round_index=round_index,
+                    total_executed=total_executed,
+                    request_result=request_result,
+                ),
+            )
+            execute_result = manager.execute_chunk(execute_payload)
+            total_executed += int(execute_result.get("executedSteps") or 0)
+            execute_data = self._inference_status_data(
+                "executed",
+                config,
+                round_index=round_index,
+                total_executed=total_executed,
+                request_result=request_result,
+                execute_result=execute_result,
+            )
+            if not execute_result.get("ok"):
+                detail = execute_result.get("detail") or execute_result.get("code") or "Inference chunk execution failed."
+                if self._stop_event.is_set() or execute_result.get("code") == "INFER-STOPPED":
+                    self._set_task_status(node, "stopped", detail, execute_data)
+                    return "stopped", detail
+                self._set_task_status(node, "failed", detail, self._inference_status_data("failed", config, round_index, total_executed, request_result, execute_result))
+                return "failed", detail
+
+            self._set_task_status(node, "running", f"Inference round #{round_index} executed.", execute_data)
+
+        manager.stop(reason="state_machine")
+        self._set_task_status(
+            node,
+            "stopped",
+            "State machine run stopped.",
+            self._inference_status_data("stopped", config, round_index=round_index, total_executed=total_executed),
+        )
+        return "stopped", "State machine run stopped."
+
+    def _enable_piper_for_inference(self, node, config):
+        writer = get_ros_writer()
+        result = None
+        for index in range(config["enableRepeat"]):
+            if self._stop_event.is_set():
+                self._set_task_status(
+                    node,
+                    "stopped",
+                    "State machine run stopped.",
+                    self._inference_status_data("stopped", config, enable_result=result),
+                )
+                return "stopped", "State machine run stopped."
+            detail = f"Enabling Piper for inference ({index + 1}/{config['enableRepeat']})."
+            self._set_task_status(
+                node,
+                "running",
+                detail,
+                self._inference_status_data("enabling_piper", config, enable_result=result),
+            )
+            result = writer.publish(INFERENCE_PIPER_ENABLE_ACTION_KEY, {"enabled": True})
+            if not result.get("ok"):
+                detail = result.get("detail") or result.get("code") or "Piper enable failed."
+                self._set_task_status(node, "failed", detail, self._inference_status_data("failed", config, enable_result=result))
+                return "failed", detail
+            if index < config["enableRepeat"] - 1 and self._stop_event.wait(config["enableIntervalSec"]):
+                self._set_task_status(
+                    node,
+                    "stopped",
+                    "State machine run stopped.",
+                    self._inference_status_data("stopped", config, enable_result=result),
+                )
+                return "stopped", "State machine run stopped."
+
+        self._set_task_status(
+            node,
+            "running",
+            "Piper enabled for inference.",
+            self._inference_status_data("piper_enabled", config, enable_result=result),
+        )
+        return "completed", "Piper enabled for inference."
+
+    @staticmethod
+    def _inference_config(params):
+        remote_url = str(params.get("remoteUrl") or params.get("url") or "").strip()
+        if not remote_url:
+            raise ValueError("remoteUrl is required.")
+        prompt = str(params.get("prompt") or "")
+        steps = _bounded_int(params.get("steps"), "steps", INFERENCE_DEFAULT_STEPS, INFERENCE_MIN_STEPS, INFERENCE_MAX_STEPS)
+        frequency_hz = _bounded_float(
+            params.get("frequencyHz"),
+            "frequencyHz",
+            INFERENCE_DEFAULT_FREQUENCY_HZ,
+            INFERENCE_MIN_FREQUENCY_HZ,
+            INFERENCE_MAX_FREQUENCY_HZ,
+        )
+        max_joint_speed = _bounded_float(
+            params.get("maxJointSpeedDegS"),
+            "maxJointSpeedDegS",
+            INFERENCE_DEFAULT_JOINT_SPEED_DEG_S,
+            INFERENCE_MIN_JOINT_SPEED_DEG_S,
+            INFERENCE_MAX_JOINT_SPEED_DEG_S,
+        )
+        chassis_limits = {}
+        for key, default in INFERENCE_DEFAULT_CHASSIS_LIMITS.items():
+            chassis_limits[key] = _bounded_float(params.get(key), key, default, 0.0, 10.0)
+        enable_repeat = _bounded_int(params.get("enableRepeat"), "enableRepeat", INFERENCE_PIPER_ENABLE_REPEAT, 1, 10)
+        enable_interval_ms = _bounded_float(
+            params.get("enableIntervalMs"),
+            "enableIntervalMs",
+            INFERENCE_PIPER_ENABLE_INTERVAL_SEC * 1000.0,
+            0.0,
+            2000.0,
+        )
+        return {
+            "remoteUrl": remote_url,
+            "prompt": prompt,
+            "steps": steps,
+            "frequencyHz": frequency_hz,
+            "maxJointSpeedDegS": max_joint_speed,
+            "chassisLimits": chassis_limits,
+            "autoEnablePiper": _bool_param(params.get("autoEnablePiper"), True),
+            "enableRepeat": enable_repeat,
+            "enableIntervalSec": enable_interval_ms / 1000.0,
+        }
+
+    @staticmethod
+    def _inference_status_data(
+        phase,
+        config=None,
+        round_index=0,
+        total_executed=0,
+        request_result=None,
+        execute_result=None,
+        connect_result=None,
+        enable_result=None,
+    ):
+        data = {
+            "phase": phase,
+            "round": round_index,
+            "totalExecutedSteps": total_executed,
+        }
+        if config:
+            data.update(
+                {
+                    "remoteUrl": config["remoteUrl"],
+                    "prompt": config["prompt"],
+                    "steps": config["steps"],
+                    "frequencyHz": config["frequencyHz"],
+                    "maxJointSpeedDegS": config["maxJointSpeedDegS"],
+                    "chassisLimits": copy.deepcopy(config["chassisLimits"]),
+                    "autoEnablePiper": config["autoEnablePiper"],
+                }
+            )
+        if connect_result:
+            data["connectCode"] = connect_result.get("code", "")
+        if enable_result:
+            data["enableCode"] = enable_result.get("code", "")
+            data["enableTopic"] = enable_result.get("topic", "")
+            data["enablePublishedAt"] = enable_result.get("publishedAt", "")
+        if request_result:
+            data.update(
+                {
+                    "requestCode": request_result.get("code", ""),
+                    "isSuccess": request_result.get("isSuccess") is True,
+                    "chunkId": request_result.get("chunkId"),
+                    "chunkSteps": request_result.get("chunkSteps", 0),
+                    "clipped": request_result.get("clipped", 0),
+                    "chunkTiming": copy.deepcopy(request_result.get("chunkTiming")),
+                }
+            )
+        if execute_result:
+            data.update(
+                {
+                    "executeCode": execute_result.get("code", ""),
+                    "executedSteps": execute_result.get("executedSteps", 0),
+                    "requestedSteps": execute_result.get("requestedSteps", 0),
+                    "executionTiming": copy.deepcopy(execute_result.get("executionTiming")),
+                }
+            )
+        return data
 
     def _execute_grasp_inference(self, params):
         """Remote inference grasp; left/right targets + prompt."""
