@@ -83,6 +83,36 @@ def generate_launch_description():
         }],
     )
 
+    piper_left_action_mirror_node = Node(
+        package='piper',
+        executable='piper_action_mirror',
+        name='piper_left_action_mirror',
+        output='screen',
+        parameters=[{
+            'input_topic': '/joint_states_gripper_l_raw',
+            'feedback_topic': '/joint_states_single_l',
+            'target_topic': '/joint_states_gripper_l',
+            'hold_topic': '/joint_states_gripper_l/hold',
+            'output_topic': '/master/joint_left',
+            'publish_rate_hz': ParameterValue(LaunchConfiguration('smoother_publish_rate_hz'), value_type=float),
+        }],
+    )
+
+    piper_right_action_mirror_node = Node(
+        package='piper',
+        executable='piper_action_mirror',
+        name='piper_right_action_mirror',
+        output='screen',
+        parameters=[{
+            'input_topic': '/joint_states_gripper_r_raw',
+            'feedback_topic': '/joint_states_single_r',
+            'target_topic': '/joint_states_gripper_r',
+            'hold_topic': '/joint_states_gripper_r/hold',
+            'output_topic': '/master/joint_right',
+            'publish_rate_hz': ParameterValue(LaunchConfiguration('smoother_publish_rate_hz'), value_type=float),
+        }],
+    )
+
     # Define the node
     piper_left_node = Node(
         package='piper',
@@ -96,6 +126,7 @@ def generate_launch_description():
             'girpper_exist': LaunchConfiguration('girpper_exist'),
             'piper_name': 'left',
             'joint_speed_percent': ParameterValue(LaunchConfiguration('joint_speed_percent'), value_type=int),
+            'publish_joint_control_echo': False,
         }],
         remappings=[
             ('pos_cmd', '/pos_left_cmd'),
@@ -116,6 +147,7 @@ def generate_launch_description():
             'girpper_exist': LaunchConfiguration('girpper_exist'),
             'piper_name': 'right',
             'joint_speed_percent': ParameterValue(LaunchConfiguration('joint_speed_percent'), value_type=int),
+            'publish_joint_control_echo': False,
         }],
         remappings=[
             ('pos_cmd', '/pos_right_cmd'),
@@ -136,6 +168,8 @@ def generate_launch_description():
         smoother_publish_rate_hz_arg,
         piper_left_smoother_node,
         piper_right_smoother_node,
+        piper_left_action_mirror_node,
+        piper_right_action_mirror_node,
         piper_left_node,
         piper_right_node
     ])

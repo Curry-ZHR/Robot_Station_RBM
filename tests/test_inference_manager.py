@@ -86,7 +86,7 @@ class Recorder:
         return {"ok": True}
 
 
-def _manager(message, recorder, snapshot=None, action_logger=None):
+def _manager(message, recorder, snapshot=None, action_logger=None, request_settle_sec=0.0):
     if action_logger is None:
         action_logger = InferenceActionLogger(enabled=False)
     return InferenceManager(
@@ -99,6 +99,7 @@ def _manager(message, recorder, snapshot=None, action_logger=None):
         observation_builder=lambda prompt: {"type": "observation", "prompt": prompt},
         arm_snapshot_reader=lambda: snapshot if snapshot is not None else {"left": None, "right": None},
         action_logger=action_logger,
+        request_settle_sec=request_settle_sec,
     )
 
 
@@ -127,6 +128,39 @@ def test_connect_request_execute_flow():
     # max_joint_speed forwarded.
     assert recorder.joint_calls[0]["max_joint_speed_deg_s"] == 25
     assert recorder.joint_calls[0]["left"]["positions"][0] == 0.0
+
+
+def test_request_waits_after_recent_execution_before_observation():
+    recorder = Recorder()
+    observation_times = []
+
+    def build_observation(prompt):
+        observation_times.append(time.perf_counter())
+        return {"type": "observation", "prompt": prompt}
+
+    manager = InferenceManager(
+        session=FakeSession(_chunk_message(1)),
+        joint_publisher=recorder.joint,
+        chassis_publisher=recorder.chassis,
+        chassis_stopper=recorder.chassis_stop,
+        lift_mover=recorder.lift,
+        lift_stopper=recorder.lift_stop,
+        observation_builder=build_observation,
+        arm_snapshot_reader=lambda: {"left": None, "right": None},
+        action_logger=InferenceActionLogger(enabled=False),
+        request_settle_sec=0.1,
+    )
+
+    assert manager.connect("ws://localhost:1234/infer")["ok"]
+    assert manager.request_chunk({"prompt": "first"})["ok"]
+    assert manager.execute_chunk({"steps": 1, "frequencyHz": 30})["ok"]
+
+    before_request = time.perf_counter()
+    req = manager.request_chunk({"prompt": "second"})
+
+    assert req["ok"]
+    assert observation_times[-1] - before_request >= 0.05
+    assert req["chunkTiming"]["settleWaitMs"] >= 50.0
 
 
 def test_success_message_completes_without_chunk():

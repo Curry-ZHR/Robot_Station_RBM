@@ -40,6 +40,7 @@ MIN_JOINT_SPEED_DEG_S = 0.5
 MAX_JOINT_SPEED_DEG_S = 30.0
 DEFAULT_JOINT_SPEED_DEG_S = 20.0
 LIFT_MIN_DELTA_M = float(os.environ.get("INFERENCE_LIFT_MIN_DELTA_M", "0.005"))
+REQUEST_SETTLE_SEC = max(0.0, float(os.environ.get("INFERENCE_REQUEST_SETTLE_SEC", "0.5")))
 
 
 def _result(ok, code, detail, **extra):
@@ -109,6 +110,7 @@ class InferenceManager:
         observation_builder=build_observation,
         arm_snapshot_reader=read_current_arm_positions,
         action_logger=None,
+        request_settle_sec=None,
     ):
         self._session = session or RemoteInferenceSession()
         self._joint_publisher = joint_publisher
@@ -119,6 +121,9 @@ class InferenceManager:
         self._observation_builder = observation_builder
         self._arm_snapshot_reader = arm_snapshot_reader
         self._action_logger = action_logger if action_logger is not None else InferenceActionLogger()
+        self._request_settle_sec = (
+            REQUEST_SETTLE_SEC if request_settle_sec is None else max(0.0, float(request_settle_sec))
+        )
 
         self._state_lock = threading.RLock()
         self._op_lock = threading.Lock()
@@ -153,6 +158,21 @@ class InferenceManager:
     def _reset_chunk_ids(self):
         with self._state_lock:
             self._chunk_seq = 0
+
+    def _wait_for_post_execution_settle(self):
+        settle_sec = self._request_settle_sec
+        if settle_sec <= 0:
+            return 0.0
+        with self._state_lock:
+            completed_at = self._last_execution_completed_at
+        if completed_at is None:
+            return 0.0
+        remaining = settle_sec - (time.perf_counter() - completed_at)
+        if remaining <= 0:
+            return 0.0
+        if self._stop_event.wait(remaining):
+            return None
+        return remaining
 
     def status(self):
         with self._state_lock:
@@ -207,7 +227,11 @@ class InferenceManager:
             self._stop_event.clear()
             self._set(status="requesting", prompt=str(prompt or ""))
             request_started = time.perf_counter()
-            observation_started = request_started
+            settle_wait_sec = self._wait_for_post_execution_settle()
+            if settle_wait_sec is None:
+                self._set(status="stopped", last_error=None)
+                return _result(False, "INFER-STOPPED", "Inference request stopped before observation.")
+            observation_started = time.perf_counter()
             try:
                 observation = self._observation_builder(prompt)
             except ObservationBuildError as exc:
@@ -226,6 +250,7 @@ class InferenceManager:
 
             exchange_timing = getattr(self._session, "last_exchange_timing", None) or {}
             chunk_timing = {
+                "settleWaitMs": settle_wait_sec * 1000.0,
                 "observationMs": observation_ms,
                 "sendMs": exchange_timing.get("sendMs"),
                 "receiveMs": exchange_timing.get("receiveMs"),

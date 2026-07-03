@@ -2,11 +2,14 @@ package.xml
 setup.cfg
 setup.py
 launch/start_double_piper.launch.py
+launch/start_remote_master_piper.launch.py
 launch/start_single_piper.launch.py
 launch/start_single_piper_rviz.launch.py
 launch/start_two_piper.launch.py
 piper/__init__.py
+piper/action_mirror.py
 piper/joint_smoother.py
+piper/piper_action_mirror_node.py
 piper/piper_ctrl_single_node.py
 piper/piper_joint_smoother_node.py
 piper.egg-info/PKG-INFO

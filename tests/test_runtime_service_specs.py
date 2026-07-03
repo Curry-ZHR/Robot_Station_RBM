@@ -145,6 +145,18 @@ def test_piper_remote_service_launches_master_topic_control(monkeypatch):
     assert "piper_joint_smoother" not in launch_text
 
 
+def test_piper_double_launches_action_mirror_and_disables_echo():
+    launch_file = Path(__file__).resolve().parents[1] / "ros_packages/control/piper/piper/launch/start_double_piper.launch.py"
+    launch_text = launch_file.read_text(encoding="utf-8")
+
+    assert "executable='piper_action_mirror'" in launch_text
+    assert "'input_topic': '/joint_states_gripper_l_raw'" in launch_text
+    assert "'input_topic': '/joint_states_gripper_r_raw'" in launch_text
+    assert "'output_topic': '/master/joint_left'" in launch_text
+    assert "'output_topic': '/master/joint_right'" in launch_text
+    assert launch_text.count("'publish_joint_control_echo': False") >= 2
+
+
 def test_managed_service_external_status_uses_status_patterns(monkeypatch):
     spec = ManagedServiceSpec(
         key="example",

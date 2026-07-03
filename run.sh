@@ -21,7 +21,9 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 ROS_SETUP="/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
+PIPER_WS="${ROOT_DIR}/ros_packages/control/piper"
 PIPER_SETUP="${ROOT_DIR}/ros_packages/control/piper/install/setup.bash"
+PIPER_ACTION_MIRROR="${ROOT_DIR}/ros_packages/control/piper/install/piper/lib/piper/piper_action_mirror"
 LIFTING_SETUP="${ROOT_DIR}/ros_packages/control/lifting/install/setup.bash"
 CHASSIS_SETUP="${ROOT_DIR}/ros_packages/control/chassis/install/setup.bash"
 CAMERA_SETUP="${ROOT_DIR}/ros_packages/sensors/camera/orbbec/install/setup.bash"
@@ -82,6 +84,41 @@ configure_cuda_runtime() {
 
 configure_cuda_runtime
 
+piper_needs_build() {
+  if [[ "${ROBOT_STATION_SKIP_PIPER_BUILD:-0}" == "1" ]]; then
+    return 1
+  fi
+  if [[ ! -x "${PIPER_ACTION_MIRROR}" ]]; then
+    return 0
+  fi
+
+  local source_file
+  for source_file in \
+    "${PIPER_WS}/piper/setup.py" \
+    "${PIPER_WS}/piper/piper/action_mirror.py" \
+    "${PIPER_WS}/piper/piper/piper_action_mirror_node.py" \
+    "${PIPER_WS}/piper/launch/start_double_piper.launch.py"
+  do
+    if [[ -e "${source_file}" && "${source_file}" -nt "${PIPER_ACTION_MIRROR}" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+ensure_piper_build() {
+  if ! piper_needs_build; then
+    return
+  fi
+  if ! command -v colcon >/dev/null 2>&1; then
+    echo "piper package needs rebuild, but colcon is not available"
+    exit 1
+  fi
+  echo "Building piper ROS package..."
+  (cd "${PIPER_WS}" && colcon build --symlink-install --packages-select piper)
+}
+
 cleanup_stale_localizers() {
   local pids
   pids="$(
@@ -110,6 +147,8 @@ cleanup_stale_localizers() {
 if [[ -f "${ROS_SETUP}" ]]; then
   source_setup "${ROS_SETUP}"
 fi
+
+ensure_piper_build
 
 if [[ -f "${PIPER_SETUP}" ]]; then
   source_setup "${PIPER_SETUP}"
