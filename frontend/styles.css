@@ -3238,7 +3238,7 @@ body.robot-modal-open {
 
 .state-machine-library-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 6px;
   align-items: stretch;
 }
@@ -3277,6 +3277,7 @@ body.robot-modal-open {
   white-space: nowrap;
 }
 
+.state-machine-library-edit,
 .state-machine-library-remove {
   width: 26px;
   border: 1px solid var(--line);
@@ -3285,6 +3286,12 @@ body.robot-modal-open {
   color: var(--muted);
   font-size: 14px;
   line-height: 1;
+}
+
+.state-machine-library-edit:hover {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #2563eb;
 }
 
 .state-machine-library-remove:hover {

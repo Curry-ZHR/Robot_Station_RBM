@@ -2467,8 +2467,9 @@ function openStateMachineModal(config) {
   const modal = $("#stateMachineModal");
   if (!modal) return;
   const meta = stateMachineTaskMeta(config.taskType);
+  const modalTitle = config.mode === "edit-node" ? "编辑状态" : config.mode === "edit-library" ? "编辑已保存状态" : "新建状态";
   setText("#stateMachineModalKicker", `${meta.label} / ${meta.summary}`);
-  setText("#stateMachineModalTitle", config.mode === "edit-node" ? "编辑状态" : "新建状态");
+  setText("#stateMachineModalTitle", modalTitle);
   renderStateMachineModalForm();
   modal.hidden = false;
   window.setTimeout(() => $("#stateMachineModalForm [data-sm-modal-field='__title']")?.focus(), 0);
@@ -2599,11 +2600,13 @@ async function submitStateMachineModal() {
   }
 
   try {
-    const payload = await stateMachineApiPost("states/save", {
+    const savePayload = {
       taskType: config.taskType,
       title: values.title,
       params,
-    });
+    };
+    if (config.mode === "edit-library" && config.libraryId) savePayload.id = config.libraryId;
+    const payload = await stateMachineApiPost("states/save", savePayload);
     if (payload.state) {
       const existingIndex = state.stateMachine.library.findIndex((entry) => entry.id === payload.state.id);
       if (existingIndex >= 0) {
@@ -2612,12 +2615,24 @@ async function submitStateMachineModal() {
         state.stateMachine.library.push(payload.state);
       }
     }
-    addLog("状态机", `状态已保存到状态库：${values.title}`);
+    addLog("状态机", `${config.mode === "edit-library" ? "状态库已更新" : "状态已保存到状态库"}：${values.title}`);
     closeStateMachineModal();
     renderStateMachine();
   } catch (error) {
     addLog("状态机", `状态保存失败：${error.message}`);
   }
+}
+
+function openStateMachineLibraryEditor(libraryId) {
+  const entry = stateMachineLibraryById(libraryId);
+  if (!entry || entry.builtIn) return;
+  openStateMachineModal({
+    mode: "edit-library",
+    libraryId: entry.id,
+    taskType: entry.taskType,
+    title: entry.title,
+    params: cloneStateMachineValue(entry.params || {}),
+  });
 }
 
 async function deleteStateMachineLibraryEntry(libraryId) {
@@ -2650,7 +2665,14 @@ function renderStateMachineTaskLibrary() {
                 <strong>${escapeHtml(entry.title)}</strong>
                 <span>${escapeHtml(stateMachineLibrarySummary(entry))}</span>
               </button>
-              ${entry.builtIn ? "" : `<button type="button" class="state-machine-library-remove" data-sm-library-remove="${escapeHtml(entry.id)}" title="从状态库删除" aria-label="从状态库删除">×</button>`}
+              ${
+                entry.builtIn
+                  ? ""
+                  : `
+                    <button type="button" class="state-machine-library-edit" data-sm-library-edit="${escapeHtml(entry.id)}" title="编辑已保存状态" aria-label="编辑已保存状态">✎</button>
+                    <button type="button" class="state-machine-library-remove" data-sm-library-remove="${escapeHtml(entry.id)}" title="从状态库删除" aria-label="从状态库删除">×</button>
+                  `
+              }
             </div>
           `,
         )
@@ -3003,6 +3025,11 @@ function handleStateMachineLibraryClick(event) {
       title: "",
       params: cloneStateMachineValue(stateMachineTaskTypeDefaults[taskType] || {}),
     });
+    return;
+  }
+  const editButton = event.target.closest("[data-sm-library-edit]");
+  if (editButton) {
+    openStateMachineLibraryEditor(editButton.dataset.smLibraryEdit);
     return;
   }
   const removeButton = event.target.closest("[data-sm-library-remove]");
