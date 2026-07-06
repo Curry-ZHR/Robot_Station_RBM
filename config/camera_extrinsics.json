@@ -1,0 +1,96 @@
+{
+  "enabled": false,
+  "note": "Replace the identity values with calibrated extrinsics, then set enabled to true and restart camera_extrinsics.",
+  "transforms": [
+    {
+      "name": "left_wrist_to_rgb_camera_l",
+      "parentFrame": "left/link6",
+      "childFrame": "rgb_camera_l_link",
+      "translation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "rotation": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "name": "rgb_camera_l_to_driver_camera_l",
+      "parentFrame": "rgb_camera_l_link",
+      "childFrame": "camera_l_link",
+      "translation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "rotation": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "name": "right_wrist_to_rgb_camera_r",
+      "parentFrame": "right/link6",
+      "childFrame": "rgb_camera_r_link",
+      "translation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "rotation": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "name": "rgb_camera_r_to_driver_camera_r",
+      "parentFrame": "rgb_camera_r_link",
+      "childFrame": "camera_r_link",
+      "translation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "rotation": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "name": "front_mount_to_rgb_camera_f",
+      "parentFrame": "front_camera_link",
+      "childFrame": "rgb_camera_f_link",
+      "translation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "rotation": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    },
+    {
+      "name": "rgb_camera_f_to_driver_camera_f",
+      "parentFrame": "rgb_camera_f_link",
+      "childFrame": "camera_f_link",
+      "translation": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "rotation": {
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0
+      }
+    }
+  ]
+}

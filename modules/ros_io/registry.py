@@ -193,6 +193,30 @@ READ_TOPICS = {
         stale_after_sec=0.2,
         description="Latest web lifting target mirrored for data collection as JSON.",
     ),
+    "camera_f_color_camera_info": TopicReadSpec(
+        key="camera_f_color_camera_info",
+        name="Front RGB camera info",
+        topic="/camera_f/color/camera_info",
+        message_type="sensor_msgs/msg/CameraInfo",
+        stale_after_sec=5.0,
+        description="Intrinsic calibration for the front Orbbec RGB camera.",
+    ),
+    "camera_l_color_camera_info": TopicReadSpec(
+        key="camera_l_color_camera_info",
+        name="Left RGB camera info",
+        topic="/camera_l/color/camera_info",
+        message_type="sensor_msgs/msg/CameraInfo",
+        stale_after_sec=5.0,
+        description="Intrinsic calibration for the left Orbbec RGB camera.",
+    ),
+    "camera_r_color_camera_info": TopicReadSpec(
+        key="camera_r_color_camera_info",
+        name="Right RGB camera info",
+        topic="/camera_r/color/camera_info",
+        message_type="sensor_msgs/msg/CameraInfo",
+        stale_after_sec=5.0,
+        description="Intrinsic calibration for the right Orbbec RGB camera.",
+    ),
 }
 
 

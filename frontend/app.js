@@ -89,6 +89,16 @@ const state = {
     animationFrame: null,
     resizeObserver: null,
   },
+  cameraCalibration: {
+    projectionBusy: false,
+    sampleBusyCamera: "",
+    statusLoading: false,
+    statusPayload: null,
+    statusError: "",
+    configDirty: false,
+    configSaving: false,
+    serviceBusy: false,
+  },
   playback: {
     running: false,
     status: "idle",
@@ -1489,6 +1499,9 @@ function showView(view) {
     renderStateMachine();
     refreshStateMachineLibrary({ silent: true });
     refreshStateMachineGraphs({ silent: true });
+  }
+  if (view === "camera-calibration") {
+    refreshCameraCalibrationStatus({ silent: true });
   }
   if (view === "robot-view") {
     fetchRobotModels({ silent: true });
@@ -11850,6 +11863,651 @@ function renderLidarCloudStatus() {
   }
 }
 
+const cameraCalibrationServiceLabels = {
+  running: "运行中",
+  external: "外部运行",
+  starting: "启动中",
+  stopping: "停止中",
+  stopped: "已停止",
+  failed: "失败",
+  error: "异常",
+  unavailable: "未注册",
+  unknown: "未知",
+};
+
+function cameraCalibrationPayload() {
+  return state.cameraCalibration.statusPayload || null;
+}
+
+function cameraCalibrationConfig(payload = cameraCalibrationPayload()) {
+  return payload?.extrinsics?.config || null;
+}
+
+function cameraCalibrationTransforms(config = cameraCalibrationConfig()) {
+  return Array.isArray(config?.transforms) ? config.transforms : [];
+}
+
+function cameraCalibrationSampling(payload = cameraCalibrationPayload()) {
+  return payload?.sampling || null;
+}
+
+function cameraCalibrationSamples(payload = cameraCalibrationPayload()) {
+  const samples = cameraCalibrationSampling(payload)?.samples;
+  return Array.isArray(samples) ? samples : [];
+}
+
+function cameraCalibrationPerCameraSamples(payload = cameraCalibrationPayload()) {
+  const perCamera = cameraCalibrationSampling(payload)?.perCamera;
+  return perCamera && typeof perCamera === "object" ? perCamera : {};
+}
+
+function formatCameraCalibrationConfig(config) {
+  const fallback = { enabled: false, transforms: [] };
+  const serializable = config ? JSON.parse(JSON.stringify(config)) : fallback;
+  delete serializable.path;
+  return JSON.stringify(serializable, null, 2);
+}
+
+function cameraCalibrationDependenciesReady(payload = cameraCalibrationPayload()) {
+  const dependencies = Array.isArray(payload?.dependencies) ? payload.dependencies : [];
+  return dependencies.every((item) => !item.required || item.available);
+}
+
+function cameraCalibrationService(payload = cameraCalibrationPayload()) {
+  return payload?.extrinsics?.service || null;
+}
+
+function cameraCalibrationServiceStatus(payload = cameraCalibrationPayload()) {
+  const service = cameraCalibrationService(payload);
+  if (service?.status) return service.status;
+  if (payload?.extrinsics?.serviceAvailable) return "unknown";
+  return "unavailable";
+}
+
+function cameraCalibrationStatusSummary(payload = cameraCalibrationPayload()) {
+  if (state.cameraCalibration.statusLoading && !payload) return { label: "读取中", level: "idle" };
+  if (!payload) {
+    return state.cameraCalibration.statusError
+      ? { label: "读取失败", level: "danger" }
+      : { label: "未读取", level: "idle" };
+  }
+  if (!payload.ok) return { label: "配置异常", level: "danger" };
+  if (!cameraCalibrationDependenciesReady(payload)) return { label: "依赖缺失", level: "danger" };
+
+  const config = cameraCalibrationConfig(payload);
+  const transforms = cameraCalibrationTransforms(config);
+  const cameras = Array.isArray(payload?.extrinsics?.cameras) ? payload.extrinsics.cameras : [];
+  const allConfigured = cameras.length > 0 && cameras.every((camera) => camera.configured && camera.bridgeConfigured);
+  if (!config?.enabled) return { label: "未发布", level: "warn" };
+  if (!transforms.length || !allConfigured) return { label: "外参缺失", level: "warn" };
+
+  const serviceStatus = cameraCalibrationServiceStatus(payload);
+  if (serviceStatus === "running" || serviceStatus === "external") return { label: "TF 发布中", level: "ok" };
+  if (serviceStatus === "starting" || serviceStatus === "stopping") {
+    return { label: cameraCalibrationServiceLabels[serviceStatus], level: "warn" };
+  }
+  if (serviceStatus === "failed" || serviceStatus === "error") return { label: "服务异常", level: "danger" };
+  return { label: "待启动", level: "warn" };
+}
+
+function cameraCalibrationInitial(cameraKey) {
+  return String(cameraKey || "?").replace(/^camera_/, "").slice(0, 1).toUpperCase() || "?";
+}
+
+function readCameraCalibrationBoard() {
+  const typeText = $("#calibrationBoardType")?.value || "Checkerboard";
+  const normalizedType = String(typeText).toLowerCase().includes("charuco")
+    ? "charuco"
+    : String(typeText).toLowerCase().includes("april")
+      ? "apriltag-grid"
+      : "checkerboard";
+  return {
+    type: normalizedType,
+    columns: Number($("#calibrationBoardColumns")?.value || 11),
+    rows: Number($("#calibrationBoardRows")?.value || 8),
+    squareSizeMm: Number($("#calibrationBoardSquareSize")?.value || 3.0),
+    tagSizeMm: Number($("#calibrationBoardTagSize")?.value || 0),
+    dictionary: $("#calibrationBoardDictionary")?.value || "DICT_4X4_50",
+  };
+}
+
+function formatCalibrationSampleMetric(value, suffix = "") {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "--";
+  return `${number.toFixed(number >= 10 ? 0 : 2)}${suffix}`;
+}
+
+function formatCalibrationAge(ageMs) {
+  const number = Number(ageMs);
+  if (!Number.isFinite(number)) return "--";
+  return number < 1000 ? `${Math.round(number)} ms` : `${(number / 1000).toFixed(1)} s`;
+}
+
+function renderCameraCalibrationCameraList(cameras, payload = cameraCalibrationPayload()) {
+  const list = $("#calibrationCameraList");
+  if (!list) return;
+  const items = Array.isArray(cameras) ? cameras : [];
+  if (!items.length) {
+    list.innerHTML = `<section class="calibration-camera-card is-missing"><p class="calibration-projection-result">后端暂未返回相机标定目标。</p></section>`;
+    return;
+  }
+  const perCamera = cameraCalibrationPerCameraSamples(payload);
+  const dependenciesReady = cameraCalibrationDependenciesReady(payload);
+  list.innerHTML = items.map((camera) => {
+    const ready = camera.configured && camera.bridgeConfigured;
+    const partial = camera.configured || camera.bridgeConfigured;
+    const badge = ready ? "已配置" : partial ? "缺桥接" : "未配置";
+    const sampleStats = perCamera[camera.camera] || {};
+    const sampleCount = Number(sampleStats.count) || 0;
+    const targetCount = Number(sampleStats.targetCount || cameraCalibrationSampling(payload)?.targetCount || 24) || 24;
+    const sampleLevel = sampleCount >= targetCount ? "ok" : sampleCount > 0 ? "warn" : "idle";
+    const sampleBusy = state.cameraCalibration.sampleBusyCamera === camera.camera;
+    const canSample = Boolean(payload?.ok && dependenciesReady && !state.cameraCalibration.sampleBusyCamera);
+    const buttonTitle = !payload?.ok
+      ? "等待标定状态可用"
+      : !dependenciesReady
+        ? "缺少 OpenCV/NumPy 依赖"
+        : `采集 ${camera.camera} 棋盘样本`;
+    const classes = ["calibration-camera-card", ready ? "is-configured" : "is-missing"];
+    return `
+      <section class="${classes.join(" ")}">
+        <div class="calibration-camera-title">
+          <span>${escapeHtml(cameraCalibrationInitial(camera.camera))}</span>
+          <div>
+            <strong>${escapeHtml(camera.displayName || camera.label || camera.camera)}</strong>
+            <small>${escapeHtml(camera.camera || "")}</small>
+          </div>
+        </div>
+        <dl>
+          <div><dt>父级 link</dt><dd>${escapeHtml(camera.parentFrame || "--")}</dd></div>
+          <div><dt>外参 link</dt><dd>${escapeHtml(camera.extrinsicFrame || "--")}</dd></div>
+          <div><dt>驱动 link</dt><dd>${escapeHtml(camera.driverFrame || "--")}</dd></div>
+          <div><dt>Optical frame</dt><dd>${escapeHtml(camera.targetFrame || "--")}</dd></div>
+          <div><dt>CameraInfo</dt><dd>${escapeHtml(camera.cameraInfoTopic || "--")}</dd></div>
+        </dl>
+        <div class="calibration-card-footer">
+          <span class="state-badge ${sampleLevel}" title="${escapeHtml(badge)}">${sampleCount} / ${targetCount}</span>
+          <button class="secondary-button" type="button" data-camera-calibration-sample="${escapeHtml(camera.camera)}" title="${escapeHtml(buttonTitle)}" ${canSample ? "" : "disabled"}>${sampleBusy ? "采样中" : "采样"}</button>
+        </div>
+      </section>
+    `;
+  }).join("");
+}
+
+function renderCameraCalibrationTfPreview(payload = cameraCalibrationPayload()) {
+  const preview = $("#cameraCalibrationTfPreview");
+  if (!preview) return;
+  const cameras = Array.isArray(payload?.extrinsics?.cameras) ? payload.extrinsics.cameras : [];
+  if (!cameras.length) {
+    preview.textContent = "等待后端返回 TF 链路";
+    return;
+  }
+  preview.textContent = cameras.map((camera) => {
+    const chain = Array.isArray(camera.chain) && camera.chain.length
+      ? camera.chain.join(" -> ")
+      : [camera.parentFrame, camera.extrinsicFrame, camera.driverFrame, camera.targetFrame].filter(Boolean).join(" -> ");
+    const primary = camera.configured ? "OK" : "missing";
+    const bridge = camera.bridgeConfigured ? "OK" : "missing";
+    return `${camera.camera}: ${chain}\n  ${camera.parentFrame} -> ${camera.extrinsicFrame}: ${primary}\n  ${camera.extrinsicFrame} -> ${camera.driverFrame}: ${bridge}`;
+  }).join("\n");
+}
+
+function renderCameraCalibrationEditor(payload = cameraCalibrationPayload()) {
+  const config = cameraCalibrationConfig(payload);
+  const textarea = $("#cameraExtrinsicsConfigEditor");
+  const toggle = $("#cameraExtrinsicsEnabledToggle");
+  const saveButton = $("#cameraExtrinsicsSaveButton");
+  const resetButton = $("#cameraExtrinsicsResetButton");
+  const result = $("#cameraExtrinsicsConfigResult");
+
+  if (textarea && !state.cameraCalibration.configDirty && !state.cameraCalibration.configSaving) {
+    textarea.value = formatCameraCalibrationConfig(config);
+  }
+  if (toggle) {
+    toggle.checked = Boolean(config?.enabled);
+    toggle.disabled = state.cameraCalibration.configSaving || !config;
+  }
+  if (saveButton) {
+    saveButton.disabled = state.cameraCalibration.configSaving || !textarea;
+    saveButton.textContent = state.cameraCalibration.configSaving ? "保存中" : "保存配置";
+  }
+  if (resetButton) {
+    resetButton.disabled = state.cameraCalibration.configSaving || !payload;
+  }
+  if (result) {
+    if (state.cameraCalibration.configSaving) {
+      result.textContent = "正在保存 camera_extrinsics.json";
+    } else if (state.cameraCalibration.configDirty) {
+      result.textContent = "配置已修改，尚未保存";
+    } else if (state.cameraCalibration.statusError && !payload) {
+      result.textContent = state.cameraCalibration.statusError;
+    } else {
+      const path = config?.path || payload?.extrinsics?.config?.path || "";
+      result.textContent = path ? `已加载 ${path}` : "等待后端配置";
+    }
+  }
+}
+
+function renderCameraCalibrationServiceButton(payload = cameraCalibrationPayload()) {
+  const button = $("#cameraExtrinsicsServiceButton");
+  if (!button) return;
+  const config = cameraCalibrationConfig(payload);
+  const transforms = cameraCalibrationTransforms(config);
+  const serviceStatus = cameraCalibrationServiceStatus(payload);
+  const serviceLabel = cameraCalibrationServiceLabels[serviceStatus] || serviceStatus;
+  const running = serviceStatus === "running" || serviceStatus === "external";
+  const canUse = Boolean(config?.enabled && transforms.length && payload?.extrinsics?.serviceAvailable);
+  button.textContent = state.cameraCalibration.serviceBusy
+    ? "处理中"
+    : running
+      ? "重启外参发布"
+      : "启动外参发布";
+  button.disabled = state.cameraCalibration.serviceBusy || state.cameraCalibration.statusLoading || !canUse;
+  if (!config?.enabled) {
+    button.title = "先启用并保存 camera_extrinsics.json";
+  } else if (!transforms.length) {
+    button.title = "camera_extrinsics.json 中没有 transforms";
+  } else if (!payload?.extrinsics?.serviceAvailable) {
+    button.title = "后端尚未注册 camera_extrinsics 服务";
+  } else {
+    button.title = `当前状态：${serviceLabel}`;
+  }
+}
+
+function renderCameraProjectionPreview(item) {
+  const preview = $("#cameraProjectionPreview");
+  if (!preview) return;
+  if (!item) {
+    preview.innerHTML = "<span>暂无投影质检图</span>";
+    return;
+  }
+  const imageUrl = item.imageUrl || "";
+  const summary = cameraProjectionPointSummary(item);
+  const meta = [
+    item.camera,
+    item.cloud,
+    summary,
+    item.createdAt,
+    item.targetFrame ? `target ${item.targetFrame}` : "",
+    item.sourceFrame ? `source ${item.sourceFrame}` : "",
+  ].filter(Boolean).join(" | ");
+  preview.innerHTML = `
+    ${imageUrl
+      ? `<img src="${escapeHtml(imageUrl)}" alt="${escapeHtml(item.camera || "camera")} projection check">`
+      : "<span>暂无预览图</span>"}
+    <small>${escapeHtml(meta || item.imagePath || "")}</small>
+  `;
+}
+
+function renderCameraCalibrationSampleQueue(payload = cameraCalibrationPayload()) {
+  const table = $("#cameraCalibrationSampleTable");
+  const progress = $("#cameraCalibrationSampleProgress");
+  const samples = cameraCalibrationSamples(payload);
+  const perCamera = cameraCalibrationPerCameraSamples(payload);
+  const sampling = cameraCalibrationSampling(payload);
+  const total = Number(sampling?.total) || 0;
+  const totalTarget = Number(sampling?.totalTargetCount) || 72;
+  if (progress) {
+    const percent = totalTarget > 0 ? Math.min(100, Math.round(total * 100 / totalTarget)) : 0;
+    progress.style.width = `${percent}%`;
+  }
+  if (!table) return;
+
+  const cameras = Array.isArray(payload?.extrinsics?.cameras) ? payload.extrinsics.cameras : [
+    { camera: "camera_l", displayName: "左相机" },
+    { camera: "camera_r", displayName: "右相机" },
+    { camera: "camera_f", displayName: "中间相机" },
+  ];
+  const rows = cameras.map((camera) => {
+    const stats = perCamera[camera.camera] || {};
+    const latest = stats.latest || samples.find((sample) => sample.camera === camera.camera) || null;
+    const count = Number(stats.count) || 0;
+    const target = Number(stats.targetCount || sampling?.targetCount || 24) || 24;
+    const imageText = latest ? `${count}/${target} | ${formatCalibrationAge(latest.imageAgeMs)}` : `${count}/${target}`;
+    const tfText = latest?.parentTfStamp ? latest.parentTfStamp : latest ? "已记录" : "等待";
+    const cornersText = latest
+      ? `${Number(latest.cornerCount) || 0}/${Number(latest.expectedCornerCount) || 0}`
+      : "--";
+    const rms = latest?.reprojectionRmsPx == null ? "" : ` | ${formatCalibrationSampleMetric(latest.reprojectionRmsPx, " px")}`;
+    return `
+      <div role="row">
+        <span>${escapeHtml(camera.camera || "")}</span>
+        <strong>${escapeHtml(imageText)}</strong>
+        <strong>${escapeHtml(tfText || "--")}</strong>
+        <strong>${escapeHtml(`${cornersText}${rms}`)}</strong>
+      </div>
+    `;
+  }).join("");
+
+  table.innerHTML = `
+    <div role="row">
+      <span role="columnheader">相机</span>
+      <span role="columnheader">图像</span>
+      <span role="columnheader">父级 TF</span>
+      <span role="columnheader">角点</span>
+    </div>
+    ${rows}
+  `;
+}
+
+function renderCameraCalibrationStatus(payload = cameraCalibrationPayload()) {
+  const summary = cameraCalibrationStatusSummary(payload);
+  setStateBadge("#cameraCalibrationStatusBadge", summary.label, summary.level);
+
+  const config = cameraCalibrationConfig(payload);
+  const transforms = cameraCalibrationTransforms(config);
+  const cameras = Array.isArray(payload?.extrinsics?.cameras) ? payload.extrinsics.cameras : [];
+  const allConfigured = cameras.length > 0 && cameras.every((camera) => camera.configured && camera.bridgeConfigured);
+  if (!payload && state.cameraCalibration.statusLoading) {
+    setStateBadge("#cameraCalibrationConfigBadge", "读取中", "idle");
+  } else if (!payload) {
+    setStateBadge("#cameraCalibrationConfigBadge", state.cameraCalibration.statusError ? "读取失败" : "未读取", state.cameraCalibration.statusError ? "danger" : "idle");
+  } else if (!payload?.ok) {
+    setStateBadge("#cameraCalibrationConfigBadge", "配置异常", "danger");
+  } else if (!transforms.length || !allConfigured) {
+    setStateBadge("#cameraCalibrationConfigBadge", "外参缺失", "warn");
+  } else {
+    setStateBadge("#cameraCalibrationConfigBadge", config?.enabled ? "已启用" : "未启用", config?.enabled ? "ok" : "warn");
+  }
+
+  const dependencies = Array.isArray(payload?.dependencies) ? payload.dependencies : [];
+  const missingDeps = dependencies.filter((item) => item.required && !item.available);
+  if (!payload && state.cameraCalibration.statusLoading) {
+    setStateBadge("#cameraCalibrationDependencyBadge", "读取中", "idle");
+  } else if (missingDeps.length) {
+    setStateBadge("#cameraCalibrationDependencyBadge", `缺 ${missingDeps.length} 项`, "danger");
+  } else if (dependencies.length) {
+    setStateBadge("#cameraCalibrationDependencyBadge", "依赖可用", "ok");
+  } else {
+    setStateBadge("#cameraCalibrationDependencyBadge", "未读取", "idle");
+  }
+
+  if (!payload && state.cameraCalibration.statusLoading) {
+    setStateBadge("#cameraCalibrationCaptureBadge", "读取中", "idle");
+  } else if (!payload) {
+    setStateBadge("#cameraCalibrationCaptureBadge", state.cameraCalibration.statusError ? "读取失败" : "未读取", state.cameraCalibration.statusError ? "danger" : "idle");
+  } else if (missingDeps.length) {
+    setStateBadge("#cameraCalibrationCaptureBadge", "依赖缺失", "danger");
+  } else if (state.cameraCalibration.sampleBusyCamera) {
+    setStateBadge("#cameraCalibrationCaptureBadge", "采样中", "warn");
+  } else {
+    const sampling = cameraCalibrationSampling(payload);
+    const total = Number(sampling?.total) || 0;
+    const target = Number(sampling?.totalTargetCount) || 72;
+    setStateBadge("#cameraCalibrationCaptureBadge", total > 0 ? `${total} / ${target}` : "可采样", total >= target ? "ok" : total > 0 ? "warn" : "idle");
+  }
+
+  renderCameraCalibrationCameraList(cameras, payload);
+  renderCameraCalibrationSampleQueue(payload);
+  renderCameraCalibrationTfPreview(payload);
+  renderCameraCalibrationEditor(payload);
+  renderCameraCalibrationServiceButton(payload);
+  const latestProjection = Array.isArray(payload?.projectionChecks) ? payload.projectionChecks[0] : null;
+  if (latestProjection) renderCameraProjectionPreview(latestProjection);
+}
+
+async function refreshCameraCalibrationStatus(options = {}) {
+  if (state.cameraCalibration.statusLoading && !options.force) return state.cameraCalibration.statusPayload;
+  state.cameraCalibration.statusLoading = true;
+  state.cameraCalibration.statusError = "";
+  renderCameraCalibrationStatus();
+  try {
+    const response = await fetch("/api/calibration/status", { cache: "no-store" });
+    const payload = await response.json().catch(() => ({}));
+    if (!payload || !Object.keys(payload).length) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    state.cameraCalibration.statusPayload = payload;
+    state.cameraCalibration.statusError = response.ok && payload.ok ? "" : (payload.detail || `HTTP ${response.status}`);
+    return payload;
+  } catch (error) {
+    state.cameraCalibration.statusError = error.message || "相机标定状态读取失败";
+    if (!options.silent) addLog("相机标定", `状态读取失败：${state.cameraCalibration.statusError}`);
+    return null;
+  } finally {
+    state.cameraCalibration.statusLoading = false;
+    renderCameraCalibrationStatus();
+  }
+}
+
+function readCameraExtrinsicsEditorConfig() {
+  const textarea = $("#cameraExtrinsicsConfigEditor");
+  const raw = textarea ? textarea.value.trim() : "";
+  if (!raw) return { enabled: false, transforms: [] };
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    setStateBadge("#cameraCalibrationConfigBadge", "JSON 错误", "danger");
+    setText("#cameraExtrinsicsConfigResult", `JSON 解析失败：${error.message}`);
+    throw error;
+  }
+}
+
+function markCameraExtrinsicsConfigDirty() {
+  state.cameraCalibration.configDirty = true;
+  renderCameraCalibrationEditor();
+}
+
+function syncCameraExtrinsicsEnabledFromToggle() {
+  const toggle = $("#cameraExtrinsicsEnabledToggle");
+  const textarea = $("#cameraExtrinsicsConfigEditor");
+  if (!toggle || !textarea) return;
+  let config;
+  try {
+    config = readCameraExtrinsicsEditorConfig();
+  } catch (error) {
+    return;
+  }
+  config.enabled = toggle.checked;
+  textarea.value = formatCameraCalibrationConfig(config);
+  state.cameraCalibration.configDirty = true;
+  renderCameraCalibrationStatus();
+}
+
+function resetCameraExtrinsicsEditor() {
+  state.cameraCalibration.configDirty = false;
+  renderCameraCalibrationStatus();
+}
+
+async function saveCameraExtrinsicsConfig() {
+  if (state.cameraCalibration.configSaving) return;
+  let config;
+  try {
+    config = readCameraExtrinsicsEditorConfig();
+  } catch (error) {
+    return;
+  }
+  state.cameraCalibration.configSaving = true;
+  renderCameraCalibrationStatus();
+  try {
+    const response = await fetch("/api/calibration/camera-extrinsics", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(config),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    if (state.cameraCalibration.statusPayload?.extrinsics && payload.config) {
+      state.cameraCalibration.statusPayload.extrinsics.config = payload.config;
+    }
+    state.cameraCalibration.configDirty = false;
+    setText("#cameraExtrinsicsConfigResult", payload.detail || "配置已保存");
+    addLog("相机标定", "camera_extrinsics.json 已保存");
+    await refreshCameraCalibrationStatus({ silent: true, force: true });
+  } catch (error) {
+    setText("#cameraExtrinsicsConfigResult", `保存失败：${error.message}`);
+    addLog("相机标定", `camera_extrinsics.json 保存失败：${error.message}`);
+  } finally {
+    state.cameraCalibration.configSaving = false;
+    renderCameraCalibrationStatus();
+  }
+}
+
+async function requestCameraExtrinsicsServiceAction() {
+  if (state.cameraCalibration.serviceBusy) return;
+  const payload = cameraCalibrationPayload() || await refreshCameraCalibrationStatus({ silent: true, force: true });
+  const config = cameraCalibrationConfig(payload);
+  if (!config?.enabled || !cameraCalibrationTransforms(config).length || !payload?.extrinsics?.serviceAvailable) {
+    renderCameraCalibrationServiceButton(payload);
+    return;
+  }
+  const status = cameraCalibrationServiceStatus(payload);
+  const action = status === "running" || status === "external" ? "restart" : "start";
+  state.cameraCalibration.serviceBusy = true;
+  renderCameraCalibrationServiceButton(payload);
+  addLog("相机标定", action === "restart" ? "请求重启 camera_extrinsics TF 发布" : "请求启动 camera_extrinsics TF 发布");
+  try {
+    const response = await fetch(`/api/runtime/services/camera_extrinsics/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) {
+      throw new Error(result.detail || `HTTP ${response.status}`);
+    }
+    addLog("相机标定", `camera_extrinsics 服务动作完成：${result.code}`);
+    await refreshCameraCalibrationStatus({ silent: true, force: true });
+  } catch (error) {
+    addLog("相机标定", `camera_extrinsics 服务动作失败：${error.message}`);
+    setText("#cameraExtrinsicsConfigResult", `服务动作失败：${error.message}`);
+  } finally {
+    state.cameraCalibration.serviceBusy = false;
+    renderCameraCalibrationStatus();
+  }
+}
+
+async function requestCameraCalibrationSample(cameraKey) {
+  const camera = String(cameraKey || "").trim();
+  if (!camera || state.cameraCalibration.sampleBusyCamera) return;
+  const payload = cameraCalibrationPayload() || await refreshCameraCalibrationStatus({ silent: true, force: true });
+  if (!payload?.ok || !cameraCalibrationDependenciesReady(payload)) {
+    renderCameraCalibrationStatus(payload);
+    return;
+  }
+
+  state.cameraCalibration.sampleBusyCamera = camera;
+  renderCameraCalibrationStatus(payload);
+  addLog("相机标定", `开始采集 ${camera} 标定样本`);
+
+  try {
+    const response = await fetch("/api/calibration/sample", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        camera,
+        board: readCameraCalibrationBoard(),
+        baseFrame: "base_link",
+        waitSec: 1.0,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) {
+      const error = new Error(result.detail || `HTTP ${response.status}`);
+      error.payload = result;
+      throw error;
+    }
+    if (state.cameraCalibration.statusPayload && result.sampling) {
+      state.cameraCalibration.statusPayload.sampling = result.sampling;
+    }
+    const corners = result.sample
+      ? `${Number(result.sample.cornerCount) || 0}/${Number(result.sample.expectedCornerCount) || 0}`
+      : "";
+    addLog("相机标定", `${camera} 标定样本已保存${corners ? `，角点 ${corners}` : ""}`);
+    await refreshCameraCalibrationStatus({ silent: true, force: true });
+  } catch (error) {
+    const detail = error.payload?.detail || error.message || "采样失败";
+    addLog("相机标定", `${camera} 标定样本采集失败：${detail}`);
+  } finally {
+    state.cameraCalibration.sampleBusyCamera = "";
+    renderCameraCalibrationStatus();
+  }
+}
+
+async function copyCameraExtrinsicsConfig() {
+  const textarea = $("#cameraExtrinsicsConfigEditor");
+  const payload = textarea?.value || $("#cameraCalibrationTfPreview")?.textContent || "";
+  if (!payload) return;
+  try {
+    await navigator.clipboard.writeText(payload);
+    addLog("相机标定", "外参配置 JSON 已复制");
+  } catch (error) {
+    if (textarea) {
+      textarea.focus();
+      textarea.select();
+      document.execCommand("copy");
+      addLog("相机标定", "外参配置 JSON 已复制");
+    } else {
+      addLog("相机标定", `外参配置复制失败：${error.message}`);
+    }
+  }
+}
+
+function setCameraProjectionBusy(busy) {
+  state.cameraCalibration.projectionBusy = Boolean(busy);
+  const button = $("#cameraProjectionCheckButton");
+  if (button) {
+    button.disabled = state.cameraCalibration.projectionBusy;
+    button.textContent = state.cameraCalibration.projectionBusy ? "生成中" : "保存投影质检图";
+  }
+}
+
+function cameraProjectionPointSummary(payload) {
+  const projected = Number(payload?.projectedPointCount);
+  const input = Number(payload?.inputPointCount);
+  if (!Number.isFinite(projected) || !Number.isFinite(input)) return "";
+  return `${projected.toLocaleString("zh-CN")} / ${input.toLocaleString("zh-CN")} 点`;
+}
+
+async function requestCameraProjectionCheck() {
+  if (state.cameraCalibration.projectionBusy) return;
+
+  const camera = $("#cameraProjectionCheckCamera")?.value || "camera_f";
+  const cloud = "rslidar_points";
+  setCameraProjectionBusy(true);
+  setStateBadge("#cameraProjectionCheckBadge", "生成中", "warn");
+  setText("#cameraProjectionCheckResult", `${camera} / ${cloud}`);
+
+  try {
+    const response = await fetch("/api/calibration/camera-projection-check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        camera,
+        cloud,
+        maxPoints: 60000,
+        waitSec: 1.0,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      const error = new Error(payload.detail || `HTTP ${response.status}`);
+      error.payload = payload;
+      throw error;
+    }
+
+    const summary = cameraProjectionPointSummary(payload);
+    const projected = Number(payload.projectedPointCount);
+    const level = projected === 0 ? "warn" : "ok";
+    const badge = projected === 0 ? "无点入图" : "已保存";
+    setStateBadge("#cameraProjectionCheckBadge", badge, level);
+    renderCameraProjectionPreview(payload);
+    setText("#cameraProjectionCheckResult", [payload.imageUrl || payload.imagePath, summary].filter(Boolean).join(" | "));
+    addLog("相机标定", `投影质检图已保存：${payload.imagePath || payload.detail}`);
+    refreshCameraCalibrationStatus({ silent: true, force: true });
+  } catch (error) {
+    const payload = error.payload || {};
+    const detail = payload.detail || error.message || "投影质检图生成失败";
+    setStateBadge("#cameraProjectionCheckBadge", "失败", "danger");
+    setText("#cameraProjectionCheckResult", detail);
+    addLog("相机标定", `投影质检图生成失败：${detail}`);
+  } finally {
+    setCameraProjectionBusy(false);
+  }
+}
+
 function bindEvents() {
   $$(".nav-item").forEach((button) => button.addEventListener("click", () => showView(button.dataset.view)));
   $$("[data-view-jump]").forEach((button) => button.addEventListener("click", () => showView(button.dataset.viewJump)));
@@ -11927,6 +12585,19 @@ function bindEvents() {
   $("#lidarRuntimeStatus").addEventListener("click", toggleLidarRuntime);
   $("#cameraPreviewToggleButton").addEventListener("click", toggleCameraPreview);
   $("#lidarPreviewToggleButton").addEventListener("click", toggleLidarPreview);
+  $("#cameraCalibrationRefreshButton")?.addEventListener("click", () => refreshCameraCalibrationStatus({ force: true }));
+  $("#calibrationCameraList")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-camera-calibration-sample]");
+    if (!button) return;
+    requestCameraCalibrationSample(button.dataset.cameraCalibrationSample);
+  });
+  $("#cameraExtrinsicsServiceButton")?.addEventListener("click", requestCameraExtrinsicsServiceAction);
+  $("#cameraExtrinsicsSaveButton")?.addEventListener("click", saveCameraExtrinsicsConfig);
+  $("#cameraExtrinsicsResetButton")?.addEventListener("click", resetCameraExtrinsicsEditor);
+  $("#cameraExtrinsicsCopyButton")?.addEventListener("click", copyCameraExtrinsicsConfig);
+  $("#cameraExtrinsicsEnabledToggle")?.addEventListener("change", syncCameraExtrinsicsEnabledFromToggle);
+  $("#cameraExtrinsicsConfigEditor")?.addEventListener("input", markCameraExtrinsicsConfigDirty);
+  $("#cameraProjectionCheckButton")?.addEventListener("click", requestCameraProjectionCheck);
   const lidarPointRadiusInput = $("#lidarPointRadiusInput");
   if (lidarPointRadiusInput) {
     lidarPointRadiusInput.addEventListener("input", (event) => setLidarPointRadius(event.currentTarget.value));
@@ -12288,6 +12959,7 @@ function init() {
   renderActionLocks();
   renderCameraFrames();
   renderLidarCloudStatus();
+  renderCameraCalibrationStatus();
   renderPlayback();
   renderStateMachine();
   refreshPlaybackStatus({ silent: true });
@@ -12298,6 +12970,9 @@ function init() {
   fetchRobotModels({ silent: true });
   refreshMappingStatus({ silent: true });
   refreshLocalizationStatus({ silent: true });
+  if (document.body.dataset.activeView === "camera-calibration") {
+    refreshCameraCalibrationStatus({ silent: true });
+  }
   initializeRobotViewer();
   addLog("系统", "Robot Station 前端原型已加载");
   addLog("ROS", "等待接入真实 ROS 状态");

@@ -29,6 +29,39 @@ class ServiceManager:
     def with_default_services(cls):
         return cls(default_service_specs())
 
+    def refresh_default_services(self):
+        specs = default_service_specs()
+        updated = []
+        added = []
+        removed = []
+        errors = []
+        for key, spec in specs.items():
+            service = self._services.get(key)
+            if service is None:
+                self._services[key] = ManagedService(spec)
+                added.append(key)
+                continue
+            service.spec = spec
+            updated.append(key)
+        for key in ("transforms", "camera_extrinsics"):
+            if key in specs or key not in self._services:
+                continue
+            result = self._services[key].stop()
+            if result.get("ok"):
+                self._services.pop(key, None)
+                removed.append(key)
+            else:
+                errors.append(result)
+        return _result(
+            not errors,
+            "SVC-REFRESHED" if not errors else "SVC-REFRESH-PARTIAL",
+            "Managed service specs refreshed." if not errors else "Managed service specs refreshed with stop errors.",
+            added=added,
+            updated=updated,
+            removed=removed,
+            errors=errors,
+        )
+
     def list_services(self):
         return _result(
             True,

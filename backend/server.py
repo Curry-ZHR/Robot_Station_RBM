@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import copy
+import importlib.util
 import json
 import mimetypes
 import os
@@ -10,7 +11,7 @@ import time
 from email.utils import formatdate
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from modules.control.chassis import chassis_limits, publish_chassis_velocity, reset_chassis_odometry, stop_chassis
 from modules.control.lifting import (
@@ -24,6 +25,14 @@ from modules.control.lifting import (
     zero_lifting_position,
 )
 from modules.control.piper import publish_joint_targets
+from modules.calibration import (
+    CAMERA_TARGETS,
+    DEFAULT_OUTPUT_ROOT,
+    DEFAULT_SAMPLE_ROOT,
+    capture_calibration_sample,
+    create_projection_check,
+    list_calibration_samples,
+)
 from modules.data_collection import get_action_mirror, shutdown_action_mirror, start_action_mirror
 from modules.drivers.can.can_activate import activate_can
 from modules.inference import get_inference_manager
@@ -42,6 +51,7 @@ from modules.ros_io import (
     shutdown_ros_io,
 )
 from modules.runtime import get_service_manager, shutdown_services
+from modules.runtime.service_specs import camera_extrinsics_config_path, load_camera_extrinsics_config
 from modules.self_check.can_check.can_status import check_can_interface
 from modules.state_machine import get_state_machine_executor, get_state_machine_store, state_machine_result_status
 from modules.self_check.disk_check.disk_space import check_disk_space
@@ -71,20 +81,32 @@ def env_flag(name, default=True):
     return default
 
 
-def autostart_transforms():
-    if not env_flag("ROBOT_STATION_AUTOSTART_TRANSFORMS", True):
-        LOGGER.info("Static transform autostart disabled")
+def autostart_runtime_service(service_key, env_name, label):
+    if not env_flag(env_name, True):
+        LOGGER.info("%s autostart disabled", label)
         return None
 
     manager = get_service_manager()
-    status = manager.get_service("transforms")
+    status = manager.get_service(service_key)
     if not status.get("ok"):
-        LOGGER.info("Static transform service not available: %s", status.get("detail", "unknown"))
+        LOGGER.info("%s service not available: %s", label, status.get("detail", "unknown"))
         return status
 
-    result = manager.start_service("transforms")
-    log_action_result("Service transforms start", result)
+    result = manager.start_service(service_key)
+    log_action_result(f"Service {service_key} start", result)
     return result
+
+
+def autostart_transforms():
+    return autostart_runtime_service("transforms", "ROBOT_STATION_AUTOSTART_TRANSFORMS", "Static transform")
+
+
+def autostart_camera_extrinsics():
+    return autostart_runtime_service(
+        "camera_extrinsics",
+        "ROBOT_STATION_AUTOSTART_CAMERA_EXTRINSICS",
+        "Camera extrinsics",
+    )
 
 
 def log_check_result(result):
@@ -359,6 +381,356 @@ def lidar_result_status(result):
     return 500
 
 
+def calibration_result_status(result):
+    if result.get("ok"):
+        return 200
+    code = result.get("code", "")
+    mapping = {
+        "CAL-PROJ-UNKNOWN-CAMERA": 404,
+        "CAL-PROJ-NUMPY": 503,
+        "CAL-PROJ-CV2": 503,
+        "CAL-PROJ-IMAGE": 503,
+        "CAL-PROJ-CAMERAINFO": 503,
+        "CAL-PROJ-LIDAR": 503,
+        "CAL-PROJ-TF": 503,
+        "CAL-PROJ-PROCESS": 500,
+        "CAL-PROJ-SAVE": 500,
+        "CAL-SAMPLE-UNKNOWN-CAMERA": 404,
+        "CAL-SAMPLE-BOARD": 400,
+        "CAL-SAMPLE-NUMPY": 503,
+        "CAL-SAMPLE-CV2": 503,
+        "CAL-SAMPLE-IMAGE": 503,
+        "CAL-SAMPLE-CAMERAINFO": 503,
+        "CAL-SAMPLE-TF": 503,
+        "CAL-SAMPLE-CORNERS": 422,
+        "CAL-SAMPLE-PROCESS": 500,
+        "CAL-SAMPLE-SAVE": 500,
+    }
+    return mapping.get(code, 500)
+
+
+def package_available(module_name):
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def calibration_dependencies():
+    return [
+        {
+            "key": "numpy",
+            "name": "NumPy",
+            "module": "numpy",
+            "required": True,
+            "available": package_available("numpy"),
+        },
+        {
+            "key": "opencv",
+            "name": "OpenCV Python",
+            "module": "cv2",
+            "required": True,
+            "available": package_available("cv2"),
+        },
+    ]
+
+
+def transform_field(transform, *names):
+    if not isinstance(transform, dict):
+        return ""
+    for name in names:
+        value = transform.get(name)
+        if value is not None:
+            return str(value).strip().lstrip("/")
+    return ""
+
+
+def find_transform(transforms, parent_frame=None, child_frame=None):
+    for transform in transforms:
+        parent = transform_field(transform, "parentFrame", "parent_frame", "parent")
+        child = transform_field(transform, "childFrame", "child_frame", "child")
+        if parent_frame is not None and parent != parent_frame:
+            continue
+        if child_frame is not None and child != child_frame:
+            continue
+        return transform
+    return None
+
+
+def camera_calibration_targets(config):
+    transforms = config.get("transforms", []) if isinstance(config, dict) else []
+    order = ("camera_l", "camera_r", "camera_f")
+    cameras = []
+    for camera_key in order:
+        target = CAMERA_TARGETS[camera_key]
+        primary = find_transform(transforms, target["parentFrame"], target["extrinsicFrame"])
+        bridge = find_transform(transforms, target["extrinsicFrame"], target["driverFrame"])
+        cameras.append(
+            {
+                "camera": camera_key,
+                "label": target["label"],
+                "displayName": target["displayName"],
+                "imageKind": target["imageKind"],
+                "cameraInfoKey": target["cameraInfoKey"],
+                "cameraInfoTopic": target["cameraInfoTopic"],
+                "parentFrame": target["parentFrame"],
+                "extrinsicFrame": target["extrinsicFrame"],
+                "driverFrame": target["driverFrame"],
+                "targetFrame": target["targetFrame"],
+                "configured": primary is not None,
+                "bridgeConfigured": bridge is not None,
+                "primaryTransform": primary,
+                "bridgeTransform": bridge,
+                "chain": [
+                    target["parentFrame"],
+                    target["extrinsicFrame"],
+                    target["driverFrame"],
+                    target["targetFrame"],
+                ],
+            }
+        )
+    return cameras
+
+
+def projection_output_root():
+    return DEFAULT_OUTPUT_ROOT.expanduser().resolve()
+
+
+def sample_output_root():
+    return DEFAULT_SAMPLE_ROOT.expanduser().resolve()
+
+
+def projection_file_url(path):
+    try:
+        relative = path.expanduser().resolve().relative_to(projection_output_root())
+    except ValueError:
+        return ""
+    return f"/api/calibration/projection-checks/{quote(relative.as_posix())}"
+
+
+def sample_file_url(path):
+    try:
+        relative = path.expanduser().resolve().relative_to(sample_output_root())
+    except ValueError:
+        return ""
+    return f"/api/calibration/samples/{quote(relative.as_posix())}"
+
+
+def add_projection_urls(payload):
+    for key, url_key in (("imagePath", "imageUrl"), ("metadataPath", "metadataUrl")):
+        raw_path = payload.get(key)
+        if not raw_path:
+            continue
+        url = projection_file_url(Path(raw_path))
+        if url:
+            payload[url_key] = url
+    return payload
+
+
+def add_sample_item_urls(item):
+    for key, url_key in (
+        ("imagePath", "imageUrl"),
+        ("overlayPath", "overlayUrl"),
+        ("metadataPath", "metadataUrl"),
+    ):
+        raw_path = item.get(key)
+        if not raw_path:
+            continue
+        url = sample_file_url(Path(raw_path))
+        if url:
+            item[url_key] = url
+    return item
+
+
+def add_sampling_urls(payload):
+    if not isinstance(payload, dict):
+        return payload
+    for item in payload.get("samples") or []:
+        if isinstance(item, dict):
+            add_sample_item_urls(item)
+    per_camera = payload.get("perCamera")
+    if isinstance(per_camera, dict):
+        for entry in per_camera.values():
+            if isinstance(entry, dict) and isinstance(entry.get("latest"), dict):
+                add_sample_item_urls(entry["latest"])
+    if isinstance(payload.get("sample"), dict):
+        add_sample_item_urls(payload["sample"])
+    if isinstance(payload.get("sampling"), dict):
+        add_sampling_urls(payload["sampling"])
+    return payload
+
+
+def projection_check_items(limit=12):
+    root = projection_output_root()
+    if not root.exists():
+        return []
+    items = []
+    metadata_files = sorted(root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for metadata_path in metadata_files[:max(1, int(limit))]:
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            metadata = {}
+        image_path = Path(metadata.get("imagePath") or root / f"{metadata_path.stem}.png")
+        if not image_path.is_absolute():
+            image_path = root / image_path
+        item = {
+            "name": metadata_path.stem,
+            "camera": metadata.get("camera", ""),
+            "cloud": metadata.get("cloud", ""),
+            "createdAt": metadata.get("createdAt", ""),
+            "imagePath": str(image_path),
+            "metadataPath": str(metadata_path),
+            "imageUrl": projection_file_url(image_path) if image_path.exists() else "",
+            "metadataUrl": projection_file_url(metadata_path),
+            "inputPointCount": metadata.get("inputPointCount"),
+            "projectedPointCount": metadata.get("projectedPointCount"),
+            "targetFrame": metadata.get("targetFrame", ""),
+            "sourceFrame": metadata.get("sourceFrame", ""),
+        }
+        items.append(item)
+    return items
+
+
+def calibration_sample_items(limit=240):
+    return add_sampling_urls(list_calibration_samples(output_root=sample_output_root(), limit=limit))
+
+
+def projection_check_path(relative_path):
+    clean_path = Path(relative_path)
+    if clean_path.is_absolute() or any(part in {"", ".", ".."} for part in clean_path.parts):
+        raise ValueError("Projection check path is invalid.")
+    candidate = (projection_output_root() / clean_path).resolve()
+    candidate.relative_to(projection_output_root())
+    if not candidate.is_file():
+        raise FileNotFoundError(str(clean_path))
+    return candidate
+
+
+def sample_path(relative_path):
+    clean_path = Path(relative_path)
+    if clean_path.is_absolute() or any(part in {"", ".", ".."} for part in clean_path.parts):
+        raise ValueError("Calibration sample path is invalid.")
+    candidate = (sample_output_root() / clean_path).resolve()
+    candidate.relative_to(sample_output_root())
+    if not candidate.is_file():
+        raise FileNotFoundError(str(clean_path))
+    return candidate
+
+
+def normalize_camera_extrinsics_payload(payload):
+    config = payload.get("config") if isinstance(payload, dict) and isinstance(payload.get("config"), dict) else payload
+    if not isinstance(config, dict):
+        raise ValueError("Camera extrinsics config must be a JSON object.")
+    transforms = config.get("transforms", [])
+    if transforms is None:
+        transforms = []
+    if not isinstance(transforms, list):
+        raise ValueError("Camera extrinsics config field transforms must be a list.")
+    for transform in transforms:
+        if not isinstance(transform, dict):
+            raise ValueError("Each camera extrinsic transform must be a JSON object.")
+        parent = transform_field(transform, "parentFrame", "parent_frame", "parent")
+        child = transform_field(transform, "childFrame", "child_frame", "child")
+        if not parent or not child:
+            raise ValueError("Each camera extrinsic transform requires parentFrame and childFrame.")
+    normalized = copy.deepcopy(config)
+    normalized["enabled"] = env_flag_from_value(normalized.get("enabled"), default=True)
+    normalized["transforms"] = transforms
+    normalized.pop("path", None)
+    return normalized
+
+
+def env_flag_from_value(value, default=True):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
+    return default
+
+
+def save_camera_extrinsics_payload(payload):
+    config = normalize_camera_extrinsics_payload(payload)
+    config_path = camera_extrinsics_config_path()
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    refresh = get_service_manager().refresh_default_services()
+    return {
+        "ok": True,
+        "code": "CAL-EXTRINSICS-SAVED",
+        "detail": f"Camera extrinsics saved to {config_path}.",
+        "config": {**config, "path": str(config_path)},
+        "refresh": refresh,
+    }
+
+
+def camera_extrinsics_payload():
+    config = load_camera_extrinsics_config()
+    service_result = get_service_manager().get_service("camera_extrinsics")
+    return {
+        "ok": True,
+        "code": "CAL-EXTRINSICS-OK",
+        "detail": "Camera extrinsics config loaded.",
+        "config": config,
+        "service": service_result.get("service"),
+        "serviceAvailable": bool(service_result.get("ok")),
+        "serviceDetail": service_result.get("detail", ""),
+        "cameras": camera_calibration_targets(config),
+    }
+
+
+def camera_calibration_status_payload():
+    try:
+        extrinsics = camera_extrinsics_payload()
+        config = extrinsics["config"]
+        config_error = ""
+    except Exception as exc:
+        config = {
+            "enabled": False,
+            "transforms": [],
+            "path": str(camera_extrinsics_config_path()),
+        }
+        extrinsics = {
+            "ok": False,
+            "code": "CAL-EXTRINSICS-CONFIG",
+            "detail": str(exc),
+            "config": config,
+            "service": None,
+            "serviceAvailable": False,
+            "serviceDetail": str(exc),
+            "cameras": camera_calibration_targets(config),
+        }
+        config_error = str(exc)
+
+    dependencies = calibration_dependencies()
+    warnings = []
+    if config_error:
+        warnings.append(config_error)
+    if not config.get("enabled"):
+        warnings.append("camera_extrinsics.json is disabled; calibrated camera TFs will not be published.")
+    if not config.get("transforms"):
+        warnings.append("camera_extrinsics.json has no active transforms.")
+    missing_deps = [item["name"] for item in dependencies if item.get("required") and not item.get("available")]
+    if missing_deps:
+        warnings.append(f"Missing Python dependencies: {', '.join(missing_deps)}.")
+
+    return {
+        "ok": not bool(config_error),
+        "code": "CAL-STATUS-OK" if not config_error else "CAL-STATUS-CONFIG",
+        "detail": "Camera calibration status loaded." if not config_error else config_error,
+        "extrinsics": extrinsics,
+        "dependencies": dependencies,
+        "sampling": calibration_sample_items(limit=120),
+        "projectionChecks": projection_check_items(limit=8),
+        "warnings": warnings,
+    }
+
+
 def inference_result_status(result):
     if result.get("ok"):
         return 200
@@ -575,6 +947,10 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 },
                 status=404,
             )
+            return
+        calibration_tail = api_tail(parsed.path, "/api/calibration")
+        if calibration_tail is not None:
+            self.handle_calibration_get(calibration_tail)
             return
         service_key = api_tail(parsed.path, "/api/runtime/services")
         if service_key is not None:
@@ -1006,6 +1382,127 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         log_action_result(f"State machine {action}", result)
         self.write_json(result, status=state_machine_result_status(result))
 
+    def handle_calibration_get(self, action):
+        if action in ("", "status"):
+            result = camera_calibration_status_payload()
+            self.write_json(result, status=200 if result.get("ok") else 500)
+            return
+        if action in ("camera-extrinsics", "extrinsics"):
+            try:
+                result = camera_extrinsics_payload()
+            except Exception as exc:
+                self.write_json({"ok": False, "code": "CAL-EXTRINSICS-CONFIG", "detail": str(exc)}, status=500)
+                return
+            self.write_json(result)
+            return
+        if action == "projection-checks":
+            self.write_json(
+                {
+                    "ok": True,
+                    "code": "CAL-PROJ-LIST",
+                    "detail": "Projection check outputs listed.",
+                    "items": projection_check_items(limit=24),
+                    "outputDir": str(projection_output_root()),
+                }
+            )
+            return
+        if action == "samples":
+            self.write_json(calibration_sample_items(limit=240))
+            return
+        sample_tail = api_tail(f"/api/calibration/{action}", "/api/calibration/samples")
+        if sample_tail is not None:
+            try:
+                path = sample_path(sample_tail)
+            except FileNotFoundError:
+                self.write_json(
+                    {
+                        "ok": False,
+                        "code": "CAL-SAMPLE-FILE",
+                        "detail": f"Calibration sample file not found: {sample_tail}",
+                    },
+                    status=404,
+                )
+                return
+            except ValueError as exc:
+                self.write_json({"ok": False, "code": "CAL-SAMPLE-FILE", "detail": str(exc)}, status=400)
+                return
+            self.write_file(path, self.guess_type(str(path)), headers={"Cache-Control": "no-store"})
+            return
+        projection_tail = api_tail(f"/api/calibration/{action}", "/api/calibration/projection-checks")
+        if projection_tail is not None:
+            try:
+                path = projection_check_path(projection_tail)
+            except FileNotFoundError:
+                self.write_json(
+                    {
+                        "ok": False,
+                        "code": "CAL-PROJ-FILE",
+                        "detail": f"Projection check file not found: {projection_tail}",
+                    },
+                    status=404,
+                )
+                return
+            except ValueError as exc:
+                self.write_json({"ok": False, "code": "CAL-PROJ-FILE", "detail": str(exc)}, status=400)
+                return
+            self.write_file(path, self.guess_type(str(path)), headers={"Cache-Control": "no-store"})
+            return
+        self.write_json(
+            {
+                "ok": False,
+                "code": "CAL-ACTION",
+                "detail": f"Unsupported calibration path: {action}",
+            },
+            status=404,
+        )
+
+    def handle_calibration(self, action):
+        payload = self.read_json_body()
+        if action in ("camera-extrinsics", "extrinsics"):
+            try:
+                result = save_camera_extrinsics_payload(payload)
+            except ValueError as exc:
+                self.write_json({"ok": False, "code": "CAL-EXTRINSICS-PAYLOAD", "detail": str(exc)}, status=400)
+                return
+            except OSError as exc:
+                self.write_json({"ok": False, "code": "CAL-EXTRINSICS-SAVE", "detail": str(exc)}, status=500)
+                return
+            log_action_result("Calibration camera extrinsics save", result)
+            self.write_json(result)
+            return
+        if action in ("sample", "capture-sample", "camera-sample"):
+            result = capture_calibration_sample(
+                camera=payload.get("camera") or "camera_f",
+                board=payload.get("board") if isinstance(payload.get("board"), dict) else payload,
+                base_frame=payload.get("baseFrame") or payload.get("base_frame") or "base_link",
+                wait_sec=payload.get("waitSec") or payload.get("wait_sec") or 1.0,
+            )
+            if result.get("ok"):
+                add_sampling_urls(result)
+            log_action_result("Calibration sample capture", result)
+            self.write_json(result, status=calibration_result_status(result))
+            return
+        if action in ("camera-projection-check", "projection-check"):
+            result = create_projection_check(
+                camera=payload.get("camera") or "camera_f",
+                cloud_key=payload.get("cloud") or payload.get("cloudKey") or "rslidar_points",
+                max_points=payload.get("maxPoints") or payload.get("max_points") or 60000,
+                wait_sec=payload.get("waitSec") or payload.get("wait_sec") or 1.0,
+            )
+            if result.get("ok"):
+                add_projection_urls(result)
+            log_action_result("Calibration projection check", result)
+            self.write_json(result, status=calibration_result_status(result))
+            return
+        self.write_json(
+            {
+                "ok": False,
+                "code": "CAL-ACTION",
+                "detail": f"Unsupported calibration action: {action}",
+            },
+            status=400,
+        )
+
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/self-check/run":
@@ -1067,6 +1564,10 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         navigation_action = api_tail(parsed.path, "/api/navigation")
         if navigation_action is not None:
             self.handle_navigation(navigation_action)
+            return
+        calibration_action = api_tail(parsed.path, "/api/calibration")
+        if calibration_action is not None:
+            self.handle_calibration(calibration_action)
             return
         state_machine_action = api_tail(parsed.path, "/api/state-machine")
         if state_machine_action is not None:
@@ -1420,6 +1921,7 @@ def main():
     if piper_httpd is not None:
         LOGGER.info("Piper control URL: http://%s:%s", args.host, args.piper_port)
     autostart_transforms()
+    autostart_camera_extrinsics()
     start_action_mirror()
     LOGGER.info("Press Ctrl+C to stop")
     try:

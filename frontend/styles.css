@@ -4868,6 +4868,437 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
   outline-offset: -2px;
 }
 
+.camera-calibration-view.is-active {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: calc(100vh - 90px);
+}
+
+.camera-calibration-head {
+  margin-bottom: 10px;
+}
+
+.camera-calibration-status {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  align-items: center;
+  min-width: min(100%, 360px);
+}
+
+.camera-calibration-grid {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.35fr) minmax(300px, 0.9fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.calibration-target-panel,
+.calibration-capture-panel,
+.calibration-output-panel {
+  grid-column: 1;
+}
+
+.calibration-board-panel,
+.calibration-solve-panel {
+  grid-column: 2;
+}
+
+.calibration-target-panel {
+  overflow: hidden;
+}
+
+.calibration-camera-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.calibration-camera-card {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #dbe5ef;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.calibration-camera-card.is-selected {
+  border-color: #bfdbfe;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.06);
+}
+
+.calibration-camera-card.is-configured {
+  border-color: #bbf7d0;
+  box-shadow: inset 0 0 0 1px rgba(22, 163, 74, 0.08);
+}
+
+.calibration-camera-card.is-missing {
+  border-color: #fed7aa;
+  background: linear-gradient(180deg, #ffffff 0%, #fffaf4 100%);
+}
+
+.calibration-camera-title {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  min-width: 0;
+}
+
+.calibration-camera-title > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.calibration-camera-title strong,
+.calibration-camera-title small,
+.calibration-camera-card dt,
+.calibration-camera-card dd,
+.calibration-sample-table span,
+.calibration-sample-table strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calibration-camera-title strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.calibration-camera-title small {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.calibration-camera-card dl {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+}
+
+.calibration-camera-card dl div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.calibration-camera-card dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.calibration-camera-card dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.calibration-card-footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.calibration-card-footer .secondary-button {
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.calibration-board-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.calibration-board-form label:first-child,
+.calibration-board-form label:last-child {
+  grid-column: 1 / -1;
+}
+
+.calibration-board-form .field-label,
+.calibration-checkline span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.calibration-board-form .field-label em {
+  margin-left: 4px;
+  color: #94a3b8;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.calibration-progress {
+  height: 9px;
+  overflow: hidden;
+  margin-bottom: 12px;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.calibration-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #0f766e);
+}
+
+.calibration-sample-table {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid #dbe5ef;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.calibration-sample-table [role="row"] {
+  display: grid;
+  grid-template-columns: minmax(110px, 1.1fr) repeat(3, minmax(74px, 0.7fr));
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 9px 11px;
+  border-top: 1px solid #edf2f7;
+}
+
+.calibration-sample-table [role="row"]:first-child {
+  border-top: 0;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.calibration-sample-table span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.calibration-sample-table strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.calibration-method-row {
+  display: grid;
+  gap: 12px;
+}
+
+.calibration-method-row .segmented {
+  width: 100%;
+}
+
+.calibration-method-row .segmented button {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.calibration-checkline {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid #dbe5ef;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.calibration-checkline input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.calibration-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.calibration-metrics .metric-card {
+  min-height: 64px;
+  border-color: #e6ecf3;
+  background: linear-gradient(180deg, #ffffff 0%, #f6f8fc 100%);
+}
+
+.calibration-metrics .metric-card strong {
+  font-size: 15px;
+}
+
+.calibration-output-preview {
+  min-height: 112px;
+  margin: 0;
+  overflow: auto;
+  padding: 13px 14px;
+  border: 1px solid #dbe5ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre;
+}
+
+.calibration-config-editor {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin-top: 12px;
+}
+
+.calibration-config-editor label:not(.calibration-checkline) {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.calibration-config-editor .field-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.calibration-config-editor textarea {
+  width: 100%;
+  min-height: 220px;
+  max-height: 48vh;
+  min-width: 0;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid #dbe5ef;
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.calibration-config-editor textarea:focus {
+  border-color: #93c5fd;
+  outline: 2px solid rgba(37, 99, 235, 0.14);
+  outline-offset: 0;
+}
+
+.calibration-config-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.calibration-config-actions button {
+  min-height: 34px;
+}
+
+.calibration-projection-check {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.calibration-projection-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) auto auto;
+  gap: 8px;
+  align-items: end;
+  min-width: 0;
+}
+
+.calibration-projection-row label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.calibration-projection-row .field-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.calibration-projection-row select {
+  width: 100%;
+}
+
+.calibration-projection-row .primary-button {
+  min-height: 38px;
+  white-space: nowrap;
+}
+
+.calibration-projection-row .state-badge {
+  min-height: 28px;
+  align-self: center;
+  white-space: nowrap;
+}
+
+.calibration-projection-result {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.calibration-projection-preview {
+  display: grid;
+  min-height: 180px;
+  overflow: hidden;
+  place-items: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #dbe5ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.calibration-projection-preview img {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #0f172a;
+}
+
+.calibration-projection-preview small {
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
 .joint-state {
   display: grid;
   gap: 9px;
@@ -6733,6 +7164,7 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 .device-control-view .panel,
 .robot-view .panel,
 .view[data-view-panel="sensors"] .panel,
+.camera-calibration-view .panel,
 .view[data-view-panel="data-playback"] .panel {
   border-color: #e3e9f1;
   background:
@@ -6746,6 +7178,7 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 .device-control-view .panel-head,
 .robot-view .panel-head,
 .view[data-view-panel="sensors"] .panel:not(.camera-strip) .panel-head,
+.camera-calibration-view .panel-head,
 .view[data-view-panel="data-playback"] .panel-head {
   padding-bottom: 11px;
   border-bottom: 1px solid #eef1f6;
@@ -6755,6 +7188,7 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 .device-control-view .panel-head h2,
 .robot-view .panel-head h2,
 .view[data-view-panel="sensors"] .panel-head h2,
+.camera-calibration-view .panel-head h2,
 .view[data-view-panel="data-playback"] .panel-head h2 {
   display: flex;
   align-items: center;
@@ -6765,6 +7199,7 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 .device-control-view .panel-head h2::before,
 .robot-view .panel-head h2::before,
 .view[data-view-panel="sensors"] .panel-head h2::before,
+.camera-calibration-view .panel-head h2::before,
 .view[data-view-panel="data-playback"] .panel-head h2::before {
   width: 4px;
   height: 17px;
@@ -6799,6 +7234,7 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 .device-control-view .page-head > div:first-child,
 .robot-view .page-head > div:first-child,
 .view[data-view-panel="sensors"] .page-head > div:first-child,
+.camera-calibration-view .page-head > div:first-child,
 .view[data-view-panel="data-playback"] .page-head > div:first-child {
   position: relative;
   padding-left: 14px;
@@ -6808,6 +7244,7 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 .device-control-view .page-head > div:first-child::before,
 .robot-view .page-head > div:first-child::before,
 .view[data-view-panel="sensors"] .page-head > div:first-child::before,
+.camera-calibration-view .page-head > div:first-child::before,
 .view[data-view-panel="data-playback"] .page-head > div:first-child::before {
   position: absolute;
   left: 0;
@@ -6823,6 +7260,7 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 .device-control-view .eyebrow,
 .robot-view .eyebrow,
 .view[data-view-panel="sensors"] .eyebrow,
+.camera-calibration-view .eyebrow,
 .view[data-view-panel="data-playback"] .eyebrow {
   color: var(--accent);
   text-transform: uppercase;
@@ -6848,6 +7286,7 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 .device-control-view .state-badge.ok,
 .robot-view .state-badge.ok:not(.keyboard-listen-button),
 .view[data-view-panel="sensors"] .state-badge.ok,
+.camera-calibration-view .state-badge.ok,
 .view[data-view-panel="data-playback"] .state-badge.ok {
   background: #ecfdf5;
 }
@@ -6856,6 +7295,7 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 .device-control-view .state-badge.warn,
 .robot-view .state-badge.warn:not(.keyboard-listen-button),
 .view[data-view-panel="sensors"] .state-badge.warn,
+.camera-calibration-view .state-badge.warn,
 .view[data-view-panel="data-playback"] .state-badge.warn {
   background: #fff7ed;
 }
@@ -6864,6 +7304,7 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 .device-control-view .state-badge.danger,
 .robot-view .state-badge.danger:not(.keyboard-listen-button),
 .view[data-view-panel="sensors"] .state-badge.danger,
+.camera-calibration-view .state-badge.danger,
 .view[data-view-panel="data-playback"] .state-badge.danger {
   background: #fef2f2;
 }
@@ -6871,12 +7312,14 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 .view[data-view-panel="self-check"] .state-badge.idle,
 .device-control-view .state-badge.idle,
 .view[data-view-panel="sensors"] .state-badge.idle,
+.camera-calibration-view .state-badge.idle,
 .view[data-view-panel="data-playback"] .state-badge.idle {
   background: #f1f5f9;
 }
 
 /* Segmented tabs: highlight active with the accent color */
 .view[data-view-panel="sensors"] .segmented button.is-active,
+.camera-calibration-view .segmented button.is-active,
 .view[data-view-panel="data-playback"] .segmented button.is-active {
   color: var(--accent);
 }
@@ -7009,6 +7452,7 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
   .device-control-view.is-active,
   .platform-control-view.is-active,
   .robot-view.is-active,
+  .camera-calibration-view.is-active,
   .localization-view.is-active {
     min-height: 0;
     overflow: visible;
@@ -7016,7 +7460,8 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 
   .device-control-grid,
   .platform-control-grid,
-  .robot-view-grid {
+  .robot-view-grid,
+  .camera-calibration-grid {
     height: auto;
   }
 
@@ -7028,6 +7473,11 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
   .platform-sensing-card,
   .platform-remote-card,
   .robot-viewport-card,
+  .calibration-target-panel,
+  .calibration-capture-panel,
+  .calibration-output-panel,
+  .calibration-board-panel,
+  .calibration-solve-panel,
   .mapping-panel,
   .localization-map-panel,
   .localization-viewer-panel,
@@ -7073,6 +7523,7 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
   .device-control-view.is-active,
   .platform-control-view.is-active,
   .robot-view.is-active,
+  .camera-calibration-view.is-active,
   .localization-view.is-active {
     min-height: 0;
     overflow: visible;
@@ -7080,10 +7531,19 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 
   .device-control-grid,
   .platform-control-grid,
-  .robot-view-grid {
+  .robot-view-grid,
+  .camera-calibration-grid {
     grid-template-columns: 1fr;
     grid-template-rows: auto;
     height: auto;
+  }
+
+  .calibration-target-panel,
+  .calibration-capture-panel,
+  .calibration-output-panel,
+  .calibration-board-panel,
+  .calibration-solve-panel {
+    grid-column: auto;
   }
 
   .base-platform-body,
@@ -7098,6 +7558,11 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
   .platform-sensing-card,
   .platform-remote-card,
   .robot-viewport-card,
+  .calibration-target-panel,
+  .calibration-capture-panel,
+  .calibration-output-panel,
+  .calibration-board-panel,
+  .calibration-solve-panel,
   .mapping-panel,
   .localization-map-panel,
   .localization-viewer-panel,
@@ -7271,16 +7736,28 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
   .device-control-grid,
   .platform-control-grid,
   .robot-view-grid,
+  .camera-calibration-grid,
   .platform-row-body,
   .dual-arm-grid,
   .video-grid {
     grid-template-columns: 1fr;
   }
 
+  .calibration-camera-list {
+    grid-template-columns: 1fr;
+  }
+
+  .camera-calibration-status {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .playback-run-row,
   .playback-actions,
   .playback-form,
-  .playback-file-info {
+  .playback-file-info,
+  .calibration-config-actions,
+  .calibration-projection-row {
     grid-template-columns: 1fr;
   }
 
@@ -7295,6 +7772,14 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 
   .playback-chart-tabs button {
     flex: 1;
+  }
+
+  .calibration-config-actions {
+    display: grid;
+  }
+
+  .calibration-config-actions button {
+    width: 100%;
   }
 
   .health-grid,
@@ -7400,6 +7885,10 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
   .control-row,
   .device-control-grid,
   .platform-control-grid,
+  .camera-calibration-grid,
+  .calibration-camera-list,
+  .calibration-board-form,
+  .calibration-metrics,
   .platform-row-body,
   .device-status-line,
   .robot-view-grid,
@@ -7415,8 +7904,22 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
   }
 
   .camera-strip,
-  .sensor-preview-actions {
+  .sensor-preview-actions,
+  .camera-calibration-status,
+  .calibration-config-actions,
+  .calibration-card-footer {
     flex-wrap: wrap;
+  }
+
+  .calibration-board-form label:first-child,
+  .calibration-board-form label:last-child {
+    grid-column: auto;
+  }
+
+  .calibration-sample-table [role="row"] {
+    grid-template-columns: minmax(80px, 1fr) repeat(3, minmax(52px, 0.65fr));
+    gap: 6px;
+    padding: 8px;
   }
 
   .lift-state-grid,

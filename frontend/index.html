@@ -23,6 +23,7 @@
           <button class="nav-item" data-view="platform-control">平台控制</button>
           <button class="nav-item" data-view="robot-view">整机视图</button>
           <button class="nav-item" data-view="sensors">传感器</button>
+          <button class="nav-item" data-view="camera-calibration">相机标定</button>
           <button class="nav-item" data-view="data-playback">数据回放</button>
           <button class="nav-item" data-view="state-machine">状态机</button>
           <button class="nav-item" data-view="inference">推理</button>
@@ -885,6 +886,258 @@
                 </article>
               </div>
 
+            </section>
+            <section class="view camera-calibration-view" data-view-panel="camera-calibration">
+              <div class="page-head compact camera-calibration-head">
+                <div>
+                  <p class="eyebrow">相机标定</p>
+                  <h1>RGB 外参工作台</h1>
+                </div>
+                <div class="camera-calibration-status">
+                  <span class="state-badge idle" id="cameraCalibrationStatusBadge">读取中</span>
+                  <button class="secondary-button" id="cameraCalibrationRefreshButton" type="button">刷新</button>
+                  <button class="primary-button" id="cameraExtrinsicsServiceButton" type="button" disabled>启动外参发布</button>
+                </div>
+              </div>
+
+              <div class="camera-calibration-grid">
+                <article class="panel calibration-target-panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>标定对象</h2>
+                      <p>RGB 相机到安装 link 的静态外参</p>
+                    </div>
+                    <span class="state-badge idle" id="cameraCalibrationConfigBadge">读取中</span>
+                  </div>
+
+                  <div class="calibration-camera-list" id="calibrationCameraList">
+                    <section class="calibration-camera-card is-selected">
+                      <div class="calibration-camera-title">
+                        <span>L</span>
+                        <div>
+                          <strong>左相机</strong>
+                          <small>camera_l</small>
+                        </div>
+                      </div>
+                      <dl>
+                        <div><dt>父级 link</dt><dd>left/link6</dd></div>
+                        <div><dt>目标 link</dt><dd>rgb_camera_l_link</dd></div>
+                        <div><dt>CameraInfo</dt><dd>/camera_l/color/camera_info</dd></div>
+                      </dl>
+                      <div class="calibration-card-footer">
+                        <span class="state-badge idle">0 / 24</span>
+                        <button class="secondary-button" type="button" disabled>采样</button>
+                      </div>
+                    </section>
+
+                    <section class="calibration-camera-card">
+                      <div class="calibration-camera-title">
+                        <span>R</span>
+                        <div>
+                          <strong>右相机</strong>
+                          <small>camera_r</small>
+                        </div>
+                      </div>
+                      <dl>
+                        <div><dt>父级 link</dt><dd>right/link6</dd></div>
+                        <div><dt>目标 link</dt><dd>rgb_camera_r_link</dd></div>
+                        <div><dt>CameraInfo</dt><dd>/camera_r/color/camera_info</dd></div>
+                      </dl>
+                      <div class="calibration-card-footer">
+                        <span class="state-badge idle">0 / 24</span>
+                        <button class="secondary-button" type="button" disabled>采样</button>
+                      </div>
+                    </section>
+
+                    <section class="calibration-camera-card">
+                      <div class="calibration-camera-title">
+                        <span>F</span>
+                        <div>
+                          <strong>中间相机</strong>
+                          <small>camera_f</small>
+                        </div>
+                      </div>
+                      <dl>
+                        <div><dt>父级 link</dt><dd>front_camera_link</dd></div>
+                        <div><dt>目标 link</dt><dd>rgb_camera_f_link</dd></div>
+                        <div><dt>CameraInfo</dt><dd>/camera_f/color/camera_info</dd></div>
+                      </dl>
+                      <div class="calibration-card-footer">
+                        <span class="state-badge idle">0 / 24</span>
+                        <button class="secondary-button" type="button" disabled>采样</button>
+                      </div>
+                    </section>
+                  </div>
+                </article>
+
+                <article class="panel calibration-board-panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>标定板</h2>
+                      <p>DFOPTIX Q12-50-3 / 12x9 squares / 3.0 mm</p>
+                    </div>
+                    <span class="state-badge idle" id="cameraCalibrationDependencyBadge">读取中</span>
+                  </div>
+                  <form class="config-form calibration-board-form">
+                    <label>
+                      <span class="field-label">类型</span>
+                      <select id="calibrationBoardType">
+                        <option disabled>ChArUco</option>
+                        <option disabled>AprilTag Grid</option>
+                        <option selected>Checkerboard</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span class="field-label">内角点列数</span>
+                      <input id="calibrationBoardColumns" type="number" min="2" value="11" inputmode="numeric">
+                    </label>
+                    <label>
+                      <span class="field-label">内角点行数</span>
+                      <input id="calibrationBoardRows" type="number" min="2" value="8" inputmode="numeric">
+                    </label>
+                    <label>
+                      <span class="field-label">方格边长<em>mm</em></span>
+                      <input id="calibrationBoardSquareSize" type="number" min="0" step="0.1" value="3.0" inputmode="decimal">
+                    </label>
+                    <label>
+                      <span class="field-label">Tag 边长<em>mm</em></span>
+                      <input id="calibrationBoardTagSize" type="number" min="0" step="0.1" value="0" inputmode="decimal">
+                    </label>
+                    <label>
+                      <span class="field-label">字典</span>
+                      <select id="calibrationBoardDictionary">
+                        <option>DICT_4X4_50</option>
+                        <option>DICT_5X5_100</option>
+                        <option>DICT_APRILTAG_36h11</option>
+                      </select>
+                    </label>
+                  </form>
+                </article>
+
+                <article class="panel calibration-capture-panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>采样队列</h2>
+                      <p>图像、内参和父级 TF 时间戳</p>
+                    </div>
+                    <span class="state-badge idle" id="cameraCalibrationCaptureBadge">待采样</span>
+                  </div>
+                  <div class="calibration-progress" aria-label="采样进度">
+                    <span id="cameraCalibrationSampleProgress" style="width: 0%"></span>
+                  </div>
+                  <div class="calibration-sample-table" id="cameraCalibrationSampleTable" role="table" aria-label="相机标定采样队列">
+                    <div role="row">
+                      <span role="columnheader">相机</span>
+                      <span role="columnheader">图像</span>
+                      <span role="columnheader">父级 TF</span>
+                      <span role="columnheader">角点</span>
+                    </div>
+                    <div role="row">
+                      <span>camera_l</span>
+                      <strong>等待</strong>
+                      <strong>等待</strong>
+                      <strong>--</strong>
+                    </div>
+                    <div role="row">
+                      <span>camera_r</span>
+                      <strong>等待</strong>
+                      <strong>等待</strong>
+                      <strong>--</strong>
+                    </div>
+                    <div role="row">
+                      <span>camera_f</span>
+                      <strong>等待</strong>
+                      <strong>等待</strong>
+                      <strong>--</strong>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="panel calibration-solve-panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>求解设置</h2>
+                      <p>手眼 / 固定安装标定</p>
+                    </div>
+                    <span class="state-badge idle">待求解</span>
+                  </div>
+                  <div class="calibration-method-row">
+                    <div class="segmented" role="tablist" aria-label="手眼标定求解器">
+                      <button class="is-active" type="button">Tsai</button>
+                      <button type="button">Park</button>
+                      <button type="button">Daniilidis</button>
+                    </div>
+                    <label class="calibration-checkline">
+                      <input type="checkbox" checked>
+                      <span>同时估计标定板位姿</span>
+                    </label>
+                  </div>
+                  <div class="metric-grid calibration-metrics">
+                    <div class="metric-card">
+                      <span>最少姿态</span>
+                      <strong>12</strong>
+                    </div>
+                    <div class="metric-card">
+                      <span>推荐姿态</span>
+                      <strong>24</strong>
+                    </div>
+                    <div class="metric-card">
+                      <span>重投影误差</span>
+                      <strong>-- px</strong>
+                    </div>
+                    <div class="metric-card">
+                      <span>旋转残差</span>
+                      <strong>-- deg</strong>
+                    </div>
+                  </div>
+                </article>
+
+                <article class="panel calibration-output-panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>TF 链路预览</h2>
+                      <p>camera_extrinsics.json + Orbbec optical frame</p>
+                    </div>
+                    <button class="secondary-button" id="cameraExtrinsicsCopyButton" type="button">复制</button>
+                  </div>
+                  <pre class="calibration-output-preview" id="cameraCalibrationTfPreview">left/link6 -> rgb_camera_l_link -> camera_l_link -> camera_l_color_optical_frame
+right/link6 -> rgb_camera_r_link -> camera_r_link -> camera_r_color_optical_frame
+front_camera_link -> rgb_camera_f_link -> camera_f_link -> camera_f_color_optical_frame</pre>
+                  <div class="calibration-config-editor">
+                    <label class="calibration-checkline">
+                      <input id="cameraExtrinsicsEnabledToggle" type="checkbox">
+                      <span>启用 camera_extrinsics.json 发布</span>
+                    </label>
+                    <label>
+                      <span class="field-label">外参配置 JSON</span>
+                      <textarea id="cameraExtrinsicsConfigEditor" spellcheck="false"></textarea>
+                    </label>
+                    <div class="calibration-config-actions">
+                      <button class="secondary-button" id="cameraExtrinsicsResetButton" type="button">恢复后端配置</button>
+                      <button class="primary-button" id="cameraExtrinsicsSaveButton" type="button">保存配置</button>
+                    </div>
+                    <p class="calibration-projection-result" id="cameraExtrinsicsConfigResult">等待后端配置</p>
+                  </div>
+                  <div class="calibration-projection-check">
+                    <div class="calibration-projection-row">
+                      <label>
+                        <span class="field-label">质检相机</span>
+                        <select id="cameraProjectionCheckCamera">
+                          <option value="camera_f">camera_f</option>
+                          <option value="camera_l">camera_l</option>
+                          <option value="camera_r">camera_r</option>
+                        </select>
+                      </label>
+                      <button class="primary-button" id="cameraProjectionCheckButton" type="button">保存投影质检图</button>
+                      <span class="state-badge idle" id="cameraProjectionCheckBadge">等待</span>
+                    </div>
+                    <p class="calibration-projection-result" id="cameraProjectionCheckResult">output/camera_projection_checks</p>
+                    <div class="calibration-projection-preview" id="cameraProjectionPreview">
+                      <span>暂无投影质检图</span>
+                    </div>
+                  </div>
+                </article>
+              </div>
             </section>
             <section class="view" data-view-panel="data-playback">
               <div class="page-head compact">

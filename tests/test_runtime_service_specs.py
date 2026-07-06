@@ -5,7 +5,13 @@ from types import SimpleNamespace
 import backend.server as server
 from modules.runtime import service_manager
 from modules.runtime.managed_service import ManagedService
-from modules.runtime.service_specs import default_service_specs, load_static_transform_config, static_transform_service_spec
+from modules.runtime.service_specs import (
+    camera_extrinsics_service_spec,
+    default_service_specs,
+    load_camera_extrinsics_config,
+    load_static_transform_config,
+    static_transform_service_spec,
+)
 from modules.runtime.service_specs import ManagedServiceSpec
 
 
@@ -76,6 +82,70 @@ def test_load_static_transform_config_reports_missing_as_disabled(tmp_path):
     assert config["transforms"] == []
 
 
+def test_camera_extrinsics_service_uses_separate_config(monkeypatch, tmp_path):
+    config_path = tmp_path / "camera_extrinsics.json"
+    write_config(
+        config_path,
+        {
+            "enabled": True,
+            "transforms": [
+                {
+                    "name": "left_wrist_to_rgb_camera_l",
+                    "parentFrame": "left/link6",
+                    "childFrame": "rgb_camera_l_link",
+                    "translation": {"x": 0.01, "y": -0.02, "z": 0.03},
+                    "rotation": {"roll": 0.1, "pitch": 0.2, "yaw": 0.3},
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("ROBOT_STATION_CAMERA_EXTRINSICS_CONFIG", str(config_path))
+
+    specs = default_service_specs()
+    spec = specs["camera_extrinsics"]
+    command = list(spec.command)
+
+    assert spec.key == "camera_extrinsics"
+    assert command[:4] == ["ros2", "run", "tf2_ros", "static_transform_publisher"]
+    assert command[command.index("--frame-id") + 1] == "left/link6"
+    assert command[command.index("--child-frame-id") + 1] == "rgb_camera_l_link"
+    assert command[command.index("--x") + 1] == "0.01"
+    assert command[command.index("--yaw") + 1] == "0.3"
+    assert "__node:=robot_station_camera_extrinsics_tf_left_wrist_to_rgb_camera_l" in command
+
+
+def test_camera_extrinsics_config_can_disable_service(monkeypatch, tmp_path):
+    config_path = tmp_path / "camera_extrinsics.json"
+    write_config(config_path, {"enabled": False, "transforms": []})
+    monkeypatch.setenv("ROBOT_STATION_CAMERA_EXTRINSICS_CONFIG", str(config_path))
+
+    assert "camera_extrinsics" not in default_service_specs()
+
+
+def test_multiple_camera_extrinsics_share_one_managed_service():
+    config = {
+        "enabled": True,
+        "transforms": [
+            {"name": "left_wrist_to_rgb_camera_l", "parentFrame": "left/link6", "childFrame": "rgb_camera_l_link"},
+            {"name": "right_wrist_to_rgb_camera_r", "parentFrame": "right/link6", "childFrame": "rgb_camera_r_link"},
+        ],
+    }
+
+    spec = camera_extrinsics_service_spec(ros_distro="humble", config=config)
+
+    assert spec.command[:2] == ("bash", "-lc")
+    assert spec.command[2].count("static_transform_publisher") == 2
+    assert "__node:=robot_station_camera_extrinsics_tf_left_wrist_to_rgb_camera_l" in spec.cleanup_process_patterns
+    assert "__node:=robot_station_camera_extrinsics_tf_right_wrist_to_rgb_camera_r" in spec.cleanup_process_patterns
+
+
+def test_load_camera_extrinsics_config_reports_missing_as_disabled(tmp_path):
+    config = load_camera_extrinsics_config(tmp_path / "missing.json")
+
+    assert config["enabled"] is False
+    assert config["transforms"] == []
+
+
 class FakeServiceManager:
     def __init__(self):
         self.calls = []
@@ -106,6 +176,26 @@ def test_autostart_transforms_can_be_disabled(monkeypatch):
     monkeypatch.setattr(server, "get_service_manager", lambda: manager)
 
     assert server.autostart_transforms() is None
+    assert manager.calls == []
+
+
+def test_autostart_camera_extrinsics_starts_runtime_service(monkeypatch):
+    manager = FakeServiceManager()
+    monkeypatch.delenv("ROBOT_STATION_AUTOSTART_CAMERA_EXTRINSICS", raising=False)
+    monkeypatch.setattr(server, "get_service_manager", lambda: manager)
+
+    result = server.autostart_camera_extrinsics()
+
+    assert result["ok"] is True
+    assert manager.calls == [("get", "camera_extrinsics"), ("start", "camera_extrinsics")]
+
+
+def test_autostart_camera_extrinsics_can_be_disabled(monkeypatch):
+    manager = FakeServiceManager()
+    monkeypatch.setenv("ROBOT_STATION_AUTOSTART_CAMERA_EXTRINSICS", "false")
+    monkeypatch.setattr(server, "get_service_manager", lambda: manager)
+
+    assert server.autostart_camera_extrinsics() is None
     assert manager.calls == []
 
 

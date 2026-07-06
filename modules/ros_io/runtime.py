@@ -78,6 +78,10 @@ class RosRuntime:
         self.ensure_started()
         return self._node.get_clock().now().to_msg()
 
+    def get_node(self):
+        self.ensure_started()
+        return self._node
+
     def create_subscription(self, key, message_type, topic, callback, qos_depth=10):
         with self._lock:
             if key in self._subscriptions:

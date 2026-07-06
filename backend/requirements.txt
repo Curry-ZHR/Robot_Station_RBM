@@ -5,5 +5,9 @@
 # Remote inference WebSocket client (backend <-> remote inference machine).
 websockets>=12.0
 
+# Camera/LiDAR projection quality-check image generation.
+numpy>=1.24
+opencv-python-headless>=4.8
+
 # Parquet playback reader for LeRobot-style state/action datasets.
 pyarrow>=15.0

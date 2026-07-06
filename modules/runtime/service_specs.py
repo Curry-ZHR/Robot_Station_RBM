@@ -10,6 +10,7 @@ from modules.drivers.can.can_interface import DEFAULT_CHASSIS_CAN_TARGETS, load_
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 STATIC_TRANSFORMS_CONFIG = ROOT_DIR / "config" / "static_transforms.json"
+CAMERA_EXTRINSICS_CONFIG = ROOT_DIR / "config" / "camera_extrinsics.json"
 
 
 @dataclass(frozen=True)
@@ -83,14 +84,14 @@ def _triplet(raw, names):
     return (0.0, 0.0, 0.0)
 
 
-def _node_name(value):
+def _node_name(value, prefix="robot_station_static_tf"):
     text = re.sub(r"[^A-Za-z0-9_]", "_", str(value or "").strip())
     text = re.sub(r"_+", "_", text).strip("_")
     if not text:
         text = "transform"
     if not re.match(r"^[A-Za-z_]", text):
         text = f"tf_{text}"
-    return f"robot_station_static_tf_{text[:64]}"
+    return f"{prefix}_{text[:64]}"
 
 
 def static_transforms_config_path():
@@ -100,21 +101,27 @@ def static_transforms_config_path():
     return STATIC_TRANSFORMS_CONFIG
 
 
-def load_static_transform_config(path=None):
-    config_path = Path(path).expanduser() if path else static_transforms_config_path()
+def camera_extrinsics_config_path():
+    configured = os.environ.get("ROBOT_STATION_CAMERA_EXTRINSICS_CONFIG")
+    if configured:
+        return Path(configured).expanduser()
+    return CAMERA_EXTRINSICS_CONFIG
+
+
+def _load_transform_config(config_path):
     if not config_path.exists():
         return {"enabled": False, "transforms": [], "path": str(config_path)}
 
     with config_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     if not isinstance(payload, dict):
-        raise ValueError("Static transform config must be a JSON object.")
+        raise ValueError("Transform config must be a JSON object.")
 
     transforms = payload.get("transforms", [])
     if transforms is None:
         transforms = []
     if not isinstance(transforms, list):
-        raise ValueError("Static transform config field transforms must be a list.")
+        raise ValueError("Transform config field transforms must be a list.")
 
     return {
         "enabled": _coerce_bool(payload.get("enabled"), True),
@@ -123,7 +130,17 @@ def load_static_transform_config(path=None):
     }
 
 
-def _static_transform_command(transform):
+def load_static_transform_config(path=None):
+    config_path = Path(path).expanduser() if path else static_transforms_config_path()
+    return _load_transform_config(config_path)
+
+
+def load_camera_extrinsics_config(path=None):
+    config_path = Path(path).expanduser() if path else camera_extrinsics_config_path()
+    return _load_transform_config(config_path)
+
+
+def _static_transform_command(transform, node_prefix="robot_station_static_tf"):
     if not isinstance(transform, dict):
         raise ValueError("Each static transform entry must be a JSON object.")
 
@@ -138,7 +155,7 @@ def _static_transform_command(transform):
     name = transform.get("name") or f"{parent}_to_{child}"
     x, y, z = _triplet(transform.get("translation", {}), ("x", "y", "z"))
     roll, pitch, yaw = _triplet(transform.get("rotation", {}), ("roll", "pitch", "yaw"))
-    node_name = _node_name(name)
+    node_name = _node_name(name, prefix=node_prefix)
 
     return (
         "ros2",
@@ -167,9 +184,16 @@ def _static_transform_command(transform):
     ), node_name
 
 
-def static_transform_service_spec(ros_distro=None, config=None):
+def _transform_service_spec(
+    *,
+    key,
+    name,
+    description,
+    ros_distro=None,
+    config=None,
+    node_prefix="robot_station_static_tf",
+):
     ros_distro = ros_distro or os.environ.get("ROS_DISTRO", "humble")
-    config = config or load_static_transform_config()
     if not config.get("enabled", True):
         return None
 
@@ -180,7 +204,7 @@ def static_transform_service_spec(ros_distro=None, config=None):
     commands = []
     cleanup_patterns = []
     for transform in transform_entries:
-        command, node_name = _static_transform_command(transform)
+        command, node_name = _static_transform_command(transform, node_prefix=node_prefix)
         commands.append(command)
         cleanup_patterns.append(f"__node:={node_name}")
 
@@ -193,15 +217,39 @@ def static_transform_service_spec(ros_distro=None, config=None):
         command = ("bash", "-lc", "\n".join(shell_lines))
 
     return ManagedServiceSpec(
-        key="transforms",
-        name="Static robot transforms",
+        key=key,
+        name=name,
         command=command,
         setup_scripts=(f"/opt/ros/{ros_distro}/setup.bash",),
         cleanup_process_patterns=tuple(cleanup_patterns),
         cwd=str(ROOT_DIR),
         shutdown_timeout_sec=4.0,
         startup_grace_sec=0.5,
+        description=description,
+    )
+
+
+def static_transform_service_spec(ros_distro=None, config=None):
+    config = config or load_static_transform_config()
+    return _transform_service_spec(
+        key="transforms",
+        name="Static robot transforms",
         description="Publish configured static TF frames for Robot Station.",
+        ros_distro=ros_distro,
+        config=config,
+        node_prefix="robot_station_static_tf",
+    )
+
+
+def camera_extrinsics_service_spec(ros_distro=None, config=None):
+    config = config or load_camera_extrinsics_config()
+    return _transform_service_spec(
+        key="camera_extrinsics",
+        name="Camera extrinsic transforms",
+        description="Publish calibrated camera extrinsic TF frames without modifying static robot transforms.",
+        ros_distro=ros_distro,
+        config=config,
+        node_prefix="robot_station_camera_extrinsics_tf",
     )
 
 
@@ -420,4 +468,7 @@ def default_service_specs():
     transforms = static_transform_service_spec(ros_distro=ros_distro)
     if transforms is not None:
         specs["transforms"] = transforms
+    camera_extrinsics = camera_extrinsics_service_spec(ros_distro=ros_distro)
+    if camera_extrinsics is not None:
+        specs["camera_extrinsics"] = camera_extrinsics
     return specs
