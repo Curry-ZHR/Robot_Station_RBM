@@ -5119,6 +5119,13 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
   min-width: 0;
 }
 
+.calibration-method-row label:not(.calibration-checkline),
+.calibration-method-row select,
+.calibration-method-row .primary-button {
+  width: 100%;
+  min-width: 0;
+}
+
 .calibration-checkline {
   display: flex;
   gap: 8px;

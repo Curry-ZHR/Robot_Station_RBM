@@ -32,6 +32,7 @@ from modules.calibration import (
     capture_calibration_sample,
     create_projection_check,
     list_calibration_samples,
+    solve_camera_extrinsics,
 )
 from modules.data_collection import get_action_mirror, shutdown_action_mirror, start_action_mirror
 from modules.drivers.can.can_activate import activate_can
@@ -48,6 +49,7 @@ from modules.ros_io import (
     get_lidar_point_cloud_reader,
     get_ros_reader,
     get_ros_writer,
+    get_tf_transform_reader,
     shutdown_ros_io,
 )
 from modules.runtime import get_service_manager, shutdown_services
@@ -405,6 +407,12 @@ def calibration_result_status(result):
         "CAL-SAMPLE-CORNERS": 422,
         "CAL-SAMPLE-PROCESS": 500,
         "CAL-SAMPLE-SAVE": 500,
+        "CAL-SOLVE-UNKNOWN-CAMERA": 404,
+        "CAL-SOLVE-SAMPLES": 422,
+        "CAL-SOLVE-NUMPY": 503,
+        "CAL-SOLVE-CV2": 503,
+        "CAL-SOLVE-PROCESS": 500,
+        "CAL-SOLVE-INCOMPLETE": 422,
     }
     return mapping.get(code, 500)
 
@@ -1480,6 +1488,35 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             if result.get("ok"):
                 add_sampling_urls(result)
             log_action_result("Calibration sample capture", result)
+            self.write_json(result, status=calibration_result_status(result))
+            return
+        if action in ("solve", "camera-solve", "solve-camera"):
+            save_result = None
+            requested_camera = payload.get("camera") or "all"
+            default_enable = True if str(requested_camera).strip() in {"", "all", "*"} else None
+            result = solve_camera_extrinsics(
+                camera=requested_camera,
+                config=load_camera_extrinsics_config(),
+                method=payload.get("method") or "tsai",
+                min_samples=payload.get("minSamples") or payload.get("min_samples") or 12,
+                tf_reader=get_tf_transform_reader(),
+                wait_sec=payload.get("waitSec") or payload.get("wait_sec") or 0.5,
+                enable=payload.get("enable") if "enable" in payload else default_enable,
+                allow_partial=bool(payload.get("allowPartial") or payload.get("allow_partial")),
+            )
+            if result.get("ok") and payload.get("save", True):
+                try:
+                    save_result = save_camera_extrinsics_payload(result["config"])
+                    result["config"] = save_result.get("config", result["config"])
+                    result["save"] = save_result
+                except (ValueError, OSError) as exc:
+                    result = {
+                        **result,
+                        "ok": False,
+                        "code": "CAL-EXTRINSICS-SAVE",
+                        "detail": f"Camera extrinsics solve succeeded but save failed: {exc}",
+                    }
+            log_action_result("Calibration solve", result)
             self.write_json(result, status=calibration_result_status(result))
             return
         if action in ("camera-projection-check", "projection-check"):

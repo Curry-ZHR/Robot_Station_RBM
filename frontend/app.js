@@ -98,6 +98,8 @@ const state = {
     configDirty: false,
     configSaving: false,
     serviceBusy: false,
+    solveBusy: false,
+    solveResult: null,
   },
   playback: {
     running: false,
@@ -12010,6 +12012,75 @@ function formatCalibrationAge(ageMs) {
   return number < 1000 ? `${Math.round(number)} ms` : `${(number / 1000).toFixed(1)} s`;
 }
 
+function selectedCameraCalibrationMethod() {
+  const active = $("[data-camera-calibration-method].is-active");
+  return active?.dataset.cameraCalibrationMethod || "tsai";
+}
+
+function selectedCameraCalibrationSolveCamera() {
+  return $("#cameraCalibrationSolveCamera")?.value || "all";
+}
+
+function aggregateCameraCalibrationSolveMetrics(result = state.cameraCalibration.solveResult) {
+  const cameraResults = Array.isArray(result?.cameraResults) ? result.cameraResults : [];
+  const solved = cameraResults.filter((item) => item?.ok && item.metrics);
+  const average = (key) => {
+    const values = solved.map((item) => Number(item.metrics?.[key])).filter((value) => Number.isFinite(value));
+    if (!values.length) return null;
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+  };
+  return {
+    reprojectionRmsPx: average("reprojectionRmsPx"),
+    boardRotationRmsDeg: average("boardRotationRmsDeg"),
+    sampleCount: solved.reduce((sum, item) => sum + (Number(item.metrics?.sampleCount) || 0), 0),
+  };
+}
+
+function renderCameraCalibrationSolve(payload = cameraCalibrationPayload()) {
+  const result = state.cameraCalibration.solveResult;
+  const dependenciesReady = cameraCalibrationDependenciesReady(payload);
+  const sampling = cameraCalibrationSampling(payload);
+  const totalSamples = Number(sampling?.total) || 0;
+  const selectedCamera = selectedCameraCalibrationSolveCamera();
+  const perCamera = cameraCalibrationPerCameraSamples(payload);
+  const selectedSamples = selectedCamera === "all"
+    ? totalSamples
+    : Number(perCamera[selectedCamera]?.count) || 0;
+
+  if (state.cameraCalibration.solveBusy) {
+    setStateBadge("#cameraCalibrationSolveBadge", "求解中", "warn");
+  } else if (result?.ok) {
+    setStateBadge("#cameraCalibrationSolveBadge", "已求解", "ok");
+  } else if (result && result.ok === false) {
+    setStateBadge("#cameraCalibrationSolveBadge", "求解失败", "danger");
+  } else if (!dependenciesReady && payload) {
+    setStateBadge("#cameraCalibrationSolveBadge", "依赖缺失", "danger");
+  } else if (selectedSamples > 0) {
+    setStateBadge("#cameraCalibrationSolveBadge", "待求解", "warn");
+  } else {
+    setStateBadge("#cameraCalibrationSolveBadge", "待采样", "idle");
+  }
+
+  setText("#cameraCalibrationMinSamplesMetric", "12");
+  setText("#cameraCalibrationRecommendedSamplesMetric", selectedCamera === "all" ? "24 / 路" : "24");
+  const metrics = aggregateCameraCalibrationSolveMetrics(result);
+  setText(
+    "#cameraCalibrationReprojectionMetric",
+    Number.isFinite(metrics.reprojectionRmsPx) ? `${metrics.reprojectionRmsPx.toFixed(2)} px` : "-- px",
+  );
+  setText(
+    "#cameraCalibrationRotationResidualMetric",
+    Number.isFinite(metrics.boardRotationRmsDeg) ? `${metrics.boardRotationRmsDeg.toFixed(2)} deg` : "-- deg",
+  );
+
+  const button = $("#cameraCalibrationSolveButton");
+  if (button) {
+    button.disabled = state.cameraCalibration.solveBusy || !payload?.ok || !dependenciesReady || selectedSamples <= 0;
+    button.textContent = state.cameraCalibration.solveBusy ? "求解中" : "开始求解";
+    button.title = selectedSamples <= 0 ? "请先采集标定样本" : "使用已采集样本求解 camera_extrinsics.json";
+  }
+}
+
 function renderCameraCalibrationCameraList(cameras, payload = cameraCalibrationPayload()) {
   const list = $("#calibrationCameraList");
   if (!list) return;
@@ -12269,6 +12340,7 @@ function renderCameraCalibrationStatus(payload = cameraCalibrationPayload()) {
   renderCameraCalibrationTfPreview(payload);
   renderCameraCalibrationEditor(payload);
   renderCameraCalibrationServiceButton(payload);
+  renderCameraCalibrationSolve(payload);
   const latestProjection = Array.isArray(payload?.projectionChecks) ? payload.projectionChecks[0] : null;
   if (latestProjection) renderCameraProjectionPreview(latestProjection);
 }
@@ -12453,6 +12525,66 @@ async function requestCameraCalibrationSample(cameraKey) {
   }
 }
 
+async function requestCameraCalibrationSolve() {
+  if (state.cameraCalibration.solveBusy) return;
+  const payload = cameraCalibrationPayload() || await refreshCameraCalibrationStatus({ silent: true, force: true });
+  if (!payload?.ok || !cameraCalibrationDependenciesReady(payload)) {
+    renderCameraCalibrationStatus(payload);
+    return;
+  }
+
+  const camera = selectedCameraCalibrationSolveCamera();
+  const method = selectedCameraCalibrationMethod();
+  state.cameraCalibration.solveBusy = true;
+  state.cameraCalibration.solveResult = null;
+  renderCameraCalibrationStatus(payload);
+  addLog("相机标定", `开始求解 ${camera === "all" ? "全部相机" : camera} 外参，方法 ${method}`);
+
+  try {
+    const requestBody = {
+      camera,
+      method,
+      minSamples: 12,
+      waitSec: 0.5,
+      save: true,
+    };
+    if (camera === "all") requestBody.enable = true;
+    const response = await fetch("/api/calibration/solve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    });
+    const result = await response.json().catch(() => ({}));
+    state.cameraCalibration.solveResult = result;
+    if (!response.ok || !result.ok) {
+      const error = new Error(result.detail || `HTTP ${response.status}`);
+      error.payload = result;
+      throw error;
+    }
+    state.cameraCalibration.configDirty = false;
+    if (state.cameraCalibration.statusPayload?.extrinsics && result.config) {
+      state.cameraCalibration.statusPayload.extrinsics.config = result.config;
+    }
+    const solved = Array.isArray(result.solvedCameras) ? result.solvedCameras.join(", ") : camera;
+    addLog("相机标定", `外参求解完成：${solved}`);
+    if (Array.isArray(result.warnings) && result.warnings.length) {
+      addLog("相机标定", result.warnings[0]);
+    }
+    await refreshCameraCalibrationStatus({ silent: true, force: true });
+  } catch (error) {
+    const result = error.payload || state.cameraCalibration.solveResult || {};
+    const failed = Array.isArray(result.failedCameras) && result.failedCameras.length
+      ? ` (${result.failedCameras.join(", ")})`
+      : "";
+    const detail = result.detail || error.message || "求解失败";
+    setText("#cameraExtrinsicsConfigResult", `求解失败：${detail}${failed}`);
+    addLog("相机标定", `外参求解失败：${detail}${failed}`);
+  } finally {
+    state.cameraCalibration.solveBusy = false;
+    renderCameraCalibrationStatus();
+  }
+}
+
 async function copyCameraExtrinsicsConfig() {
   const textarea = $("#cameraExtrinsicsConfigEditor");
   const payload = textarea?.value || $("#cameraCalibrationTfPreview")?.textContent || "";
@@ -12624,6 +12756,8 @@ function bindEvents() {
   $("#cameraExtrinsicsCopyButton")?.addEventListener("click", copyCameraExtrinsicsConfig);
   $("#cameraExtrinsicsEnabledToggle")?.addEventListener("change", syncCameraExtrinsicsEnabledFromToggle);
   $("#cameraExtrinsicsConfigEditor")?.addEventListener("input", markCameraExtrinsicsConfigDirty);
+  $("#cameraCalibrationSolveButton")?.addEventListener("click", requestCameraCalibrationSolve);
+  $("#cameraCalibrationSolveCamera")?.addEventListener("change", () => renderCameraCalibrationSolve());
   $("#cameraProjectionCheckButton")?.addEventListener("click", requestCameraProjectionCheck);
   const lidarPointRadiusInput = $("#lidarPointRadiusInput");
   if (lidarPointRadiusInput) {

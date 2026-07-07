@@ -6,6 +6,7 @@ from modules.calibration.sampling import (
     capture_calibration_sample,
     list_calibration_samples,
 )
+from modules.calibration.solver import solve_camera_extrinsics
 
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "capture_calibration_sample",
     "create_projection_check",
     "list_calibration_samples",
+    "solve_camera_extrinsics",
 ]

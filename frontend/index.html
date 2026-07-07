@@ -1059,35 +1059,45 @@
                       <h2>求解设置</h2>
                       <p>手眼 / 固定安装标定</p>
                     </div>
-                    <span class="state-badge idle">待求解</span>
+                    <span class="state-badge idle" id="cameraCalibrationSolveBadge">待求解</span>
                   </div>
                   <div class="calibration-method-row">
                     <div class="segmented" role="tablist" aria-label="手眼标定求解器">
-                      <button class="is-active" type="button">Tsai</button>
-                      <button type="button">Park</button>
-                      <button type="button">Daniilidis</button>
+                      <button class="is-active" data-camera-calibration-method="tsai" type="button">Tsai</button>
+                      <button data-camera-calibration-method="park" type="button">Park</button>
+                      <button data-camera-calibration-method="daniilidis" type="button">Daniilidis</button>
                     </div>
+                    <label>
+                      <span class="field-label">求解相机</span>
+                      <select id="cameraCalibrationSolveCamera">
+                        <option value="all">全部</option>
+                        <option value="camera_f">camera_f</option>
+                        <option value="camera_l">camera_l</option>
+                        <option value="camera_r">camera_r</option>
+                      </select>
+                    </label>
                     <label class="calibration-checkline">
-                      <input type="checkbox" checked>
+                      <input id="cameraCalibrationEstimateBoardToggle" type="checkbox" checked>
                       <span>同时估计标定板位姿</span>
                     </label>
+                    <button class="primary-button" id="cameraCalibrationSolveButton" type="button">开始求解</button>
                   </div>
                   <div class="metric-grid calibration-metrics">
                     <div class="metric-card">
                       <span>最少姿态</span>
-                      <strong>12</strong>
+                      <strong id="cameraCalibrationMinSamplesMetric">12</strong>
                     </div>
                     <div class="metric-card">
                       <span>推荐姿态</span>
-                      <strong>24</strong>
+                      <strong id="cameraCalibrationRecommendedSamplesMetric">24</strong>
                     </div>
                     <div class="metric-card">
                       <span>重投影误差</span>
-                      <strong>-- px</strong>
+                      <strong id="cameraCalibrationReprojectionMetric">-- px</strong>
                     </div>
                     <div class="metric-card">
                       <span>旋转残差</span>
-                      <strong>-- deg</strong>
+                      <strong id="cameraCalibrationRotationResidualMetric">-- deg</strong>
                     </div>
                   </div>
                 </article>
