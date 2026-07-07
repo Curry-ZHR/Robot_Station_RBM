@@ -271,6 +271,105 @@ def list_calibration_samples(output_root=None, limit=240, target_per_camera=DEFA
     }
 
 
+def _sample_file_candidates(metadata_path, metadata, output_root):
+    stem = metadata_path.stem
+    candidates = [metadata_path]
+    for key, fallback_name in (
+        ("imagePath", f"{stem}.jpg"),
+        ("overlayPath", f"{stem}_corners.png"),
+    ):
+        raw_path = metadata.get(key) if isinstance(metadata, dict) else None
+        path = Path(raw_path) if raw_path else output_root / fallback_name
+        if not path.is_absolute():
+            path = output_root / path
+        candidates.append(path)
+    return candidates
+
+
+def _path_inside_root(path, root):
+    resolved = Path(path).expanduser().resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        return None
+    return resolved
+
+
+def clear_calibration_samples(camera, output_root=None, target_per_camera=DEFAULT_TARGET_SAMPLES_PER_CAMERA):
+    camera_key = str(camera or "").strip()
+    clear_all = camera_key in {"all", "*"}
+    if not clear_all and camera_key not in CAMERA_TARGETS:
+        return _result(False, "CAL-SAMPLES-UNKNOWN-CAMERA", f"Unknown calibration camera: {camera_key}", camera=camera_key)
+
+    root = Path(output_root or DEFAULT_SAMPLE_ROOT).expanduser().resolve()
+    deleted_files = []
+    skipped_files = []
+    errors = []
+    deleted_sample_count = 0
+
+    if root.exists():
+        for metadata_path in sorted(root.glob("*.json")):
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                metadata = {}
+
+            metadata_camera = str(metadata.get("camera") or "").strip() if isinstance(metadata, dict) else ""
+            if not clear_all and metadata_camera != camera_key:
+                continue
+
+            deleted_metadata = False
+            seen_paths = set()
+            for candidate in _sample_file_candidates(metadata_path, metadata, root):
+                safe_path = _path_inside_root(candidate, root)
+                if safe_path is None:
+                    skipped_files.append(str(candidate))
+                    continue
+                if safe_path in seen_paths:
+                    continue
+                seen_paths.add(safe_path)
+                if not safe_path.exists():
+                    continue
+                try:
+                    safe_path.unlink()
+                except OSError as exc:
+                    errors.append(f"{safe_path}: {exc}")
+                    continue
+                deleted_files.append(str(safe_path))
+                if safe_path == metadata_path.resolve():
+                    deleted_metadata = True
+            if deleted_metadata:
+                deleted_sample_count += 1
+
+    samples = list_calibration_samples(output_root=root, target_per_camera=target_per_camera)
+    if errors:
+        return _result(
+            False,
+            "CAL-SAMPLES-CLEAR",
+            f"Failed to delete {len(errors)} calibration sample file(s).",
+            camera="all" if clear_all else camera_key,
+            deletedSampleCount=deleted_sample_count,
+            deletedFileCount=len(deleted_files),
+            deletedFiles=deleted_files,
+            skippedFiles=skipped_files,
+            errors=errors,
+            sampling=samples,
+        )
+
+    label = "all cameras" if clear_all else camera_key
+    return _result(
+        True,
+        "CAL-SAMPLES-CLEARED",
+        f"Cleared {deleted_sample_count} calibration sample(s) for {label}.",
+        camera="all" if clear_all else camera_key,
+        deletedSampleCount=deleted_sample_count,
+        deletedFileCount=len(deleted_files),
+        deletedFiles=deleted_files,
+        skippedFiles=skipped_files,
+        sampling=samples,
+    )
+
+
 def capture_calibration_sample(
     camera,
     board=None,

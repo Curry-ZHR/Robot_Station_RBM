@@ -29,6 +29,7 @@ from modules.calibration import (
     CAMERA_TARGETS,
     DEFAULT_OUTPUT_ROOT,
     DEFAULT_SAMPLE_ROOT,
+    clear_calibration_samples,
     capture_calibration_sample,
     create_projection_check,
     list_calibration_samples,
@@ -255,10 +256,41 @@ def run_self_check(auto_activate=True):
         return payload
 
 
+def action_result_log_context(result):
+    if not isinstance(result, dict):
+        return ""
+
+    fields = []
+
+    def add_field(name, value):
+        if value is None or value == "":
+            return
+        fields.append(f"{name}={value}")
+
+    sample = result.get("sample") if isinstance(result.get("sample"), dict) else {}
+    add_field("camera", result.get("camera") or sample.get("camera"))
+
+    expected_corners = result.get("expectedCornerCount", sample.get("expectedCornerCount"))
+    detected_corners = result.get("detectedCornerCount", sample.get("cornerCount"))
+    if expected_corners is not None or detected_corners is not None:
+        detected_text = detected_corners if detected_corners is not None else "?"
+        expected_text = expected_corners if expected_corners is not None else "?"
+        add_field("corners", f"{detected_text}/{expected_text}")
+
+    board = result.get("board") or sample.get("board")
+    if isinstance(board, dict):
+        columns = board.get("columns")
+        rows = board.get("rows")
+        if columns is not None and rows is not None:
+            add_field("board", f"{columns}x{rows}")
+
+    return f" ({', '.join(fields)})" if fields else ""
+
+
 def log_action_result(action, result):
     code = result.get("code", "")
     detail = result.get("detail", "")
-    message = f"{action}: {code} - {detail}"
+    message = f"{action}: {code} - {detail}{action_result_log_context(result)}"
     if result.get("ok"):
         LOGGER.success(message)
     else:
@@ -416,6 +448,8 @@ def calibration_result_status(result):
         "CAL-SAMPLE-CORNERS": 422,
         "CAL-SAMPLE-PROCESS": 500,
         "CAL-SAMPLE-SAVE": 500,
+        "CAL-SAMPLES-UNKNOWN-CAMERA": 404,
+        "CAL-SAMPLES-CLEAR": 500,
         "CAL-SOLVE-UNKNOWN-CAMERA": 404,
         "CAL-SOLVE-SAMPLES": 422,
         "CAL-SOLVE-NUMPY": 503,
@@ -1528,6 +1562,13 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
             if result.get("ok"):
                 add_sampling_urls(result)
             log_action_result("Calibration sample capture", result)
+            self.write_json(result, status=calibration_result_status(result))
+            return
+        if action in ("samples/clear", "clear-samples", "sample-clear"):
+            result = clear_calibration_samples(camera=payload.get("camera") or payload.get("cameraKey") or "")
+            if isinstance(result.get("sampling"), dict):
+                add_sampling_urls(result["sampling"])
+            log_action_result("Calibration samples clear", result)
             self.write_json(result, status=calibration_result_status(result))
             return
         if action in ("solve", "camera-solve", "solve-camera"):

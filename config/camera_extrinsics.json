@@ -1,50 +1,19 @@
 {
-  "enabled": false,
-  "note": "Replace the identity values with calibrated extrinsics, then set enabled to true and restart camera_extrinsics.",
+  "enabled": true,
   "transforms": [
-    {
-      "name": "left_wrist_to_rgb_camera_l",
-      "parentFrame": "left/link6",
-      "childFrame": "rgb_camera_l_link",
-      "translation": {
-        "x": 0.0,
-        "y": 0.0,
-        "z": 0.0
-      },
-      "rotation": {
-        "roll": 0.0,
-        "pitch": 0.0,
-        "yaw": 0.0
-      }
-    },
-    {
-      "name": "rgb_camera_l_to_driver_camera_l",
-      "parentFrame": "rgb_camera_l_link",
-      "childFrame": "camera_l_link",
-      "translation": {
-        "x": 0.0,
-        "y": 0.0,
-        "z": 0.0
-      },
-      "rotation": {
-        "roll": 0.0,
-        "pitch": 0.0,
-        "yaw": 0.0
-      }
-    },
     {
       "name": "right_wrist_to_rgb_camera_r",
       "parentFrame": "right/link6",
       "childFrame": "rgb_camera_r_link",
       "translation": {
-        "x": 0.0,
-        "y": 0.0,
-        "z": 0.0
+        "x": 0,
+        "y": 0,
+        "z": 0
       },
       "rotation": {
-        "roll": 0.0,
-        "pitch": 0.0,
-        "yaw": 0.0
+        "roll": 0,
+        "pitch": 0,
+        "yaw": 0
       }
     },
     {
@@ -52,14 +21,14 @@
       "parentFrame": "rgb_camera_r_link",
       "childFrame": "camera_r_link",
       "translation": {
-        "x": 0.0,
-        "y": 0.0,
-        "z": 0.0
+        "x": 0,
+        "y": 0,
+        "z": 0
       },
       "rotation": {
-        "roll": 0.0,
-        "pitch": 0.0,
-        "yaw": 0.0
+        "roll": 0,
+        "pitch": 0,
+        "yaw": 0
       }
     },
     {
@@ -67,14 +36,14 @@
       "parentFrame": "front_camera_link",
       "childFrame": "rgb_camera_f_link",
       "translation": {
-        "x": 0.0,
-        "y": 0.0,
-        "z": 0.0
+        "x": 0,
+        "y": 0,
+        "z": 0
       },
       "rotation": {
-        "roll": 0.0,
-        "pitch": 0.0,
-        "yaw": 0.0
+        "roll": 0,
+        "pitch": 0,
+        "yaw": 0
       }
     },
     {
@@ -82,15 +51,50 @@
       "parentFrame": "rgb_camera_f_link",
       "childFrame": "camera_f_link",
       "translation": {
-        "x": 0.0,
-        "y": 0.0,
-        "z": 0.0
+        "x": 0,
+        "y": 0,
+        "z": 0
       },
       "rotation": {
-        "roll": 0.0,
-        "pitch": 0.0,
-        "yaw": 0.0
+        "roll": 0,
+        "pitch": 0,
+        "yaw": 0
       }
+    },
+    {
+      "name": "left_link6_to_rgb_camera_l_link",
+      "parentFrame": "left/link6",
+      "childFrame": "rgb_camera_l_link",
+      "translation": {
+        "x": -0.058161863635291355,
+        "y": 0.016773782375050027,
+        "z": 0.2341738666169122
+      },
+      "rotation": {
+        "roll": -1.4225573774705977,
+        "pitch": -1.297197368642442,
+        "yaw": 2.0881319129072216
+      },
+      "source": "robot_station_calibration",
+      "solvedAt": "2026-07-07 14:49:39",
+      "method": "tsai",
+      "sampleCount": 24
+    },
+    {
+      "name": "rgb_camera_l_to_driver_camera_l",
+      "parentFrame": "rgb_camera_l_link",
+      "childFrame": "camera_l_link",
+      "translation": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "rotation": {
+        "roll": 0,
+        "pitch": 0,
+        "yaw": 0
+      },
+      "source": "robot_station_calibration"
     }
   ]
 }

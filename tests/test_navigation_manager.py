@@ -119,6 +119,26 @@ def test_omni_mode_commands_diagonal_crab(monkeypatch):
     assert errors["distance"] == pytest.approx(math.sqrt(2.0))
 
 
+def test_omni_mode_commands_when_axis_errors_inside_tolerance_but_distance_outside(monkeypatch):
+    manager = _manager(monkeypatch)
+    target, params = manager._command_from_payload({"mode": "omni", "x": 0.04, "y": 0.04, "yawDeg": 0})
+
+    command, phase, errors, done = manager._next_command(
+        _state(manager, target, params, PHASE_OMNI_TRANSLATE),
+        target,
+        params,
+        _pose(0.0, 0.0, 0.0),
+    )
+
+    assert not done
+    assert phase == PHASE_OMNI_TRANSLATE
+    assert abs(errors["bodyX"]) <= params["positionToleranceM"]
+    assert abs(errors["bodyY"]) <= params["positionToleranceM"]
+    assert errors["distance"] > params["positionToleranceM"]
+    assert command["linearX"] > 0.0
+    assert command["linearY"] > 0.0
+
+
 def test_rotate_phase_completes_within_tolerances(monkeypatch):
     manager = _manager(monkeypatch)
     target, params = manager._command_from_payload({"mode": "omni", "x": 1.0, "y": 1.0, "yawDeg": 3})

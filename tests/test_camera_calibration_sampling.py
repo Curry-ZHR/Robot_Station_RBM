@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from modules.calibration.sampling import capture_calibration_sample, list_calibration_samples
+from modules.calibration.sampling import clear_calibration_samples, capture_calibration_sample, list_calibration_samples
 
 
 cv2 = pytest.importorskip("cv2")
@@ -138,3 +138,46 @@ def test_capture_calibration_sample_rejects_images_without_checkerboard(tmp_path
     assert result["ok"] is False
     assert result["code"] == "CAL-SAMPLE-CORNERS"
     assert not list(tmp_path.glob("*.json"))
+
+
+def test_clear_calibration_samples_removes_only_requested_camera_files(tmp_path):
+    body, width, height = encoded_checkerboard()
+    front_result = capture_calibration_sample(
+        camera="camera_f",
+        board={"type": "checkerboard", "columns": 11, "rows": 8, "squareSizeMm": 3.0},
+        camera_reader=FakeCameraReader(body),
+        ros_reader=FakeRosReader(width, height),
+        tf_reader=FakeTfReader(),
+        output_root=tmp_path,
+    )
+    left_result = capture_calibration_sample(
+        camera="camera_l",
+        board={"type": "checkerboard", "columns": 11, "rows": 8, "squareSizeMm": 3.0},
+        camera_reader=FakeCameraReader(body),
+        ros_reader=FakeRosReader(width, height),
+        tf_reader=FakeTfReader(),
+        output_root=tmp_path,
+    )
+    assert front_result["ok"] is True
+    assert left_result["ok"] is True
+
+    front_paths = [
+        Path(front_result["sample"]["imagePath"]),
+        Path(front_result["sample"]["overlayPath"]),
+        Path(front_result["sample"]["metadataPath"]),
+    ]
+    left_paths = [
+        Path(left_result["sample"]["imagePath"]),
+        Path(left_result["sample"]["overlayPath"]),
+        Path(left_result["sample"]["metadataPath"]),
+    ]
+
+    result = clear_calibration_samples("camera_f", output_root=tmp_path)
+
+    assert result["ok"] is True
+    assert result["code"] == "CAL-SAMPLES-CLEARED"
+    assert result["deletedSampleCount"] == 1
+    assert result["sampling"]["perCamera"]["camera_f"]["count"] == 0
+    assert result["sampling"]["perCamera"]["camera_l"]["count"] == 1
+    assert all(not path.exists() for path in front_paths)
+    assert all(path.exists() for path in left_paths)

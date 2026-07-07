@@ -92,6 +92,7 @@ const state = {
   cameraCalibration: {
     projectionBusy: false,
     sampleBusyCamera: "",
+    sampleClearBusyCamera: "",
     statusLoading: false,
     statusPayload: null,
     statusError: "",
@@ -6386,6 +6387,7 @@ function localizationBadgeMeta() {
   const localization = state.localization;
   const maps = Array.isArray(localization.maps) ? localization.maps : [];
   if (localization.running && localization.status === "error") return { text: "定位异常", level: "danger" };
+  if (localization.running && localization.status === "lost") return { text: "定位恢复中", level: "warn" };
   if (localization.running && localization.status === "degraded") return { text: "定位退化", level: "warn" };
   if (localization.running && localization.status === "waiting_initial_pose") return { text: "待初值", level: "warn" };
   if (localization.running) return { text: "定位中", level: "ok" };
@@ -6404,6 +6406,7 @@ function localizationStatusText(stateValue = state.localization.status) {
     waiting_initial_pose: "等待初值",
     localizing: "定位中",
     degraded: "定位退化",
+    lost: "定位恢复中",
     error: "定位异常",
     failed: "进程异常",
   };
@@ -12845,12 +12848,16 @@ function renderCameraCalibrationCameraList(cameras, payload = cameraCalibrationP
     const targetCount = Number(sampleStats.targetCount || cameraCalibrationSampling(payload)?.targetCount || 24) || 24;
     const sampleLevel = sampleCount >= targetCount ? "ok" : sampleCount > 0 ? "warn" : "idle";
     const sampleBusy = state.cameraCalibration.sampleBusyCamera === camera.camera;
-    const canSample = Boolean(payload?.ok && dependenciesReady && !state.cameraCalibration.sampleBusyCamera);
+    const clearBusy = state.cameraCalibration.sampleClearBusyCamera === camera.camera;
+    const calibrationSampleBusy = Boolean(state.cameraCalibration.sampleBusyCamera || state.cameraCalibration.sampleClearBusyCamera);
+    const canSample = Boolean(payload?.ok && dependenciesReady && !calibrationSampleBusy);
+    const canClear = Boolean(payload?.ok && sampleCount > 0 && !calibrationSampleBusy);
     const buttonTitle = !payload?.ok
       ? "等待标定状态可用"
       : !dependenciesReady
         ? "缺少 OpenCV/NumPy 依赖"
         : `采集 ${camera.camera} 棋盘样本`;
+    const clearTitle = sampleCount > 0 ? `清除 ${camera.camera} 已采样本` : "没有可清除样本";
     const classes = ["calibration-camera-card", ready ? "is-configured" : "is-missing"];
     return `
       <section class="${classes.join(" ")}">
@@ -12870,7 +12877,10 @@ function renderCameraCalibrationCameraList(cameras, payload = cameraCalibrationP
         </dl>
         <div class="calibration-card-footer">
           <span class="state-badge ${sampleLevel}" title="${escapeHtml(badge)}">${sampleCount} / ${targetCount}</span>
-          <button class="secondary-button" type="button" data-camera-calibration-sample="${escapeHtml(camera.camera)}" title="${escapeHtml(buttonTitle)}" ${canSample ? "" : "disabled"}>${sampleBusy ? "采样中" : "采样"}</button>
+          <div class="calibration-card-actions">
+            <button class="secondary-button" type="button" data-camera-calibration-sample="${escapeHtml(camera.camera)}" title="${escapeHtml(buttonTitle)}" ${canSample ? "" : "disabled"}>${sampleBusy ? "采样中" : "采样"}</button>
+            <button class="secondary-button calibration-clear-button" type="button" data-camera-calibration-clear="${escapeHtml(camera.camera)}" title="${escapeHtml(clearTitle)}" ${canClear ? "" : "disabled"}>${clearBusy ? "清除中" : "清除"}</button>
+          </div>
         </div>
       </section>
     `;
@@ -13006,18 +13016,22 @@ function renderCameraCalibrationSampleQueue(payload = cameraCalibrationPayload()
     const latest = stats.latest || samples.find((sample) => sample.camera === camera.camera) || null;
     const count = Number(stats.count) || 0;
     const target = Number(stats.targetCount || sampling?.targetCount || 24) || 24;
+    const clearBusy = state.cameraCalibration.sampleClearBusyCamera === camera.camera;
+    const calibrationSampleBusy = Boolean(state.cameraCalibration.sampleBusyCamera || state.cameraCalibration.sampleClearBusyCamera);
     const imageText = latest ? `${count}/${target} | ${formatCalibrationAge(latest.imageAgeMs)}` : `${count}/${target}`;
     const tfText = latest?.parentTfStamp ? latest.parentTfStamp : latest ? "已记录" : "等待";
     const cornersText = latest
       ? `${Number(latest.cornerCount) || 0}/${Number(latest.expectedCornerCount) || 0}`
       : "--";
     const rms = latest?.reprojectionRmsPx == null ? "" : ` | ${formatCalibrationSampleMetric(latest.reprojectionRmsPx, " px")}`;
+    const canClear = Boolean(count > 0 && !calibrationSampleBusy);
     return `
       <div role="row">
         <span>${escapeHtml(camera.camera || "")}</span>
         <strong>${escapeHtml(imageText)}</strong>
         <strong>${escapeHtml(tfText || "--")}</strong>
         <strong>${escapeHtml(`${cornersText}${rms}`)}</strong>
+        <span><button class="secondary-button calibration-table-button calibration-clear-button" type="button" data-camera-calibration-clear="${escapeHtml(camera.camera || "")}" ${canClear ? "" : "disabled"}>${clearBusy ? "清除中" : "清除"}</button></span>
       </div>
     `;
   }).join("");
@@ -13028,6 +13042,7 @@ function renderCameraCalibrationSampleQueue(payload = cameraCalibrationPayload()
       <span role="columnheader">图像</span>
       <span role="columnheader">父级 TF</span>
       <span role="columnheader">角点</span>
+      <span role="columnheader">操作</span>
     </div>
     ${rows}
   `;
@@ -13073,6 +13088,8 @@ function renderCameraCalibrationStatus(payload = cameraCalibrationPayload()) {
     setStateBadge("#cameraCalibrationCaptureBadge", "依赖缺失", "danger");
   } else if (state.cameraCalibration.sampleBusyCamera) {
     setStateBadge("#cameraCalibrationCaptureBadge", "采样中", "warn");
+  } else if (state.cameraCalibration.sampleClearBusyCamera) {
+    setStateBadge("#cameraCalibrationCaptureBadge", "清除中", "warn");
   } else {
     const sampling = cameraCalibrationSampling(payload);
     const total = Number(sampling?.total) || 0;
@@ -13225,7 +13242,7 @@ async function requestCameraExtrinsicsServiceAction() {
 
 async function requestCameraCalibrationSample(cameraKey) {
   const camera = String(cameraKey || "").trim();
-  if (!camera || state.cameraCalibration.sampleBusyCamera) return;
+  if (!camera || state.cameraCalibration.sampleBusyCamera || state.cameraCalibration.sampleClearBusyCamera) return;
   const payload = cameraCalibrationPayload() || await refreshCameraCalibrationStatus({ silent: true, force: true });
   if (!payload?.ok || !cameraCalibrationDependenciesReady(payload)) {
     renderCameraCalibrationStatus(payload);
@@ -13266,6 +13283,45 @@ async function requestCameraCalibrationSample(cameraKey) {
     addLog("相机标定", `${camera} 标定样本采集失败：${detail}`);
   } finally {
     state.cameraCalibration.sampleBusyCamera = "";
+    renderCameraCalibrationStatus();
+  }
+}
+
+async function requestCameraCalibrationClearSamples(cameraKey) {
+  const camera = String(cameraKey || "").trim();
+  if (!camera || state.cameraCalibration.sampleBusyCamera || state.cameraCalibration.sampleClearBusyCamera) return;
+  const payload = cameraCalibrationPayload() || await refreshCameraCalibrationStatus({ silent: true, force: true });
+  const sampleStats = cameraCalibrationPerCameraSamples(payload)[camera] || {};
+  const sampleCount = Number(sampleStats.count) || 0;
+  if (sampleCount <= 0) return;
+  if (!window.confirm(`清除 ${camera} 的 ${sampleCount} 个标定样本？`)) return;
+
+  state.cameraCalibration.sampleClearBusyCamera = camera;
+  renderCameraCalibrationStatus(payload);
+  addLog("相机标定", `开始清除 ${camera} 标定样本`);
+
+  try {
+    const response = await fetch("/api/calibration/samples/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ camera }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) {
+      const error = new Error(result.detail || `HTTP ${response.status}`);
+      error.payload = result;
+      throw error;
+    }
+    if (state.cameraCalibration.statusPayload && result.sampling) {
+      state.cameraCalibration.statusPayload.sampling = result.sampling;
+    }
+    addLog("相机标定", `${camera} 标定样本已清除：${Number(result.deletedSampleCount) || 0} 个样本`);
+    await refreshCameraCalibrationStatus({ silent: true, force: true });
+  } catch (error) {
+    const detail = error.payload?.detail || error.message || "清除失败";
+    addLog("相机标定", `${camera} 标定样本清除失败：${detail}`);
+  } finally {
+    state.cameraCalibration.sampleClearBusyCamera = "";
     renderCameraCalibrationStatus();
   }
 }
@@ -13512,8 +13568,16 @@ function bindEvents() {
   $("#cameraCalibrationRefreshButton")?.addEventListener("click", () => refreshCameraCalibrationStatus({ force: true }));
   $("#calibrationCameraList")?.addEventListener("click", (event) => {
     const button = event.target.closest("[data-camera-calibration-sample]");
-    if (!button) return;
-    requestCameraCalibrationSample(button.dataset.cameraCalibrationSample);
+    if (button) {
+      requestCameraCalibrationSample(button.dataset.cameraCalibrationSample);
+      return;
+    }
+    const clearButton = event.target.closest("[data-camera-calibration-clear]");
+    if (clearButton) requestCameraCalibrationClearSamples(clearButton.dataset.cameraCalibrationClear);
+  });
+  $("#cameraCalibrationSampleTable")?.addEventListener("click", (event) => {
+    const clearButton = event.target.closest("[data-camera-calibration-clear]");
+    if (clearButton) requestCameraCalibrationClearSamples(clearButton.dataset.cameraCalibrationClear);
   });
   $("#cameraExtrinsicsServiceButton")?.addEventListener("click", requestCameraExtrinsicsServiceAction);
   $("#cameraExtrinsicsSaveButton")?.addEventListener("click", saveCameraExtrinsicsConfig);

@@ -188,6 +188,12 @@ def _sign_preserving_command(error, gain, minimum, maximum):
     return math.copysign(magnitude, error)
 
 
+def _proportional_command(error, gain, maximum):
+    if abs(error) < 1e-12:
+        return 0.0
+    return math.copysign(min(maximum, abs(error) * gain), error)
+
+
 class NavigationManager:
     def __init__(self, reader=None, publisher=None):
         self._reader = reader
@@ -530,22 +536,22 @@ class NavigationManager:
             return {"linearX": linear, "linearY": 0.0, "angularZ": 0.0}, phase, errors, False
 
         if phase == PHASE_OMNI_TRANSLATE:
-            linear = _sign_preserving_command(
+            linear = _proportional_command(
                 errors["bodyX"],
                 params["positionGain"],
-                MIN_LINEAR_COMMAND_MPS,
                 params["maxLinearMps"],
             )
-            lateral = _sign_preserving_command(
+            lateral = _proportional_command(
                 errors["bodyY"],
                 params["positionGain"],
-                MIN_LATERAL_COMMAND_MPS,
                 params["maxLateralMps"],
             )
-            if abs(errors["bodyX"]) <= position_tolerance:
-                linear = 0.0
-            if abs(errors["bodyY"]) <= position_tolerance:
-                lateral = 0.0
+            command_norm = math.hypot(linear, lateral)
+            minimum_norm = min(MIN_LINEAR_COMMAND_MPS, MIN_LATERAL_COMMAND_MPS)
+            if 0.0 < command_norm < minimum_norm:
+                scale = minimum_norm / command_norm
+                linear = max(-params["maxLinearMps"], min(params["maxLinearMps"], linear * scale))
+                lateral = max(-params["maxLateralMps"], min(params["maxLateralMps"], lateral * scale))
             return {"linearX": linear, "linearY": lateral, "angularZ": 0.0}, phase, errors, False
 
         angular = _sign_preserving_command(

@@ -113,11 +113,14 @@ def test_localization_manager_start_resolves_saved_map_and_builds_command(tmp_pa
     assert commands[0][:4] == ["localizer", "--ros-args", "-p", f"map_path:={map_path}"]
     assert "map_name:=lab_map" in commands[0]
     assert "base_frame:=base_link" in commands[0]
+    assert "max_failed_frames:=15" in commands[0]
     assert "odom_topic:=/odom" in commands[0]
     assert "voxel_leaf:=0.08" in commands[0]
     assert "use_ndt_when_tracking:=true" in commands[0]
     assert "use_odom_retry:=true" in commands[0]
     assert "odom_max_age_sec:=1.0" in commands[0]
+    assert "max_pose_jump_m:=0.35" in commands[0]
+    assert "fitness_degrade_ratio:=6.0" in commands[0]
     assert result["process"]["running"] is True
 
 
@@ -164,7 +167,7 @@ def test_localization_manager_start_uses_gpu_backend_command(tmp_path, monkeypat
     assert result["map"]["settings"]["backend"] == "gpu"
     assert commands[0][:4] == ["python3", "--ros-args", "-p", f"map_path:={map_path}"]
     assert "voxel_leaf:=0.08" in commands[0]
-    assert "use_ndt_when_tracking:=false" in commands[0]
+    assert "use_ndt_when_tracking:=true" in commands[0]
 
 
 def test_localization_manager_start_passes_localization_tuning(tmp_path, monkeypatch):

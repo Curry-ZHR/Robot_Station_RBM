@@ -344,12 +344,12 @@ class LocalizationManager:
             "statusTopic": _clean_topic(payload.get("statusTopic"), "/localization/status"),
             "mapFrame": str(payload.get("mapFrame") or "map").strip() or "map",
             "baseFrame": str(payload.get("baseFrame") or "base_link").strip() or "base_link",
-            "maxFailedFrames": _safe_int(payload.get("maxFailedFrames"), 3, 1, 20),
+            "maxFailedFrames": _safe_int(payload.get("maxFailedFrames"), 15, 1, 100),
             "minSourcePoints": _safe_int(payload.get("minSourcePoints"), 50, 1, 100000),
             "voxelLeafM": _safe_float(payload.get("voxelLeafM"), 0.08, 0.0, 0.50),
             "useNdtWhenTracking": _safe_bool(
                 payload.get("useNdtWhenTracking"),
-                default=(backend != "gpu"),
+                default=True,
             ),
             "useOdomRetry": _safe_bool(payload.get("useOdomRetry"), default=True),
             "odomMaxAgeSec": _safe_float(payload.get("odomMaxAgeSec"), 1.0, 0.05, 30.0),
@@ -362,6 +362,18 @@ class LocalizationManager:
                 2.0,
             ),
             "gicpMaxIterations": _safe_int(payload.get("gicpMaxIterations"), 50, 1, 100),
+            "maxPoseJumpM": _safe_float(payload.get("maxPoseJumpM"), 0.35, 0.01, 5.0),
+            "maxPoseJumpYawDeg": _safe_float(payload.get("maxPoseJumpYawDeg"), 20.0, 0.1, 180.0),
+            "odomTranslationMarginM": _safe_float(
+                payload.get("odomTranslationMarginM"),
+                0.12,
+                0.0,
+                2.0,
+            ),
+            "odomYawMarginDeg": _safe_float(payload.get("odomYawMarginDeg"), 8.0, 0.0, 180.0),
+            "odomDeltaScale": _safe_float(payload.get("odomDeltaScale"), 3.0, 0.0, 20.0),
+            "fitnessDegradeRatio": _safe_float(payload.get("fitnessDegradeRatio"), 6.0, 1.0, 100.0),
+            "fitnessDegradeAbs": _safe_float(payload.get("fitnessDegradeAbs"), 0.08, 0.0, 10.0),
         }
 
     def _build_command(self, map_entry, settings):
@@ -406,6 +418,20 @@ class LocalizationManager:
             f"gicp_max_correspondence:={settings['gicpMaxCorrespondenceM']}",
             "-p",
             f"gicp_max_iterations:={settings['gicpMaxIterations']}",
+            "-p",
+            f"max_pose_jump_m:={settings['maxPoseJumpM']}",
+            "-p",
+            f"max_pose_jump_yaw_deg:={settings['maxPoseJumpYawDeg']}",
+            "-p",
+            f"odom_translation_margin_m:={settings['odomTranslationMarginM']}",
+            "-p",
+            f"odom_yaw_margin_deg:={settings['odomYawMarginDeg']}",
+            "-p",
+            f"odom_delta_scale:={settings['odomDeltaScale']}",
+            "-p",
+            f"fitness_degrade_ratio:={settings['fitnessDegradeRatio']}",
+            "-p",
+            f"fitness_degrade_abs:={settings['fitnessDegradeAbs']}",
         ]
 
     def _command_for_backend(self, backend):

@@ -21,3 +21,4 @@ modules/localization/fast_gicp_ws/build/
 modules/localization/fast_gicp_ws/install/
 modules/localization/fast_gicp_ws/log/
 modules/localization/fast_gicp_ws/Log/
+output/

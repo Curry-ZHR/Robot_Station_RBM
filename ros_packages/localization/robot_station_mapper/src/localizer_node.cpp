@@ -49,7 +49,7 @@ using Clock = std::chrono::steady_clock;
 
 #ifdef ROBOT_STATION_USE_FAST_GICP_CUDA
 constexpr const char * kRegistrationBackend = "gpu";
-constexpr bool kUseNdtWhenTracking = false;
+constexpr bool kUseNdtWhenTracking = true;
 #else
 constexpr const char * kRegistrationBackend = "cpu";
 constexpr bool kUseNdtWhenTracking = true;
@@ -66,7 +66,7 @@ struct LocalizerOptions
   std::string status_topic = "/localization/status";
   std::string map_frame = "map";
   std::string base_frame = "base_link";
-  int max_failed_frames = 3;
+  int max_failed_frames = 15;
   int min_source_points = 50;
   double voxel_leaf = 0.08;
   bool use_ndt_when_tracking = kUseNdtWhenTracking;
@@ -81,6 +81,13 @@ struct LocalizerOptions
   bool use_odom_retry = true;
   double odom_max_age_sec = 1.0;
   double heartbeat_sec = 1.0;
+  double max_pose_jump_m = 0.35;
+  double max_pose_jump_yaw_deg = 20.0;
+  double odom_translation_margin_m = 0.12;
+  double odom_yaw_margin_deg = 8.0;
+  double odom_delta_scale = 3.0;
+  double fitness_degrade_ratio = 6.0;
+  double fitness_degrade_abs = 0.08;
   std::string registration_backend = kRegistrationBackend;
 };
 
@@ -302,7 +309,7 @@ public:
   LocalizerNode()
   : Node("robot_station_localizer"),
     tf_buffer_(this->get_clock()),
-    tf_listener_(tf_buffer_, this, false)
+    tf_listener_(tf_buffer_, this, true)
   {
     declareParameters();
     readParameters();
@@ -374,6 +381,14 @@ private:
     declare_parameter<bool>("use_odom_retry", options_.use_odom_retry);
     declare_parameter<double>("odom_max_age_sec", options_.odom_max_age_sec);
     declare_parameter<double>("heartbeat_sec", options_.heartbeat_sec);
+    declare_parameter<double>("max_pose_jump_m", options_.max_pose_jump_m);
+    declare_parameter<double>("max_pose_jump_yaw_deg", options_.max_pose_jump_yaw_deg);
+    declare_parameter<double>(
+      "odom_translation_margin_m", options_.odom_translation_margin_m);
+    declare_parameter<double>("odom_yaw_margin_deg", options_.odom_yaw_margin_deg);
+    declare_parameter<double>("odom_delta_scale", options_.odom_delta_scale);
+    declare_parameter<double>("fitness_degrade_ratio", options_.fitness_degrade_ratio);
+    declare_parameter<double>("fitness_degrade_abs", options_.fitness_degrade_abs);
   }
 
   void readParameters()
@@ -410,6 +425,18 @@ private:
     options_.use_odom_retry = get_parameter("use_odom_retry").as_bool();
     options_.odom_max_age_sec = std::max(0.05, get_parameter("odom_max_age_sec").as_double());
     options_.heartbeat_sec = std::max(0.1, get_parameter("heartbeat_sec").as_double());
+    options_.max_pose_jump_m = std::max(0.01, get_parameter("max_pose_jump_m").as_double());
+    options_.max_pose_jump_yaw_deg =
+      std::max(0.1, get_parameter("max_pose_jump_yaw_deg").as_double());
+    options_.odom_translation_margin_m =
+      std::max(0.0, get_parameter("odom_translation_margin_m").as_double());
+    options_.odom_yaw_margin_deg =
+      std::max(0.0, get_parameter("odom_yaw_margin_deg").as_double());
+    options_.odom_delta_scale = std::max(0.0, get_parameter("odom_delta_scale").as_double());
+    options_.fitness_degrade_ratio =
+      std::max(1.0, get_parameter("fitness_degrade_ratio").as_double());
+    options_.fitness_degrade_abs =
+      std::max(0.0, get_parameter("fitness_degrade_abs").as_double());
   }
 
   void loadMap()
@@ -601,27 +628,31 @@ private:
   {
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (!initialized_) {
-        if (map_loaded_ && state_ != "error") {
-          state_ = "waiting_initial_pose";
-        }
-        return;
-      }
-      ++failed_frame_count_;
-      last_error_ = code;
-      error_detail_ = detail;
-      if (code == "registration_failed") {
-        tracking_ready_ = false;
-      }
-      if (failed_frame_count_ >= options_.max_failed_frames) {
-        state_ = "error";
-        initialized_ = false;
-        tracking_ready_ = false;
-      } else if (initialized_) {
-        state_ = "degraded";
-      }
+      recordFrameFailureLocked(code, detail);
     }
     publishStatus();
+  }
+
+  void recordFrameFailureLocked(const std::string & code, const std::string & detail)
+  {
+    if (!initialized_) {
+      if (map_loaded_ && state_ != "error") {
+        state_ = "waiting_initial_pose";
+      }
+      return;
+    }
+    ++failed_frame_count_;
+    last_error_ = code;
+    error_detail_ = detail;
+    if (code == "registration_failed" || code == "registration_rejected") {
+      tracking_ready_ = false;
+    }
+    if (failed_frame_count_ >= options_.max_failed_frames) {
+      state_ = "lost";
+      tracking_ready_ = false;
+    } else {
+      state_ = "degraded";
+    }
   }
 
   void workerLoop()
@@ -733,6 +764,16 @@ private:
 
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      std::string rejection_detail;
+      if (!acceptRegistrationLocked(frame, result, rejection_detail)) {
+        recordFrameFailureLocked("registration_rejected", rejection_detail);
+        publishStatusLocked();
+        return;
+      }
+    }
+
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
       last_pose_ = result.transform;
       last_used_ndt_ = result.used_ndt;
       last_ndt_converged_ = result.ndt_converged;
@@ -755,6 +796,66 @@ private:
     }
     publishPose(result.transform, frame.stamp);
     publishStatus();
+  }
+
+  bool acceptRegistrationLocked(
+    const CloudFrame & frame, const RegistrationResult & result, std::string & detail) const
+  {
+    if (!tracking_ready_ && !std::isfinite(last_fitness_)) {
+      return true;
+    }
+
+    const Pose2D previous = poseFromMatrix2D(last_pose_);
+    const Pose2D candidate = poseFromMatrix2D(result.transform);
+    const double pose_jump_m = std::hypot(candidate.x - previous.x, candidate.y - previous.y);
+    const double pose_jump_yaw = std::abs(normalizeAngle(candidate.yaw - previous.yaw));
+    double allowed_jump_m = options_.max_pose_jump_m;
+    double allowed_jump_yaw = options_.max_pose_jump_yaw_deg * 3.14159265358979323846 / 180.0;
+
+    if (frame.odom.has_value() && last_success_odom_.has_value()) {
+      const Pose2D & previous_odom = last_success_odom_->pose;
+      const Pose2D & current_odom = frame.odom->pose;
+      const double odom_delta_m =
+        std::hypot(current_odom.x - previous_odom.x, current_odom.y - previous_odom.y);
+      const double odom_delta_yaw =
+        std::abs(normalizeAngle(current_odom.yaw - previous_odom.yaw));
+      const double odom_jump_m =
+        options_.odom_delta_scale * odom_delta_m + options_.odom_translation_margin_m;
+      const double odom_jump_yaw =
+        options_.odom_delta_scale * odom_delta_yaw +
+        options_.odom_yaw_margin_deg * 3.14159265358979323846 / 180.0;
+      allowed_jump_m = std::min(allowed_jump_m, odom_jump_m);
+      allowed_jump_yaw = std::min(allowed_jump_yaw, odom_jump_yaw);
+    }
+
+    if (pose_jump_m > allowed_jump_m || pose_jump_yaw > allowed_jump_yaw) {
+      std::ostringstream out;
+      out << "Rejected converged registration because pose jump exceeded guard: "
+          << "translation=" << std::setprecision(4) << pose_jump_m
+          << "m allowed=" << allowed_jump_m
+          << "m yaw=" << (pose_jump_yaw * 180.0 / 3.14159265358979323846)
+          << "deg allowed=" << (allowed_jump_yaw * 180.0 / 3.14159265358979323846)
+          << "deg.";
+      detail = out.str();
+      return false;
+    }
+
+    if (std::isfinite(last_fitness_) && std::isfinite(result.fitness)) {
+      const double ratio_limit = last_fitness_ * options_.fitness_degrade_ratio;
+      const double absolute_limit = last_fitness_ + options_.fitness_degrade_abs;
+      if (result.fitness > ratio_limit && result.fitness > absolute_limit) {
+        std::ostringstream out;
+        out << "Rejected converged registration because fitness degraded: fitness="
+            << std::setprecision(6) << result.fitness
+            << " previous=" << last_fitness_
+            << " ratioLimit=" << ratio_limit
+            << " absoluteLimit=" << absolute_limit << ".";
+        detail = out.str();
+        return false;
+      }
+    }
+
+    return true;
   }
 
   void publishPose(const Eigen::Matrix4f & transform, const rclcpp::Time & stamp)
@@ -851,7 +952,7 @@ private:
     out << "\"initialized\":" << (initialized_ ? "true" : "false") << ",";
     out << "\"converged\":" << ((state_ == "localizing" && failed_frame_count_ == 0) ? "true" : "false")
         << ",";
-    out << "\"lost\":" << ((state_ == "error" && last_error_ == "registration_failed") ? "true" : "false")
+    out << "\"lost\":" << ((state_ == "lost" || (state_ == "error" && last_error_ == "registration_failed")) ? "true" : "false")
         << ",";
     out << "\"mapName\":" << jsonString(options_.map_name) << ",";
     out << "\"mapPath\":" << jsonString(options_.map_path) << ",";
@@ -870,6 +971,14 @@ private:
     out << "\"rawMapPoints\":" << raw_map_points_ << ",";
     out << "\"mapPoints\":" << map_points_ << ",";
     out << "\"voxelLeaf\":" << jsonNumber(options_.voxel_leaf) << ",";
+    out << "\"maxPoseJumpM\":" << jsonNumber(options_.max_pose_jump_m) << ",";
+    out << "\"maxPoseJumpYawDeg\":" << jsonNumber(options_.max_pose_jump_yaw_deg) << ",";
+    out << "\"odomTranslationMarginM\":"
+        << jsonNumber(options_.odom_translation_margin_m) << ",";
+    out << "\"odomYawMarginDeg\":" << jsonNumber(options_.odom_yaw_margin_deg) << ",";
+    out << "\"odomDeltaScale\":" << jsonNumber(options_.odom_delta_scale) << ",";
+    out << "\"fitnessDegradeRatio\":" << jsonNumber(options_.fitness_degrade_ratio) << ",";
+    out << "\"fitnessDegradeAbs\":" << jsonNumber(options_.fitness_degrade_abs) << ",";
     out << "\"trackingReady\":" << (tracking_ready_ ? "true" : "false") << ",";
     out << "\"useNdtWhenTracking\":"
         << (options_.use_ndt_when_tracking ? "true" : "false") << ",";
