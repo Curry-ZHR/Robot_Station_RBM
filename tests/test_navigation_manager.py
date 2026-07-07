@@ -1,4 +1,5 @@
 import math
+import time
 
 import pytest
 
@@ -119,7 +120,26 @@ def test_omni_mode_commands_diagonal_crab(monkeypatch):
     assert errors["distance"] == pytest.approx(math.sqrt(2.0))
 
 
-def test_omni_mode_commands_when_axis_errors_inside_tolerance_but_distance_outside(monkeypatch):
+def test_omni_mode_zeroes_tiny_linear_x_when_lateral_dominates(monkeypatch):
+    manager = _manager(monkeypatch)
+    target, params = manager._command_from_payload({"mode": "omni", "x": -0.033, "y": -1.0, "yawDeg": 0})
+
+    command, phase, errors, done = manager._next_command(
+        _state(manager, target, params, PHASE_OMNI_TRANSLATE),
+        target,
+        params,
+        _pose(0.0, 0.0, 0.0),
+    )
+
+    assert not done
+    assert phase == PHASE_OMNI_TRANSLATE
+    assert command["linearX"] == 0.0
+    assert command["linearY"] < 0.0
+    assert abs(command["linearY"]) == pytest.approx(params["maxLateralMps"])
+    assert abs(errors["bodyX"]) < params["lateralDominantLinearDeadbandMps"]
+
+
+def test_omni_near_target_uses_single_axis_when_axis_errors_inside_tolerance_but_distance_outside(monkeypatch):
     manager = _manager(monkeypatch)
     target, params = manager._command_from_payload({"mode": "omni", "x": 0.04, "y": 0.04, "yawDeg": 0})
 
@@ -135,13 +155,33 @@ def test_omni_mode_commands_when_axis_errors_inside_tolerance_but_distance_outsi
     assert abs(errors["bodyX"]) <= params["positionToleranceM"]
     assert abs(errors["bodyY"]) <= params["positionToleranceM"]
     assert errors["distance"] > params["positionToleranceM"]
+    assert errors["nearTarget"] is True
     assert command["linearX"] > 0.0
-    assert command["linearY"] > 0.0
+    assert command["linearY"] == 0.0
+
+
+def test_omni_near_target_deadbands_small_lateral_error_when_forward_can_finish(monkeypatch):
+    manager = _manager(monkeypatch)
+    target, params = manager._command_from_payload({"mode": "omni", "x": 0.10, "y": 0.03, "yawDeg": 0})
+
+    command, phase, errors, done = manager._next_command(
+        _state(manager, target, params, PHASE_OMNI_TRANSLATE),
+        target,
+        params,
+        _pose(0.0, 0.0, 0.0),
+    )
+
+    assert not done
+    assert phase == PHASE_OMNI_TRANSLATE
+    assert errors["nearTarget"] is True
+    assert command["linearX"] > 0.0
+    assert command["linearY"] == 0.0
+    assert errors["lateralControlActive"] is False
 
 
 def test_rotate_phase_completes_within_tolerances(monkeypatch):
     manager = _manager(monkeypatch)
-    target, params = manager._command_from_payload({"mode": "omni", "x": 1.0, "y": 1.0, "yawDeg": 3})
+    target, params = manager._command_from_payload({"mode": "omni", "x": 1.0, "y": 1.0, "yawDeg": 3, "arrivalStableSec": 0})
 
     command, phase, errors, done = manager._next_command(
         _state(manager, target, params, PHASE_ROTATE),
@@ -154,6 +194,57 @@ def test_rotate_phase_completes_within_tolerances(monkeypatch):
     assert phase == "completed"
     assert command == {"linearX": 0.0, "linearY": 0.0, "angularZ": 0.0}
     assert abs(errors["yawDeg"]) <= params["yawToleranceDeg"]
+
+
+def test_rotate_phase_waits_for_stable_arrival_by_default(monkeypatch):
+    manager = _manager(monkeypatch)
+    target, params = manager._command_from_payload({"mode": "omni", "x": 1.0, "y": 1.0, "yawDeg": 3})
+    state = _state(manager, target, params, PHASE_ROTATE)
+
+    command, phase, errors, done = manager._next_command(
+        state,
+        target,
+        params,
+        _pose(1.0, 1.0, math.radians(1.0)),
+    )
+
+    assert not done
+    assert phase == PHASE_ROTATE
+    assert command == {"linearX": 0.0, "linearY": 0.0, "angularZ": 0.0}
+    assert state["arrival"]["stableSince"] is not None
+    assert errors["arrivalStableElapsedSec"] < params["arrivalStableSec"]
+
+    state["arrival"]["stableSince"] = time.monotonic() - params["arrivalStableSec"] - 0.01
+    command, phase, errors, done = manager._next_command(
+        state,
+        target,
+        params,
+        _pose(0.93, 1.0, math.radians(1.0)),
+    )
+
+    assert done
+    assert phase == "completed"
+    assert command == {"linearX": 0.0, "linearY": 0.0, "angularZ": 0.0}
+    assert errors["positionWithinTolerance"] is False
+    assert errors["positionWithinHoldBand"] is True
+
+
+def test_rotate_phase_replans_when_position_leaves_hold_band(monkeypatch):
+    manager = _manager(monkeypatch)
+    target, params = manager._command_from_payload({"mode": "omni", "x": 1.0, "y": 1.0, "yawDeg": 0})
+
+    command, phase, errors, done = manager._next_command(
+        _state(manager, target, params, PHASE_ROTATE),
+        target,
+        params,
+        _pose(0.92, 1.0, 0.0),
+    )
+
+    assert not done
+    assert phase == PHASE_OMNI_TRANSLATE
+    assert errors["positionWithinHoldBand"] is False
+    assert command["linearX"] > 0.0
+    assert command["linearY"] == 0.0
 
 
 def test_start_rejects_stale_localization(monkeypatch):
