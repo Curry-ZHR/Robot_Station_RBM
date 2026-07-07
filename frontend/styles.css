@@ -3215,6 +3215,23 @@ body.robot-modal-open {
   align-items: start;
 }
 
+.state-machine-mode-tabs {
+  width: max-content;
+  margin-top: 8px;
+}
+
+.state-machine-mode-panel[hidden],
+.state-machine-actions[hidden] {
+  display: none !important;
+}
+
+.state-machine-event-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(360px, 1fr) 340px;
+  gap: 12px;
+  align-items: start;
+}
+
 .state-machine-page-head,
 .state-machine-canvas-head {
   align-items: center;
@@ -3234,6 +3251,41 @@ body.robot-modal-open {
 .state-machine-node-library {
   display: grid;
   gap: 8px;
+}
+
+.state-machine-event-library {
+  display: grid;
+  gap: 8px;
+}
+
+.state-machine-event-library-item {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 4px solid #0f766e;
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+  text-align: left;
+}
+
+.state-machine-event-library-item:hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.state-machine-event-library-item strong,
+.state-machine-event-library-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-machine-event-library-item span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .state-machine-library-item {
@@ -3597,6 +3649,255 @@ body.robot-modal-open {
   background: var(--surface-2);
   color: var(--muted);
   font-size: 12px;
+}
+
+.state-machine-event-sequence-list {
+  display: grid;
+  min-height: 420px;
+  align-content: start;
+  gap: 8px;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.state-machine-event-empty,
+.state-machine-event-task-empty {
+  display: grid;
+  min-height: 72px;
+  place-items: center;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.state-machine-event-row {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-left: 4px solid #64748b;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.state-machine-event-row.is-selected {
+  border-color: #94a3b8;
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.2);
+}
+
+.state-machine-event-row.is-running {
+  border-left-color: #16a34a;
+  background: #f0fdf4;
+}
+
+.state-machine-event-row.is-complete {
+  border-left-color: #0369a1;
+  background: #f8fafc;
+}
+
+.state-machine-event-row.is-failed {
+  border-left-color: var(--danger);
+  background: #fef2f2;
+}
+
+.state-machine-event-row.is-stopped,
+.state-machine-event-row.is-disabled {
+  border-left-color: #b45309;
+  background: #fffbeb;
+}
+
+.state-machine-event-main {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.state-machine-event-index {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.state-machine-event-copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.state-machine-event-copy strong,
+.state-machine-event-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-machine-event-copy small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.state-machine-event-tools {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.state-machine-event-tools button {
+  min-height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.state-machine-event-detail {
+  display: grid;
+  gap: 10px;
+}
+
+.state-machine-event-detail-head {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-left: 4px solid #64748b;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.state-machine-event-detail-head.is-running {
+  border-left-color: #16a34a;
+}
+
+.state-machine-event-detail-head.is-failed {
+  border-left-color: var(--danger);
+}
+
+.state-machine-event-detail-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.state-machine-event-detail-head strong,
+.state-machine-event-detail-head small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-machine-event-detail-head small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.state-machine-event-detail-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.state-machine-event-run-summary {
+  display: grid;
+  gap: 6px;
+}
+
+.state-machine-event-run-summary > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 30px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.state-machine-event-run-summary span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.state-machine-event-run-summary strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-machine-event-detail-section {
+  display: grid;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.state-machine-event-detail-section > strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.state-machine-event-task-list {
+  display: grid;
+  gap: 6px;
+}
+
+.state-machine-event-task-row {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.state-machine-event-task-row span {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 999px;
+  background: #e2e8f0;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.state-machine-event-task-row strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-machine-event-task-row small {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.state-machine-event-child-grid {
+  padding: 0;
 }
 
 .state-machine-canvas {
@@ -7639,6 +7940,14 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
   .state-machine-layout {
     grid-template-columns: 220px minmax(0, 1fr);
   }
+
+  .state-machine-event-layout {
+    grid-template-columns: 230px minmax(320px, 1fr);
+  }
+
+  .state-machine-event-detail-panel {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 1100px) {
@@ -7660,6 +7969,10 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
   }
 
   .state-machine-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .state-machine-event-layout {
     grid-template-columns: 1fr;
   }
 
@@ -7707,6 +8020,19 @@ body[data-active-view="sensors"] .sensor-panel[data-sensor-panel="camera"].is-ac
 
   .state-machine-node-tools {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .state-machine-event-tools {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .state-machine-event-main {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+
+  .state-machine-event-main .state-machine-node-status {
+    grid-column: 2;
+    width: max-content;
   }
 
   .workbench {

@@ -26,6 +26,11 @@ DEFAULT_GPU_LOCALIZER_COMMAND = (
     "robot_station_mapper",
     "robot_station_gpu_localizer_node",
 )
+LOCALIZER_PACKAGE = "robot_station_mapper"
+LOCALIZER_EXECUTABLES = {
+    "robot_station_localizer_node",
+    "robot_station_gpu_localizer_node",
+}
 VALID_BACKENDS = ("cpu", "gpu")
 LOGGER = get_logger()
 
@@ -135,6 +140,7 @@ class LocalizationManager:
         self._last_error = ""
         self._last_returncode = None
         self._log_path = ""
+        self._active_command = ()
         self._backend_availability_cache = {}
 
     def status(self):
@@ -143,6 +149,10 @@ class LocalizationManager:
             process_payload = self._process_payload_locked()
 
         ros_status = self._read_localization_status()
+        with self._lock:
+            if process_payload["running"] and self._has_ros_state(ros_status) and self._status == "starting":
+                self._status = "running"
+                process_payload = self._process_payload_locked()
         pose = self._read_localization_pose()
         state = self._state_from_status(process_payload, ros_status)
         return _result(
@@ -203,6 +213,8 @@ class LocalizationManager:
                     availableBackends=self._backend_payloads(),
                 )
             command = self._build_command(map_entry, settings)
+            if self._manages_localizer_command(command):
+                self._cleanup_stale_localizer_processes()
             LOG_DIR.mkdir(parents=True, exist_ok=True)
             self._log_path = str(LOG_DIR / f"localizer_{time.strftime('%Y%m%d_%H%M%S')}.log")
             try:
@@ -211,6 +223,7 @@ class LocalizationManager:
                     self._process = subprocess.Popen(
                         command,
                         cwd=str(ROOT_DIR),
+                        env=self._localizer_environment(),
                         stdout=log_file,
                         stderr=subprocess.STDOUT,
                         start_new_session=True,
@@ -229,6 +242,7 @@ class LocalizationManager:
             self._map = dict(map_entry)
             self._map["settings"] = settings
             self._backend = settings["backend"]
+            self._active_command = tuple(command)
             self._status = "starting"
             self._started_at = time.strftime("%H:%M:%S")
             self._stopped_at = ""
@@ -260,7 +274,10 @@ class LocalizationManager:
                 )
             self._status = "stopping"
 
+        should_cleanup = self._manages_localizer_command(self._active_command)
         stopped = self._terminate_process(process)
+        if should_cleanup:
+            self._cleanup_stale_localizer_processes()
 
         with self._lock:
             self._refresh_locked()
@@ -349,7 +366,7 @@ class LocalizationManager:
 
     def _build_command(self, map_entry, settings):
         return [
-            *self._command_for_backend(settings.get("backend", "cpu")),
+            *self._runtime_command_for_backend(settings.get("backend", "cpu")),
             "--ros-args",
             "-p",
             f"map_path:={map_entry['mapPath']}",
@@ -394,6 +411,14 @@ class LocalizationManager:
     def _command_for_backend(self, backend):
         return self.localizer_commands.get(backend) or self.localizer_commands["cpu"]
 
+    def _runtime_command_for_backend(self, backend):
+        command = self._command_for_backend(backend)
+        if self._is_ros2_run_command(command):
+            executable = self._local_ros2_run_executable(command)
+            if executable and executable.is_file():
+                return (str(executable),)
+        return command
+
     def _backend_payloads(self):
         return [
             {
@@ -437,17 +462,9 @@ class LocalizationManager:
         package_name = command[2]
         executable_name = command[3]
         local_executable = (
-            ROOT_DIR
-            / "ros_packages"
-            / "localization"
-            / "robot_station_mapper"
-            / "install"
-            / package_name
-            / "lib"
-            / package_name
-            / executable_name
+            self._local_ros2_run_executable(command)
         )
-        if local_executable.is_file():
+        if local_executable and local_executable.is_file():
             return True
         try:
             completed = subprocess.run(
@@ -465,6 +482,35 @@ class LocalizationManager:
             return False
         expected = f"{package_name} {executable_name}"
         return any(line.strip() == expected for line in completed.stdout.splitlines())
+
+    def _local_ros2_run_executable(self, command):
+        if not self._is_ros2_run_command(command):
+            return None
+        package_name = command[2]
+        executable_name = command[3]
+        return (
+            ROOT_DIR
+            / "ros_packages"
+            / "localization"
+            / "robot_station_mapper"
+            / "install"
+            / package_name
+            / "lib"
+            / package_name
+            / executable_name
+        )
+
+    def _localizer_environment(self):
+        env = os.environ.copy()
+        env.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
+        fastdds_transports = os.environ.get(
+            "ROBOT_STATION_LOCALIZER_FASTDDS_BUILTIN_TRANSPORTS",
+            "UDPv4",
+        ).strip()
+        if fastdds_transports:
+            env.setdefault("FASTDDS_BUILTIN_TRANSPORTS", fastdds_transports)
+        env.setdefault("RCUTILS_LOGGING_BUFFERED_STREAM", "0")
+        return env
 
     def _read_localization_status(self):
         result = get_ros_reader().read("localization_status", timeout_sec=0.0)
@@ -508,19 +554,24 @@ class LocalizationManager:
             return str(data["state"])
         return process_payload.get("status") or "starting"
 
+    def _has_ros_state(self, ros_status):
+        data = ros_status.get("data") if isinstance(ros_status, dict) else None
+        return isinstance(data, dict) and bool(data.get("state"))
+
     def _refresh_locked(self):
         if self._process is None:
             return
         return_code = self._process.poll()
         if return_code is None:
-            if self._status == "starting":
-                self._status = "running"
             return
         self._last_returncode = return_code
         self._process = None
-        self._status = "stopped" if return_code == 0 else "failed"
+        was_stopping = self._status == "stopping"
+        self._status = "stopped" if return_code == 0 or was_stopping else "failed"
         self._stopped_at = time.strftime("%H:%M:%S")
-        if return_code != 0:
+        if return_code == 0 or was_stopping:
+            self._last_error = ""
+        else:
             self._last_error = f"Localizer exited with code {return_code}."
 
     def _terminate_process(self, process):
@@ -553,6 +604,76 @@ class LocalizationManager:
         except subprocess.TimeoutExpired:
             LOGGER.warning("Localization process did not exit after kill")
             return False
+
+    def _manages_localizer_command(self, command):
+        return self._is_localizer_cmdline([str(part) for part in command])
+
+    def _is_localizer_cmdline(self, cmdline):
+        if not cmdline:
+            return False
+        for part in cmdline:
+            if Path(part).name in LOCALIZER_EXECUTABLES:
+                return True
+        for index, part in enumerate(cmdline[:-3]):
+            if Path(part).name != "ros2":
+                continue
+            if (
+                cmdline[index + 1] == "run"
+                and cmdline[index + 2] == LOCALIZER_PACKAGE
+                and cmdline[index + 3] in LOCALIZER_EXECUTABLES
+            ):
+                return True
+        return False
+
+    def _localizer_pids(self):
+        pids = []
+        proc_dir = Path("/proc")
+        if not proc_dir.is_dir():
+            return pids
+        own_pid = os.getpid()
+        for entry in proc_dir.iterdir():
+            if not entry.name.isdigit():
+                continue
+            pid = int(entry.name)
+            if pid == own_pid:
+                continue
+            try:
+                raw_cmdline = (entry / "cmdline").read_bytes()
+            except (FileNotFoundError, PermissionError, ProcessLookupError):
+                continue
+            cmdline = [part.decode("utf-8", errors="ignore") for part in raw_cmdline.split(b"\0") if part]
+            if self._is_localizer_cmdline(cmdline):
+                pids.append(pid)
+        return pids
+
+    def _signal_process_or_group(self, pid, sig):
+        try:
+            pgid = os.getpgid(pid)
+        except ProcessLookupError:
+            return
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            try:
+                os.kill(pid, sig)
+            except (ProcessLookupError, PermissionError):
+                return
+
+    def _cleanup_stale_localizer_processes(self):
+        pids = self._localizer_pids()
+        if not pids:
+            return
+        for pid in pids:
+            self._signal_process_or_group(pid, signal.SIGTERM)
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            if not self._localizer_pids():
+                return
+            time.sleep(0.05)
+        for pid in self._localizer_pids():
+            self._signal_process_or_group(pid, signal.SIGKILL)
 
     def _process_payload_locked(self):
         running = self._process is not None and self._process.poll() is None

@@ -1,8 +1,9 @@
 """File-backed persistence for the state machine editor.
 
-Stores two collections as JSON files under modules/state_machine/data/:
+Stores three collections as JSON files under modules/state_machine/data/:
 - state_library.json: user-defined reusable states (name + task params)
 - graphs.json: named state machine graphs (plus the auto-saved draft)
+- event_sequences.json: ordered lists of saved graphs, run as events
 """
 
 import json
@@ -18,6 +19,7 @@ LOGGER = get_logger()
 DATA_DIR = Path(__file__).resolve().parent / "data"
 LIBRARY_FILE = DATA_DIR / "state_library.json"
 GRAPHS_FILE = DATA_DIR / "graphs.json"
+EVENT_SEQUENCES_FILE = DATA_DIR / "event_sequences.json"
 
 TASK_TYPES = ("navigation", "inference", "piper_joint", "grasp", "wait", "topic_wait", "topic_publish")
 DRAFT_GRAPH_ID = "__draft__"
@@ -73,6 +75,7 @@ class StateMachineStore:
         self._lock = threading.Lock()
         self._states = self._load_states()
         self._graphs = self._load_graphs()
+        self._event_sequences = self._load_event_sequences()
 
     @staticmethod
     def _load_states():
@@ -86,11 +89,20 @@ class StateMachineStore:
         graphs = raw.get("graphs") if isinstance(raw, dict) else None
         return [graph for graph in graphs if isinstance(graph, dict)] if isinstance(graphs, list) else []
 
+    @staticmethod
+    def _load_event_sequences():
+        raw = _read_json_file(EVENT_SEQUENCES_FILE, {})
+        sequences = raw.get("eventSequences") if isinstance(raw, dict) else None
+        return [sequence for sequence in sequences if isinstance(sequence, dict)] if isinstance(sequences, list) else []
+
     def _persist_states(self):
         _write_json_file(LIBRARY_FILE, {"version": 1, "states": self._states})
 
     def _persist_graphs(self):
         _write_json_file(GRAPHS_FILE, {"version": 1, "graphs": self._graphs})
+
+    def _persist_event_sequences(self):
+        _write_json_file(EVENT_SEQUENCES_FILE, {"version": 1, "eventSequences": self._event_sequences})
 
     # ----- state library -----
 
@@ -159,6 +171,14 @@ class StateMachineStore:
         with self._lock:
             return _result(True, "SM-GRAPHS", "Graphs loaded.", graphs=json.loads(json.dumps(self._graphs)))
 
+    def graph_snapshot(self, graph_id):
+        graph_id = str(graph_id or "").strip()
+        if not graph_id:
+            return None
+        with self._lock:
+            graph = next((item for item in self._graphs if item.get("id") == graph_id), None)
+            return json.loads(json.dumps(graph)) if graph is not None else None
+
     def save_graph(self, payload):
         if not isinstance(payload, dict):
             return _result(False, "SM-PAYLOAD", "Request body must be a JSON object.")
@@ -208,6 +228,82 @@ class StateMachineStore:
             self._persist_graphs()
             LOGGER.info("State machine graph deleted: %s", graph_id)
             return _result(True, "SM-GRAPH-DELETED", f"Graph deleted: {existing.get('name') or graph_id}")
+
+    # ----- event sequences -----
+
+    def list_event_sequences(self):
+        with self._lock:
+            return _result(
+                True,
+                "SM-EVENT-SEQUENCES",
+                "Event sequences loaded.",
+                eventSequences=json.loads(json.dumps(self._event_sequences)),
+            )
+
+    def save_event_sequence(self, payload):
+        if not isinstance(payload, dict):
+            return _result(False, "SM-EVENT-SEQUENCE-PAYLOAD", "Request body must be a JSON object.")
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            return _result(False, "SM-EVENT-SEQUENCE-PAYLOAD", "Event sequence name must not be empty.")
+        events = payload.get("events")
+        if not isinstance(events, list):
+            return _result(False, "SM-EVENT-SEQUENCE-PAYLOAD", "events must be a JSON array.")
+        normalized_events = []
+        for index, event in enumerate(events):
+            if not isinstance(event, dict):
+                return _result(False, "SM-EVENT-SEQUENCE-PAYLOAD", f"events[{index}] must be a JSON object.")
+            graph_id = str(event.get("graphId") or "").strip()
+            if not graph_id:
+                return _result(False, "SM-EVENT-SEQUENCE-PAYLOAD", f"events[{index}].graphId must not be empty.")
+            event_id = str(event.get("id") or "").strip() or f"sm_event_{uuid.uuid4().hex[:10]}"
+            title = str(event.get("title") or "").strip()
+            normalized_events.append(
+                {
+                    "id": event_id,
+                    "title": title,
+                    "graphId": graph_id,
+                    "enabled": event.get("enabled") is not False,
+                }
+            )
+
+        sequence_id = str(payload.get("id") or "").strip()
+        with self._lock:
+            existing = next((sequence for sequence in self._event_sequences if sequence.get("id") == sequence_id), None) if sequence_id else None
+            if existing is None and name:
+                existing = next((sequence for sequence in self._event_sequences if sequence.get("name") == name), None)
+            if existing is not None:
+                existing.update({"name": name, "events": normalized_events, "savedAt": _now_text()})
+                saved = existing
+            else:
+                saved = {
+                    "id": f"sm_event_seq_{uuid.uuid4().hex[:10]}",
+                    "name": name,
+                    "events": normalized_events,
+                    "savedAt": _now_text(),
+                }
+                self._event_sequences.append(saved)
+            self._persist_event_sequences()
+            LOGGER.info("State machine event sequence saved: %s (%s)", saved.get("name", ""), saved["id"])
+            return _result(
+                True,
+                "SM-EVENT-SEQUENCE-SAVED",
+                f"Event sequence saved: {saved.get('name') or saved['id']}",
+                eventSequence=json.loads(json.dumps(saved)),
+            )
+
+    def delete_event_sequence(self, payload):
+        sequence_id = str((payload or {}).get("id") or "").strip()
+        if not sequence_id:
+            return _result(False, "SM-EVENT-SEQUENCE-PAYLOAD", "Event sequence id must not be empty.")
+        with self._lock:
+            existing = next((sequence for sequence in self._event_sequences if sequence.get("id") == sequence_id), None)
+            if existing is None:
+                return _result(False, "SM-EVENT-SEQUENCE-UNKNOWN", f"Event sequence not found: {sequence_id}")
+            self._event_sequences = [sequence for sequence in self._event_sequences if sequence.get("id") != sequence_id]
+            self._persist_event_sequences()
+            LOGGER.info("State machine event sequence deleted: %s", sequence_id)
+            return _result(True, "SM-EVENT-SEQUENCE-DELETED", f"Event sequence deleted: {existing.get('name') or sequence_id}")
 
 
 def get_state_machine_store():

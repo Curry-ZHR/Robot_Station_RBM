@@ -49,6 +49,8 @@ def message_to_plain(value):
         return list(value)
     if isinstance(value, array):
         return list(value)
+    if _is_numpy_value(value):
+        return message_to_plain(value.tolist())
     if isinstance(value, (list, tuple)):
         return [message_to_plain(item) for item in value]
     if hasattr(value, "get_fields_and_field_types"):
@@ -57,3 +59,9 @@ def message_to_plain(value):
             for field in value.get_fields_and_field_types()
         }
     return str(value)
+
+
+def _is_numpy_value(value):
+    value_type = type(value)
+    module_name = getattr(value_type, "__module__", "")
+    return module_name == "numpy" or module_name.startswith("numpy.")

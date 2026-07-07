@@ -241,6 +241,7 @@ const state = {
     lastError: "",
   },
   stateMachine: {
+    mode: "graph",
     name: "未命名状态机",
     selectedId: "sm_start",
     connectingFromId: "",
@@ -292,6 +293,33 @@ const state = {
         outgoingIds: [],
       },
     ],
+    eventSequence: {
+      name: "完整任务序列",
+      selectedId: "",
+      sequences: [],
+      selectedSequenceId: "",
+      draggingId: "",
+      run: {
+        active: false,
+        status: "idle",
+        currentEventId: null,
+        currentEventIndex: -1,
+        completedEventIds: [],
+        path: [],
+        loop: false,
+        iteration: 0,
+        completedIterations: 0,
+        eventStatus: null,
+        childRun: null,
+        error: "",
+      },
+      realRun: {
+        active: false,
+        status: "idle",
+        pollTimer: null,
+      },
+      events: [],
+    },
   },
   localization: {
     status: "idle",
@@ -865,6 +893,7 @@ const robotWorkModalMeta = {
 };
 
 const stateMachineDraftStorageKey = "robotStation.stateMachineDraft.v1";
+const stateMachineEventDraftStorageKey = "robotStation.stateMachineEventDraft.v1";
 const stateMachineDraftGraphId = "__draft__";
 const stateMachineDraftSyncDelayMs = 800;
 const stateMachineCanvasSize = {
@@ -1501,6 +1530,7 @@ function showView(view) {
     renderStateMachine();
     refreshStateMachineLibrary({ silent: true });
     refreshStateMachineGraphs({ silent: true });
+    refreshStateMachineEventSequences({ silent: true });
   }
   if (view === "camera-calibration") {
     refreshCameraCalibrationStatus({ silent: true });
@@ -1599,6 +1629,213 @@ async function refreshStateMachineGraphs(options = {}) {
   } catch (error) {
     if (!options.silent) addLog("状态机", `流程列表加载失败：${error.message}`);
   }
+}
+
+async function refreshStateMachineEventSequences(options = {}) {
+  try {
+    const payload = await stateMachineApiGet("event-sequences");
+    const sequenceState = state.stateMachine.eventSequence;
+    sequenceState.sequences = Array.isArray(payload.eventSequences) ? payload.eventSequences : [];
+    if (!sequenceState.sequences.some((sequence) => sequence.id === sequenceState.selectedSequenceId)) {
+      sequenceState.selectedSequenceId = sequenceState.sequences[0]?.id || "";
+    }
+    renderStateMachine();
+  } catch (error) {
+    if (!options.silent) addLog("状态机", `事件序列加载失败：${error.message}`);
+  }
+}
+
+function setStateMachineMode(mode) {
+  state.stateMachine.mode = mode === "events" ? "events" : "graph";
+  renderStateMachine();
+}
+
+function stateMachineGraphById(graphId) {
+  return state.stateMachine.graphs.find((graph) => graph.id === graphId) || null;
+}
+
+function stateMachineGraphTaskCount(graph) {
+  return Array.isArray(graph?.nodes) ? graph.nodes.filter((node) => node?.type === "task").length : 0;
+}
+
+function stateMachineGraphTaskTypes(graph) {
+  const labels = [];
+  (Array.isArray(graph?.nodes) ? graph.nodes : []).forEach((node) => {
+    if (node?.type !== "task") return;
+    const label = stateMachineTaskMeta(node.taskType).label;
+    if (!labels.includes(label)) labels.push(label);
+  });
+  return labels;
+}
+
+function stateMachineGraphSummary(graph) {
+  if (!graph) return "流程已丢失";
+  const taskCount = stateMachineGraphTaskCount(graph);
+  const labels = stateMachineGraphTaskTypes(graph).slice(0, 3).join(" / ");
+  return `${taskCount} 个任务${labels ? ` / ${labels}` : ""}`;
+}
+
+function normalizeEventSequenceEvent(event, index) {
+  const graphId = String(event?.graphId || "").trim();
+  const graph = stateMachineGraphById(graphId);
+  return {
+    id: String(event?.id || `sm_event_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 6)}`),
+    title: String(event?.title || graph?.name || graphId || `事件 ${index + 1}`).trim(),
+    graphId,
+    enabled: event?.enabled !== false,
+  };
+}
+
+function normalizeEventSequenceEvents(events) {
+  return (Array.isArray(events) ? events : [])
+    .map((event, index) => normalizeEventSequenceEvent(event, index))
+    .filter((event) => event.graphId);
+}
+
+function eventSequenceSnapshot() {
+  const sequenceState = state.stateMachine.eventSequence;
+  return {
+    version: 1,
+    name: sequenceState.name || "未命名事件序列",
+    events: sequenceState.events.map((event) => ({
+      id: event.id,
+      title: event.title,
+      graphId: event.graphId,
+      enabled: event.enabled !== false,
+    })),
+  };
+}
+
+function saveEventSequenceDraft() {
+  try {
+    localStorage.setItem(stateMachineEventDraftStorageKey, JSON.stringify(eventSequenceSnapshot()));
+  } catch (error) {
+    console.warn("Failed to save event sequence draft", error);
+  }
+}
+
+function applyEventSequenceSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || !Array.isArray(snapshot.events)) return false;
+  const sequenceState = state.stateMachine.eventSequence;
+  sequenceState.name = String(snapshot.name || "未命名事件序列");
+  sequenceState.events = normalizeEventSequenceEvents(snapshot.events);
+  sequenceState.selectedId = sequenceState.events[0]?.id || "";
+  resetEventSequenceRun();
+  return true;
+}
+
+function loadEventSequenceState() {
+  try {
+    const draft = JSON.parse(localStorage.getItem(stateMachineEventDraftStorageKey) || "null");
+    return applyEventSequenceSnapshot(draft);
+  } catch (error) {
+    console.warn("Failed to load event sequence draft", error);
+  }
+  return false;
+}
+
+function resetEventSequenceRun() {
+  const sequenceState = state.stateMachine.eventSequence;
+  sequenceState.run = {
+    active: false,
+    status: "idle",
+    currentEventId: null,
+    currentEventIndex: -1,
+    completedEventIds: [],
+    path: [],
+    loop: false,
+    iteration: 0,
+    completedIterations: 0,
+    eventStatus: null,
+    childRun: null,
+    error: "",
+  };
+  sequenceState.realRun.active = false;
+  sequenceState.realRun.status = "idle";
+}
+
+function mutateEventSequence() {
+  if (!state.stateMachine.eventSequence.realRun.active) resetEventSequenceRun();
+  saveEventSequenceDraft();
+  renderStateMachine();
+}
+
+function createEventSequenceEventFromGraph(graphId) {
+  const graph = stateMachineGraphById(graphId);
+  if (!graph) return null;
+  return {
+    id: `sm_event_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    title: graph.name || graph.id,
+    graphId: graph.id,
+    enabled: true,
+  };
+}
+
+function addGraphToEventSequence(graphId, insertIndex = null) {
+  const event = createEventSequenceEventFromGraph(graphId);
+  if (!event) return;
+  const sequenceState = state.stateMachine.eventSequence;
+  const index = Number.isInteger(insertIndex) ? clamp(insertIndex, 0, sequenceState.events.length) : sequenceState.events.length;
+  sequenceState.events.splice(index, 0, event);
+  sequenceState.selectedId = event.id;
+  addLog("状态机", `事件已加入序列：${event.title}`);
+  mutateEventSequence();
+}
+
+function selectedEventSequenceEvent() {
+  const sequenceState = state.stateMachine.eventSequence;
+  return sequenceState.events.find((event) => event.id === sequenceState.selectedId) || sequenceState.events[0] || null;
+}
+
+function selectEventSequenceEvent(eventId) {
+  const sequenceState = state.stateMachine.eventSequence;
+  if (sequenceState.events.some((event) => event.id === eventId)) {
+    sequenceState.selectedId = eventId;
+    renderStateMachine();
+  }
+}
+
+function removeEventSequenceEvent(eventId) {
+  const sequenceState = state.stateMachine.eventSequence;
+  const event = sequenceState.events.find((item) => item.id === eventId);
+  if (!event) return;
+  sequenceState.events = sequenceState.events.filter((item) => item.id !== eventId);
+  sequenceState.selectedId = sequenceState.events[0]?.id || "";
+  addLog("状态机", `已移除事件：${event.title}`);
+  mutateEventSequence();
+}
+
+function moveEventSequenceEvent(eventId, direction) {
+  const sequenceState = state.stateMachine.eventSequence;
+  const from = sequenceState.events.findIndex((event) => event.id === eventId);
+  if (from < 0) return;
+  const to = clamp(from + direction, 0, sequenceState.events.length - 1);
+  if (from === to) return;
+  const [event] = sequenceState.events.splice(from, 1);
+  sequenceState.events.splice(to, 0, event);
+  sequenceState.selectedId = event.id;
+  mutateEventSequence();
+}
+
+function toggleEventSequenceEvent(eventId) {
+  const event = state.stateMachine.eventSequence.events.find((item) => item.id === eventId);
+  if (!event) return;
+  event.enabled = event.enabled === false;
+  mutateEventSequence();
+}
+
+function duplicateEventSequenceEvent(eventId) {
+  const sequenceState = state.stateMachine.eventSequence;
+  const index = sequenceState.events.findIndex((event) => event.id === eventId);
+  if (index < 0) return;
+  const copy = {
+    ...cloneStateMachineValue(sequenceState.events[index]),
+    id: `sm_event_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    title: `${sequenceState.events[index].title} 副本`,
+  };
+  sequenceState.events.splice(index + 1, 0, copy);
+  sequenceState.selectedId = copy.id;
+  mutateEventSequence();
 }
 
 function stateMachineNodeMeta(node) {
@@ -2718,6 +2955,243 @@ function renderStateMachineGraphBar() {
   if (deleteButton) deleteButton.disabled = !graphs.length || !sm.selectedGraphId;
 }
 
+function eventSequenceRunState(event) {
+  const run = state.stateMachine.eventSequence.run;
+  if (run.currentEventId === event.id && run.status === "failed") return { label: "失败", className: "is-failed" };
+  if (run.currentEventId === event.id && run.status === "stopped") return { label: "停止", className: "is-stopped" };
+  if (run.currentEventId === event.id && run.status === "running") return { label: "运行中", className: "is-running" };
+  if (run.completedEventIds.includes(event.id)) return { label: "完成", className: "is-complete" };
+  if (event.enabled === false) return { label: "禁用", className: "is-disabled" };
+  return { label: "待执行", className: "is-pending" };
+}
+
+function renderEventSequenceLibrary() {
+  const library = $("#stateMachineEventLibrary");
+  if (!library) return;
+  const graphs = state.stateMachine.graphs.filter((graph) => graph.id !== stateMachineDraftGraphId);
+  library.innerHTML = graphs.length
+    ? graphs
+        .map(
+          (graph) => `
+            <button
+              type="button"
+              draggable="true"
+              data-sm-event-graph-id="${escapeHtml(graph.id)}"
+              class="state-machine-event-library-item"
+            >
+              <strong>${escapeHtml(graph.name || graph.id)}</strong>
+              <span>${escapeHtml(stateMachineGraphSummary(graph))}</span>
+            </button>
+          `,
+        )
+        .join("")
+    : `<div class="state-machine-library-empty">暂无已保存流程</div>`;
+}
+
+function renderEventSequenceSelect() {
+  const sequenceState = state.stateMachine.eventSequence;
+  const select = $("#eventSequenceSelect");
+  if (!select) return;
+  select.innerHTML = sequenceState.sequences.length
+    ? sequenceState.sequences
+        .map(
+          (sequence) => `<option value="${escapeHtml(sequence.id)}" ${sequenceState.selectedSequenceId === sequence.id ? "selected" : ""}>${escapeHtml(sequence.name || sequence.id)}</option>`,
+        )
+        .join("")
+    : `<option value="">暂无已保存序列</option>`;
+  select.disabled = sequenceState.sequences.length === 0;
+  const loadButton = $("#eventSequenceLoadButton");
+  const deleteButton = $("#eventSequenceDeleteButton");
+  if (loadButton) loadButton.disabled = !sequenceState.sequences.length || !sequenceState.selectedSequenceId;
+  if (deleteButton) deleteButton.disabled = !sequenceState.sequences.length || !sequenceState.selectedSequenceId;
+}
+
+function renderEventSequenceList() {
+  const list = $("#stateMachineEventSequenceList");
+  if (!list) return;
+  const sequenceState = state.stateMachine.eventSequence;
+  if (!sequenceState.events.length) {
+    list.innerHTML = `<div class="state-machine-event-empty">从事件库拖入流程</div>`;
+    return;
+  }
+  list.innerHTML = sequenceState.events
+    .map((event, index) => {
+      const graph = stateMachineGraphById(event.graphId);
+      const selected = sequenceState.selectedId === event.id;
+      const runState = eventSequenceRunState(event);
+      return `
+        <div
+          class="state-machine-event-row ${selected ? "is-selected" : ""} ${runState.className}"
+          data-sm-event-id="${escapeHtml(event.id)}"
+          draggable="true"
+        >
+          <button class="state-machine-event-main" type="button" data-sm-event-select="${escapeHtml(event.id)}">
+            <span class="state-machine-event-index">${index + 1}</span>
+            <span class="state-machine-event-copy">
+              <strong>${escapeHtml(event.title)}</strong>
+              <small>${escapeHtml(graph ? stateMachineGraphSummary(graph) : "引用流程已丢失")}</small>
+            </span>
+            <span class="state-machine-node-status">${escapeHtml(runState.label)}</span>
+          </button>
+          <div class="state-machine-event-tools">
+            <button type="button" data-sm-event-move="${escapeHtml(event.id)}" data-sm-event-dir="-1" ${index === 0 ? "disabled" : ""}>上移</button>
+            <button type="button" data-sm-event-move="${escapeHtml(event.id)}" data-sm-event-dir="1" ${index === sequenceState.events.length - 1 ? "disabled" : ""}>下移</button>
+            <button type="button" data-sm-event-toggle="${escapeHtml(event.id)}">${event.enabled === false ? "启用" : "禁用"}</button>
+            <button type="button" data-sm-event-duplicate="${escapeHtml(event.id)}">复制</button>
+            <button type="button" data-sm-event-remove="${escapeHtml(event.id)}">移除</button>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function renderEventSequenceGraphTasks(graph) {
+  const tasks = (Array.isArray(graph?.nodes) ? graph.nodes : []).filter((node) => node?.type === "task");
+  if (!tasks.length) return `<div class="state-machine-event-task-empty">无任务节点</div>`;
+  return tasks
+    .slice(0, 8)
+    .map(
+      (node, index) => `
+        <div class="state-machine-event-task-row">
+          <span>${index + 1}</span>
+          <strong>${escapeHtml(node.title || stateMachineTaskMeta(node.taskType).label)}</strong>
+          <small>${escapeHtml(stateMachineTaskMeta(node.taskType).label)}</small>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function renderEventSequenceChildRun(childRun) {
+  if (!childRun) return `<div class="state-machine-event-task-empty">未运行子流程</div>`;
+  const taskStatus = childRun.taskStatus || null;
+  const rows = taskStatus
+    ? stateMachineTaskStatusRows(taskStatus)
+        .slice(0, 10)
+        .map(
+          ([label, value]) => `
+            <div>
+              <span>${escapeHtml(label)}</span>
+              <strong>${escapeHtml(value)}</strong>
+            </div>
+          `,
+        )
+        .join("")
+    : "";
+  return `
+    <div class="state-machine-event-run-summary">
+      <div>
+        <span>子流程</span>
+        <strong>${escapeHtml(childRun.graphName || "--")}</strong>
+      </div>
+      <div>
+        <span>当前节点</span>
+        <strong>${escapeHtml(childRun.currentId || "--")}</strong>
+      </div>
+      <div>
+        <span>状态</span>
+        <strong>${escapeHtml(childRun.status || "--")}</strong>
+      </div>
+    </div>
+    ${rows ? `<div class="state-machine-task-status-grid state-machine-event-child-grid">${rows}</div>` : ""}
+  `;
+}
+
+function renderEventSequenceDetail() {
+  const detail = $("#stateMachineEventDetail");
+  if (!detail) return;
+  const sequenceState = state.stateMachine.eventSequence;
+  const activeEvent = sequenceState.events.find((event) => event.id === sequenceState.run.currentEventId);
+  const event = activeEvent || selectedEventSequenceEvent();
+  if (!event) {
+    detail.innerHTML = `<div class="state-machine-event-empty">未选择事件</div>`;
+    return;
+  }
+  const graph = stateMachineGraphById(event.graphId);
+  const runState = eventSequenceRunState(event);
+  const eventStatus = sequenceState.run.eventStatus;
+  detail.innerHTML = `
+    <div class="state-machine-event-detail-head ${runState.className}">
+      <span>${escapeHtml(runState.label)}</span>
+      <strong>${escapeHtml(event.title)}</strong>
+      <small>${escapeHtml(graph?.name || event.graphId || "--")}</small>
+    </div>
+    <div class="state-machine-event-detail-actions">
+      <button class="secondary-button" type="button" data-sm-event-open-graph="${escapeHtml(event.graphId)}" ${graph ? "" : "disabled"}>打开编辑</button>
+      <button class="secondary-button" type="button" data-sm-event-add-copy="${escapeHtml(event.graphId)}" ${graph ? "" : "disabled"}>追加一次</button>
+    </div>
+    <div class="state-machine-event-run-summary">
+      <div>
+        <span>事件</span>
+        <strong>${escapeHtml(eventStatus?.title || event.title)}</strong>
+      </div>
+      <div>
+        <span>轮次</span>
+        <strong>${escapeHtml(sequenceState.run.loop ? `${sequenceState.run.iteration || 1} / 完成 ${sequenceState.run.completedIterations || 0}` : "--")}</strong>
+      </div>
+      <div>
+        <span>说明</span>
+        <strong>${escapeHtml(eventStatus?.detail || stateMachineGraphSummary(graph))}</strong>
+      </div>
+    </div>
+    <section class="state-machine-event-detail-section">
+      <strong>子流程任务</strong>
+      <div class="state-machine-event-task-list">${renderEventSequenceGraphTasks(graph)}</div>
+    </section>
+    <section class="state-machine-event-detail-section">
+      <strong>运行详情</strong>
+      ${renderEventSequenceChildRun(sequenceState.run.childRun)}
+    </section>
+  `;
+}
+
+function renderEventSequence() {
+  const sequenceState = state.stateMachine.eventSequence;
+  const nameInput = $("#eventSequenceNameInput");
+  if (nameInput && document.activeElement !== nameInput) nameInput.value = sequenceState.name || "";
+  setText("#eventSequenceTitle", sequenceState.name || "事件序列草稿");
+  const enabledCount = sequenceState.events.filter((event) => event.enabled !== false).length;
+  const summaryParts = [`${sequenceState.events.length} 个事件`, `${enabledCount} 个启用`];
+  if (sequenceState.run.loop) {
+    summaryParts.push(`循环第 ${sequenceState.run.iteration || 1} 轮`);
+    summaryParts.push(`已完成 ${sequenceState.run.completedIterations || 0} 轮`);
+  }
+  setText("#eventSequenceSummary", summaryParts.join(" / "));
+  if (sequenceState.realRun.active && sequenceState.run.loop) {
+    setStateBadge("#eventSequenceBadge", "循环运行中", "ok");
+  } else if (sequenceState.realRun.active) {
+    setStateBadge("#eventSequenceBadge", "运行中", "ok");
+  } else if (sequenceState.run.status === "completed") {
+    setStateBadge("#eventSequenceBadge", "运行完成", "ok");
+  } else if (sequenceState.run.status === "failed") {
+    setStateBadge("#eventSequenceBadge", "运行失败", "danger");
+  } else if (sequenceState.run.status === "stopped") {
+    setStateBadge("#eventSequenceBadge", "已停止", "warn");
+  } else {
+    setStateBadge("#eventSequenceBadge", "编辑中", "idle");
+  }
+
+  const runButton = $("#eventSequenceRunButton");
+  if (runButton) {
+    const canRerun = ["completed", "failed", "stopped"].includes(sequenceState.run.status);
+    runButton.disabled = sequenceState.realRun.active || enabledCount === 0;
+    runButton.textContent = sequenceState.realRun.active ? "运行中" : canRerun ? "重新运行序列" : "运行序列";
+  }
+  const loopButton = $("#eventSequenceLoopButton");
+  if (loopButton) {
+    loopButton.disabled = sequenceState.realRun.active || enabledCount === 0;
+    loopButton.textContent = sequenceState.realRun.active && sequenceState.run.loop ? "循环中" : "循环运行";
+  }
+  const stopButton = $("#eventSequenceStopButton");
+  if (stopButton) stopButton.disabled = !sequenceState.realRun.active;
+
+  renderEventSequenceSelect();
+  renderEventSequenceLibrary();
+  renderEventSequenceList();
+  renderEventSequenceDetail();
+}
+
 async function saveStateMachineGraphToBackend() {
   const snapshot = stateMachineSnapshot();
   try {
@@ -2758,6 +3232,166 @@ async function deleteStateMachineGraphFromBackend() {
   }
 }
 
+function updateEventSequenceName(value) {
+  state.stateMachine.eventSequence.name = String(value || "").trim() || "未命名事件序列";
+  saveEventSequenceDraft();
+  renderStateMachine();
+}
+
+async function saveEventSequenceToBackend() {
+  const snapshot = eventSequenceSnapshot();
+  if (!snapshot.events.length) {
+    addLog("状态机", "事件序列不能为空");
+    return;
+  }
+  try {
+    const payload = await stateMachineApiPost("event-sequences/save", {
+      id: state.stateMachine.eventSequence.selectedSequenceId || undefined,
+      name: snapshot.name,
+      events: snapshot.events,
+    });
+    if (payload.eventSequence?.id) state.stateMachine.eventSequence.selectedSequenceId = payload.eventSequence.id;
+    addLog("状态机", `事件序列已保存：${snapshot.name}`);
+    await refreshStateMachineEventSequences({ silent: true });
+  } catch (error) {
+    addLog("状态机", `事件序列保存失败：${error.message}`);
+  }
+}
+
+function loadEventSequenceFromBackend() {
+  const sequenceState = state.stateMachine.eventSequence;
+  const sequence = sequenceState.sequences.find((item) => item.id === sequenceState.selectedSequenceId);
+  if (!sequence) return;
+  applyEventSequenceSnapshot(sequence);
+  sequenceState.selectedSequenceId = sequence.id;
+  addLog("状态机", `事件序列已载入：${sequence.name || sequence.id}`);
+  saveEventSequenceDraft();
+  renderStateMachine();
+}
+
+async function deleteEventSequenceFromBackend() {
+  const sequenceState = state.stateMachine.eventSequence;
+  const sequence = sequenceState.sequences.find((item) => item.id === sequenceState.selectedSequenceId);
+  if (!sequence) return;
+  try {
+    await stateMachineApiPost("event-sequences/delete", { id: sequence.id });
+    addLog("状态机", `事件序列已删除：${sequence.name || sequence.id}`);
+    sequenceState.selectedSequenceId = "";
+    await refreshStateMachineEventSequences({ silent: true });
+  } catch (error) {
+    addLog("状态机", `事件序列删除失败：${error.message}`);
+  }
+}
+
+function clearEventSequence() {
+  const sequenceState = state.stateMachine.eventSequence;
+  sequenceState.events = [];
+  sequenceState.selectedId = "";
+  sequenceState.selectedSequenceId = "";
+  resetEventSequenceRun();
+  addLog("状态机", "事件序列已清空");
+  saveEventSequenceDraft();
+  renderStateMachine();
+}
+
+function applyEventSequenceBackendRun(run) {
+  const sequenceState = state.stateMachine.eventSequence;
+  const status = run.status || "idle";
+  sequenceState.realRun.active = !!run.active;
+  sequenceState.realRun.status = status;
+  sequenceState.run = {
+    ...sequenceState.run,
+    active: !!run.active,
+    status,
+    currentEventId: run.currentEventId || null,
+    currentEventIndex: Number.isFinite(Number(run.currentEventIndex)) ? Number(run.currentEventIndex) : -1,
+    completedEventIds: Array.isArray(run.completedEventIds) ? run.completedEventIds : [],
+    path: Array.isArray(run.path) ? run.path : [],
+    loop: run.loop === true,
+    iteration: Number.isFinite(Number(run.iteration)) ? Number(run.iteration) : 0,
+    completedIterations: Number.isFinite(Number(run.completedIterations)) ? Number(run.completedIterations) : 0,
+    eventStatus: run.eventStatus || null,
+    childRun: run.childRun || null,
+    error: run.error || "",
+  };
+  if (run.currentEventId && sequenceState.events.some((event) => event.id === run.currentEventId)) {
+    sequenceState.selectedId = run.currentEventId;
+  }
+}
+
+function stopEventSequenceRunPolling() {
+  window.clearInterval(state.stateMachine.eventSequence.realRun.pollTimer);
+  state.stateMachine.eventSequence.realRun.pollTimer = null;
+}
+
+async function pollEventSequenceRunStatus() {
+  const sequenceState = state.stateMachine.eventSequence;
+  try {
+    const payload = await stateMachineApiGet("event-run/status");
+    const run = payload.run || {};
+    applyEventSequenceBackendRun(run);
+    if (!run.active) {
+      stopEventSequenceRunPolling();
+      if (run.status === "completed") addLog("状态机", "事件序列运行完成");
+      if (run.status === "failed") addLog("状态机", `事件序列运行失败：${run.error || "未知原因"}`);
+      if (run.status === "stopped") {
+        const completedText = run.loop ? `，已完成 ${run.completedIterations || 0} 轮` : "";
+        addLog("状态机", `事件序列已停止${completedText}`);
+      }
+    }
+    renderStateMachine();
+  } catch (error) {
+    stopEventSequenceRunPolling();
+    sequenceState.realRun.active = false;
+    addLog("状态机", `事件序列状态查询失败：${error.message}`);
+    renderStateMachine();
+  }
+}
+
+async function startEventSequenceRun(options = {}) {
+  const sequenceState = state.stateMachine.eventSequence;
+  if (sequenceState.realRun.active) return;
+  const snapshot = eventSequenceSnapshot();
+  const enabledEvents = snapshot.events.filter((event) => event.enabled !== false);
+  if (!enabledEvents.length) {
+    addLog("状态机", "事件序列没有启用事件");
+    return;
+  }
+  const loop = options.loop === true;
+  try {
+    const payload = await stateMachineApiPost("event-run/start", { name: snapshot.name, events: snapshot.events, loop });
+    applyEventSequenceBackendRun(payload.run || { active: true, status: "running", currentEventId: enabledEvents[0].id, path: [enabledEvents[0].id], loop });
+    addLog("状态机", `${loop ? "循环运行事件序列" : "事件序列运行"}已启动：${snapshot.name}`);
+    stopEventSequenceRunPolling();
+    sequenceState.realRun.pollTimer = window.setInterval(pollEventSequenceRunStatus, 1000);
+    pollEventSequenceRunStatus();
+    renderStateMachine();
+  } catch (error) {
+    addLog("状态机", `事件序列启动失败：${error.message}`);
+  }
+}
+
+async function stopEventSequenceRun() {
+  try {
+    await stateMachineApiPost("event-run/stop");
+    addLog("状态机", "已请求停止事件序列");
+    pollEventSequenceRunStatus();
+  } catch (error) {
+    addLog("状态机", `事件序列停止失败：${error.message}`);
+  }
+}
+
+function openEventGraphInEditor(graphId) {
+  const graph = stateMachineGraphById(graphId);
+  if (!graph) return;
+  applyStateMachineSnapshot(graph);
+  state.stateMachine.selectedGraphId = graph.id;
+  state.stateMachine.connectingFromId = "";
+  setStateMachineMode("graph");
+  addLog("状态机", `已打开事件流程：${graph.name || graph.id}`);
+  saveStateMachineDraft();
+}
+
 function renderStateMachineCanvas() {
   const canvas = $("#stateMachineCanvas");
   if (!canvas) return;
@@ -2779,6 +3413,16 @@ function renderStateMachineCanvas() {
 function renderStateMachine() {
   const sm = state.stateMachine;
   ensureStateMachineGraph();
+  const mode = sm.mode === "events" ? "events" : "graph";
+  $$("[data-sm-mode-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.smModePanel !== mode;
+  });
+  $$("[data-sm-actions-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.smActionsPanel !== mode;
+  });
+  $$("[data-sm-mode]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.smMode === mode);
+  });
   renderStateMachineTaskLibrary();
   const taskCount = sm.nodes.filter((node) => node.type === "task").length;
   const edgeCount = sm.nodes.reduce((total, node) => total + (node.outgoingIds || []).length, 0);
@@ -2826,6 +3470,7 @@ function renderStateMachine() {
 
   renderStateMachineCanvas();
   renderStateMachineGraphBar();
+  renderEventSequence();
 }
 
 function applyStateMachineBackendRun(run) {
@@ -3050,6 +3695,106 @@ function handleStateMachineLibraryDragStart(event) {
   event.dataTransfer.effectAllowed = "copy";
   event.dataTransfer.setData("application/x-robot-state-library", button.dataset.smLibraryId);
   event.dataTransfer.setData("text/plain", button.dataset.smLibraryId);
+}
+
+function handleStateMachineEventLibraryClick(event) {
+  const button = event.target.closest("[data-sm-event-graph-id]");
+  if (!button) return;
+  addGraphToEventSequence(button.dataset.smEventGraphId);
+}
+
+function handleStateMachineEventLibraryDragStart(event) {
+  const button = event.target.closest("[data-sm-event-graph-id]");
+  if (!button || !event.dataTransfer) return;
+  event.dataTransfer.effectAllowed = "copy";
+  event.dataTransfer.setData("application/x-robot-event-graph", button.dataset.smEventGraphId);
+  event.dataTransfer.setData("text/plain", button.dataset.smEventGraphId);
+}
+
+function eventSequenceDropIndex(event) {
+  const sequenceState = state.stateMachine.eventSequence;
+  const row = event.target.closest("[data-sm-event-id]");
+  if (!row) return sequenceState.events.length;
+  const index = sequenceState.events.findIndex((item) => item.id === row.dataset.smEventId);
+  return index >= 0 ? index : sequenceState.events.length;
+}
+
+function handleEventSequenceListClick(event) {
+  const selectButton = event.target.closest("[data-sm-event-select]");
+  if (selectButton) {
+    selectEventSequenceEvent(selectButton.dataset.smEventSelect);
+    return;
+  }
+  const moveButton = event.target.closest("[data-sm-event-move]");
+  if (moveButton) {
+    moveEventSequenceEvent(moveButton.dataset.smEventMove, Number(moveButton.dataset.smEventDir) || 0);
+    return;
+  }
+  const toggleButton = event.target.closest("[data-sm-event-toggle]");
+  if (toggleButton) {
+    toggleEventSequenceEvent(toggleButton.dataset.smEventToggle);
+    return;
+  }
+  const duplicateButton = event.target.closest("[data-sm-event-duplicate]");
+  if (duplicateButton) {
+    duplicateEventSequenceEvent(duplicateButton.dataset.smEventDuplicate);
+    return;
+  }
+  const removeButton = event.target.closest("[data-sm-event-remove]");
+  if (removeButton) {
+    removeEventSequenceEvent(removeButton.dataset.smEventRemove);
+  }
+}
+
+function handleEventSequenceListDragStart(event) {
+  const row = event.target.closest("[data-sm-event-id]");
+  if (!row || !event.dataTransfer) return;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("application/x-robot-event-sequence-id", row.dataset.smEventId);
+  state.stateMachine.eventSequence.draggingId = row.dataset.smEventId;
+}
+
+function handleEventSequenceListDragOver(event) {
+  if (
+    event.dataTransfer?.types?.includes("application/x-robot-event-graph") ||
+    event.dataTransfer?.types?.includes("application/x-robot-event-sequence-id")
+  ) {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = event.dataTransfer.types.includes("application/x-robot-event-graph") ? "copy" : "move";
+  }
+}
+
+function handleEventSequenceListDrop(event) {
+  const graphId = event.dataTransfer?.getData("application/x-robot-event-graph") || "";
+  const eventId = event.dataTransfer?.getData("application/x-robot-event-sequence-id") || "";
+  if (!graphId && !eventId) return;
+  event.preventDefault();
+  const insertIndex = eventSequenceDropIndex(event);
+  const sequenceState = state.stateMachine.eventSequence;
+  if (graphId) {
+    addGraphToEventSequence(graphId, insertIndex);
+    return;
+  }
+  const from = sequenceState.events.findIndex((item) => item.id === eventId);
+  if (from < 0) return;
+  const [moved] = sequenceState.events.splice(from, 1);
+  const to = from < insertIndex ? insertIndex - 1 : insertIndex;
+  sequenceState.events.splice(clamp(to, 0, sequenceState.events.length), 0, moved);
+  sequenceState.selectedId = moved.id;
+  sequenceState.draggingId = "";
+  mutateEventSequence();
+}
+
+function handleEventSequenceDetailClick(event) {
+  const openButton = event.target.closest("[data-sm-event-open-graph]");
+  if (openButton) {
+    openEventGraphInEditor(openButton.dataset.smEventOpenGraph);
+    return;
+  }
+  const copyButton = event.target.closest("[data-sm-event-add-copy]");
+  if (copyButton) {
+    addGraphToEventSequence(copyButton.dataset.smEventAddCopy);
+  }
 }
 
 function handleStateMachineCanvasDrop(event) {
@@ -5719,7 +6464,7 @@ function applyLocalizationStatus(result = {}) {
   localization.processStatus = process.status || (localization.running ? "running" : "stopped");
   localization.status = result.state || statusData?.state || localization.processStatus || "stopped";
   if (!localization.running && localization.status === "running") localization.status = "stopped";
-  if (map.name) {
+  if (localization.running && map.name) {
     localization.loadedMap = map.name;
   }
   localization.availableBackends = Array.isArray(result.availableBackends) ? result.availableBackends : localization.availableBackends;
@@ -5902,7 +6647,7 @@ function renderLocalizationMapControls() {
 
   const stopButton = $("#localizationStopButton");
   if (stopButton) {
-    stopButton.disabled = !localization.running || localization.status === "starting";
+    stopButton.disabled = !localization.running;
     stopButton.textContent = localization.running ? "停止定位" : "未启动";
   }
 
@@ -12680,6 +13425,7 @@ function bindEvents() {
   $("#stateMachineCanvas")?.addEventListener("pointerdown", startStateMachineNodeDrag);
   document.addEventListener("pointermove", updateStateMachineNodeDrag);
   document.addEventListener("pointerup", finishStateMachineNodeDrag);
+  $$("[data-sm-mode]").forEach((button) => button.addEventListener("click", () => setStateMachineMode(button.dataset.smMode)));
   $("#stateMachineNameInput")?.addEventListener("change", (event) => updateStateMachineName(event.currentTarget.value));
   $("#stateMachineClearButton")?.addEventListener("click", clearStateMachine);
   $("#stateMachineCopyJsonButton")?.addEventListener("click", copyStateMachineJson);
@@ -12693,6 +13439,25 @@ function bindEvents() {
   $("#stateMachineRealRunButton")?.addEventListener("click", startStateMachineRealRun);
   $("#stateMachineRealLoopButton")?.addEventListener("click", () => startStateMachineRealRun({ loop: true }));
   $("#stateMachineRealStopButton")?.addEventListener("click", stopStateMachineRealRun);
+  $("#stateMachineEventLibrary")?.addEventListener("click", handleStateMachineEventLibraryClick);
+  $("#stateMachineEventLibrary")?.addEventListener("dragstart", handleStateMachineEventLibraryDragStart);
+  $("#stateMachineEventSequenceList")?.addEventListener("click", handleEventSequenceListClick);
+  $("#stateMachineEventSequenceList")?.addEventListener("dragstart", handleEventSequenceListDragStart);
+  $("#stateMachineEventSequenceList")?.addEventListener("dragover", handleEventSequenceListDragOver);
+  $("#stateMachineEventSequenceList")?.addEventListener("drop", handleEventSequenceListDrop);
+  $("#stateMachineEventDetail")?.addEventListener("click", handleEventSequenceDetailClick);
+  $("#eventSequenceNameInput")?.addEventListener("change", (event) => updateEventSequenceName(event.currentTarget.value));
+  $("#eventSequenceSelect")?.addEventListener("change", (event) => {
+    state.stateMachine.eventSequence.selectedSequenceId = event.currentTarget.value;
+    renderStateMachine();
+  });
+  $("#eventSequenceLoadButton")?.addEventListener("click", loadEventSequenceFromBackend);
+  $("#eventSequenceDeleteButton")?.addEventListener("click", deleteEventSequenceFromBackend);
+  $("#eventSequenceClearButton")?.addEventListener("click", clearEventSequence);
+  $("#eventSequenceSaveButton")?.addEventListener("click", saveEventSequenceToBackend);
+  $("#eventSequenceRunButton")?.addEventListener("click", startEventSequenceRun);
+  $("#eventSequenceLoopButton")?.addEventListener("click", () => startEventSequenceRun({ loop: true }));
+  $("#eventSequenceStopButton")?.addEventListener("click", stopEventSequenceRun);
   $("#stateMachineModalClose")?.addEventListener("click", closeStateMachineModal);
   $("#stateMachineModalCancelButton")?.addEventListener("click", closeStateMachineModal);
   $("#stateMachineModalSaveButton")?.addEventListener("click", submitStateMachineModal);
@@ -13093,12 +13858,14 @@ function init() {
   const activePanel = $(".view.is-active");
   document.body.dataset.activeView = activePanel ? activePanel.dataset.viewPanel : "self-check";
   const hadLocalDraft = loadStateMachineState();
+  loadEventSequenceState();
   refreshStateMachineLibrary({ silent: true });
   if (hadLocalDraft) {
     refreshStateMachineGraphs({ silent: true });
   } else {
     restoreStateMachineDraftFromBackend();
   }
+  refreshStateMachineEventSequences({ silent: true });
   bindEvents();
   renderHealth();
   renderSelfCheck();

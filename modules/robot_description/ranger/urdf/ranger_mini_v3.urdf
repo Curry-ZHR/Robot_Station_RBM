@@ -479,7 +479,7 @@
     <parent link="box_link"/>
     <child link="lifting_link"/>
     <axis xyz="0 0 1"/>
-    <limit effort="100" lower="-0.6" upper="0.0" velocity="10.0"/>
+    <limit effort="100" lower="0.0" upper="0.75" velocity="10.0"/>
   </joint>
   <link name="top_camera_link">
     <inertial>

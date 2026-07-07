@@ -55,7 +55,12 @@ from modules.ros_io import (
 from modules.runtime import get_service_manager, shutdown_services
 from modules.runtime.service_specs import camera_extrinsics_config_path, load_camera_extrinsics_config
 from modules.self_check.can_check.can_status import check_can_interface
-from modules.state_machine import get_state_machine_executor, get_state_machine_store, state_machine_result_status
+from modules.state_machine import (
+    get_state_machine_event_executor,
+    get_state_machine_executor,
+    get_state_machine_store,
+    state_machine_result_status,
+)
 from modules.self_check.disk_check.disk_space import check_disk_space
 from modules.self_check.gpu_check.gpu_status import check_gpu_status
 from modules.self_check.ros_check.ros_daemon import ensure_ros_daemon
@@ -101,6 +106,10 @@ def autostart_runtime_service(service_key, env_name, label):
 
 def autostart_transforms():
     return autostart_runtime_service("transforms", "ROBOT_STATION_AUTOSTART_TRANSFORMS", "Static transform")
+
+
+def autostart_robot_tf():
+    return autostart_runtime_service("robot_tf", "ROBOT_STATION_AUTOSTART_ROBOT_TF", "Robot TF")
 
 
 def autostart_camera_extrinsics():
@@ -1063,15 +1072,23 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 result = store.list_graphs()
                 self.write_json(result, status=state_machine_result_status(result))
                 return
+            if state_machine_tail == "event-sequences":
+                result = store.list_event_sequences()
+                self.write_json(result, status=state_machine_result_status(result))
+                return
             if state_machine_tail == "run/status":
                 result = get_state_machine_executor().status()
+                self.write_json(result, status=state_machine_result_status(result))
+                return
+            if state_machine_tail == "event-run/status":
+                result = get_state_machine_event_executor().status()
                 self.write_json(result, status=state_machine_result_status(result))
                 return
             self.write_json(
                 {
                     "ok": False,
                     "code": "SM-ACTION",
-                    "detail": "State machine GET path must be /api/state-machine/states, /api/state-machine/graphs, or /api/state-machine/run/status.",
+                    "detail": "State machine GET path must be /api/state-machine/states, /api/state-machine/graphs, /api/state-machine/event-sequences, /api/state-machine/run/status, or /api/state-machine/event-run/status.",
                 },
                 status=404,
             )
@@ -1366,13 +1383,36 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
     def handle_state_machine(self, action):
         store = get_state_machine_store()
         executor = get_state_machine_executor()
+        event_executor = get_state_machine_event_executor()
+        if action == "run/start" and event_executor.is_active():
+            result = {
+                "ok": False,
+                "code": "SM-RUN-BUSY",
+                "detail": "Event sequence is already running.",
+                "run": executor.status().get("run", {}),
+            }
+            self.write_json(result, status=state_machine_result_status(result))
+            return
+        if action == "event-run/start" and executor.status().get("run", {}).get("active"):
+            result = {
+                "ok": False,
+                "code": "SM-EVENT-RUN-BUSY",
+                "detail": "State machine is already running.",
+                "run": event_executor.status().get("run", {}),
+            }
+            self.write_json(result, status=state_machine_result_status(result))
+            return
         handlers = {
             "states/save": store.save_state,
             "states/delete": store.delete_state,
             "graphs/save": store.save_graph,
             "graphs/delete": store.delete_graph,
+            "event-sequences/save": store.save_event_sequence,
+            "event-sequences/delete": store.delete_event_sequence,
             "run/start": executor.start,
             "run/stop": lambda payload: executor.stop(),
+            "event-run/start": event_executor.start,
+            "event-run/stop": lambda payload: event_executor.stop(),
         }
         handler = handlers.get(action)
         if handler is None:
@@ -1957,6 +1997,7 @@ def main():
         LOGGER.info("Lifting control URL: http://%s:%s", args.host, args.lifting_port)
     if piper_httpd is not None:
         LOGGER.info("Piper control URL: http://%s:%s", args.host, args.piper_port)
+    autostart_robot_tf()
     autostart_transforms()
     autostart_camera_extrinsics()
     start_action_mirror()

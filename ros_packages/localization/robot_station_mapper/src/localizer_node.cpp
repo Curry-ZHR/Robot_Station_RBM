@@ -485,20 +485,29 @@ private:
 
   void onCloud(const sensor_msgs::msg::PointCloud2::ConstSharedPtr msg)
   {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!initialized_) {
+        return;
+      }
+    }
+
     sensor_msgs::msg::PointCloud2 working = *msg;
     const std::string source_frame = normalizeFrame(msg->header.frame_id);
     const bool wants_transform =
       !options_.base_frame.empty() && !source_frame.empty() && source_frame != options_.base_frame;
+    const auto tf_lookup_timeout = tf2::durationFromSec(0.2);
 
     if (wants_transform) {
       try {
         auto transform = tf_buffer_.lookupTransform(
-          options_.base_frame, source_frame, tf2_ros::fromMsg(msg->header.stamp));
+          options_.base_frame, source_frame, tf2_ros::fromMsg(msg->header.stamp),
+          tf_lookup_timeout);
         tf2::doTransform(*msg, working, transform);
       } catch (const std::exception &) {
         try {
-          auto transform =
-            tf_buffer_.lookupTransform(options_.base_frame, source_frame, tf2::TimePointZero);
+          auto transform = tf_buffer_.lookupTransform(
+            options_.base_frame, source_frame, tf2::TimePointZero, tf_lookup_timeout);
           tf2::doTransform(*msg, working, transform);
         } catch (const std::exception & exc) {
           recordFrameFailure("cloud_tf_missing", exc.what());
@@ -592,6 +601,12 @@ private:
   {
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (!initialized_) {
+        if (map_loaded_ && state_ != "error") {
+          state_ = "waiting_initial_pose";
+        }
+        return;
+      }
       ++failed_frame_count_;
       last_error_ = code;
       error_detail_ = detail;

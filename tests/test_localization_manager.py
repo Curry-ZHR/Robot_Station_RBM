@@ -75,6 +75,15 @@ class FakeReader:
         raise AssertionError(key)
 
 
+class FakeNoDataReader:
+    def read(self, key, timeout_sec=0.0):
+        return {
+            "ok": False,
+            "code": "ROS-R-NODATA",
+            "detail": f"No message received for {key}.",
+        }
+
+
 def test_localization_result_status_maps_payload_errors():
     assert localization_result_status({"ok": True}) == 200
     assert localization_result_status({"ok": False, "code": "LOC-PAYLOAD"}) == 400
@@ -110,6 +119,28 @@ def test_localization_manager_start_resolves_saved_map_and_builds_command(tmp_pa
     assert "use_odom_retry:=true" in commands[0]
     assert "odom_max_age_sec:=1.0" in commands[0]
     assert result["process"]["running"] is True
+
+
+def test_localization_manager_start_sets_fastdds_udp_transport(tmp_path, monkeypatch):
+    map_path = tmp_path / "lab_map" / "map.pcd"
+    map_path.parent.mkdir()
+    map_path.write_text("pcd", encoding="utf-8")
+    environments = []
+
+    def fake_popen(command, **kwargs):
+        environments.append(kwargs["env"])
+        return FakeProcess()
+
+    monkeypatch.delenv("FASTDDS_BUILTIN_TRANSPORTS", raising=False)
+    monkeypatch.delenv("ROBOT_STATION_LOCALIZER_FASTDDS_BUILTIN_TRANSPORTS", raising=False)
+    monkeypatch.setattr("modules.localization.manager.get_mapping_manager", lambda: FakeMappingManager(map_path))
+    monkeypatch.setattr("modules.localization.manager.subprocess.Popen", fake_popen)
+
+    manager = LocalizationManager(localizer_command=("localizer",), gpu_localizer_command=("python3",))
+    result = manager.start({"mapName": "lab_map"})
+
+    assert result["ok"] is True
+    assert environments[0]["FASTDDS_BUILTIN_TRANSPORTS"] == "UDPv4"
 
 
 def test_localization_manager_start_uses_gpu_backend_command(tmp_path, monkeypatch):
@@ -243,5 +274,49 @@ def test_localization_manager_status_merges_ros_status(tmp_path, monkeypatch):
     assert result["ok"] is True
     assert result["backend"] == "cpu"
     assert result["state"] == "localizing"
+    assert result["process"]["status"] == "running"
     assert result["localizationStatus"]["data"]["fitness"] == 0.04
     assert result["pose"]["ok"] is True
+
+
+def test_localization_manager_status_stays_starting_until_ros_status(tmp_path, monkeypatch):
+    map_path = tmp_path / "lab_map" / "map.pcd"
+    map_path.parent.mkdir()
+    map_path.write_text("pcd", encoding="utf-8")
+    monkeypatch.setattr("modules.localization.manager.get_mapping_manager", lambda: FakeMappingManager(map_path))
+    monkeypatch.setattr("modules.localization.manager.subprocess.Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr("modules.localization.manager.get_ros_reader", lambda: FakeNoDataReader())
+
+    manager = LocalizationManager(localizer_command=("localizer",), gpu_localizer_command=("python3",))
+    manager.start({"mapName": "lab_map"})
+    result = manager.status()
+
+    assert result["state"] == "starting"
+    assert result["process"]["status"] == "starting"
+
+
+def test_localization_manager_refresh_treats_intentional_stop_as_clean():
+    manager = LocalizationManager(localizer_command=("localizer",), gpu_localizer_command=("python3",))
+    manager._process = FakeProcess(returncode=-15)
+    manager._status = "stopping"
+    manager._last_error = "previous error"
+
+    manager._refresh_locked()
+
+    assert manager._process is None
+    assert manager._status == "stopped"
+    assert manager._last_returncode == -15
+    assert manager._last_error == ""
+
+
+def test_localization_manager_refresh_keeps_unexpected_nonzero_exit_as_failed():
+    manager = LocalizationManager(localizer_command=("localizer",), gpu_localizer_command=("python3",))
+    manager._process = FakeProcess(returncode=2)
+    manager._status = "running"
+
+    manager._refresh_locked()
+
+    assert manager._process is None
+    assert manager._status == "failed"
+    assert manager._last_returncode == 2
+    assert manager._last_error == "Localizer exited with code 2."

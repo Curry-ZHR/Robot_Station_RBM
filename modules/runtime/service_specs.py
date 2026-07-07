@@ -11,6 +11,7 @@ from modules.drivers.can.can_interface import DEFAULT_CHASSIS_CAN_TARGETS, load_
 ROOT_DIR = Path(__file__).resolve().parents[2]
 STATIC_TRANSFORMS_CONFIG = ROOT_DIR / "config" / "static_transforms.json"
 CAMERA_EXTRINSICS_CONFIG = ROOT_DIR / "config" / "camera_extrinsics.json"
+ROBOT_DESCRIPTION_URDF = ROOT_DIR / "modules" / "robot_description" / "ranger" / "urdf" / "ranger_mini_v3.urdf"
 
 
 @dataclass(frozen=True)
@@ -253,6 +254,73 @@ def camera_extrinsics_service_spec(ros_distro=None, config=None):
     )
 
 
+def robot_tf_service_spec(ros_distro=None, urdf_path=None):
+    ros_distro = ros_distro or os.environ.get("ROS_DISTRO", "humble")
+    urdf = Path(urdf_path or os.environ.get("ROBOT_STATION_ROBOT_DESCRIPTION_URDF") or ROBOT_DESCRIPTION_URDF)
+    left_input = os.environ.get("ROBOT_STATION_LEFT_JOINT_STATE_TOPIC", "/joint_states_single_l")
+    right_input = os.environ.get("ROBOT_STATION_RIGHT_JOINT_STATE_TOPIC", "/joint_states_single_r")
+    lifting_input = os.environ.get("ROBOT_STATION_LIFTING_STATE_TOPIC", "/LiftMotorStatePub")
+    output_topic = os.environ.get("ROBOT_STATION_ROBOT_JOINT_STATE_TOPIC", "/joint_states")
+    gripper_scale = os.environ.get("ROBOT_STATION_GRIPPER_JOINT_SCALE", "1.0")
+    lifting_height_scale = os.environ.get("ROBOT_STATION_LIFTING_HEIGHT_SCALE", "0.001")
+    lifting_joint_offset = os.environ.get("ROBOT_STATION_LIFTING_JOINT_OFFSET", "0.0")
+    lifting_joint_min = os.environ.get("ROBOT_STATION_LIFTING_JOINT_MIN", "0.0")
+    lifting_joint_max = os.environ.get("ROBOT_STATION_LIFTING_JOINT_MAX", "0.75")
+    publish_rate_hz = os.environ.get("ROBOT_STATION_ROBOT_JOINT_STATE_RATE_HZ", "20.0")
+    lifting_install = ROOT_DIR / "ros_packages" / "control" / "lifting" / "install" / "setup.bash"
+    shell_lines = [
+        "set -e",
+        (
+            "python3 -m modules.robot_description.joint_state_bridge "
+            f"--left-input {shlex.quote(left_input)} "
+            f"--right-input {shlex.quote(right_input)} "
+            f"--lifting-input {shlex.quote(lifting_input)} "
+            f"--output {shlex.quote(output_topic)} "
+            f"--gripper-scale {shlex.quote(str(gripper_scale))} "
+            f"--lifting-height-scale {shlex.quote(str(lifting_height_scale))} "
+            f"--lifting-joint-offset {shlex.quote(str(lifting_joint_offset))} "
+            f"--lifting-joint-min {shlex.quote(str(lifting_joint_min))} "
+            f"--lifting-joint-max {shlex.quote(str(lifting_joint_max))} "
+            f"--publish-rate-hz {shlex.quote(str(publish_rate_hz))} &"
+        ),
+        "bridge_pid=$!",
+        "cleanup() { kill \"$bridge_pid\" 2>/dev/null || true; wait \"$bridge_pid\" 2>/dev/null || true; }",
+        "trap cleanup EXIT INT TERM",
+        shlex.join(
+            (
+                "ros2",
+                "run",
+                "robot_state_publisher",
+                "robot_state_publisher",
+                str(urdf),
+                "--ros-args",
+                "-r",
+                "__node:=robot_station_robot_state_publisher",
+            )
+        ),
+    ]
+    return ManagedServiceSpec(
+        key="robot_tf",
+        name="Robot description TF",
+        command=("bash", "-lc", "\n".join(shell_lines)),
+        setup_scripts=(f"/opt/ros/{ros_distro}/setup.bash", str(lifting_install)),
+        cleanup_process_patterns=(
+            "robot_station_joint_state_bridge",
+            "robot_station_robot_state_publisher",
+            "modules.robot_description.joint_state_bridge",
+        ),
+        status_process_patterns=(
+            "robot_station_robot_state_publisher",
+            "robot_station_joint_state_bridge",
+            "modules.robot_description.joint_state_bridge",
+        ),
+        cwd=str(ROOT_DIR),
+        shutdown_timeout_sec=4.0,
+        startup_grace_sec=0.8,
+        description="Publish the full robot TF tree from the Ranger Mini URDF and Piper joint states.",
+    )
+
+
 def default_service_specs():
     ros_distro = os.environ.get("ROS_DISTRO", "humble")
     piper_joint_speed_percent = os.environ.get("PIPER_JOINT_SPEED_PERCENT", "10")
@@ -284,6 +352,7 @@ def default_service_specs():
     chassis_raw_action_topic = os.environ.get("CHASSIS_RAW_ACTION_TOPIC", "/action/chassis")
     chassis_smoothed_action_topic = os.environ.get("CHASSIS_SMOOTHED_ACTION_TOPIC", "/action/chassis_smoothed")
     specs = {
+        "robot_tf": robot_tf_service_spec(ros_distro=ros_distro),
         "piper": ManagedServiceSpec(
             key="piper",
             name="Piper ROS control",

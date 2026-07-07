@@ -10,6 +10,7 @@ from modules.runtime.service_specs import (
     default_service_specs,
     load_camera_extrinsics_config,
     load_static_transform_config,
+    robot_tf_service_spec,
     static_transform_service_spec,
 )
 from modules.runtime.service_specs import ManagedServiceSpec
@@ -146,6 +147,38 @@ def test_load_camera_extrinsics_config_reports_missing_as_disabled(tmp_path):
     assert config["transforms"] == []
 
 
+def test_robot_tf_service_publishes_robot_description_and_bridges_joint_states(tmp_path):
+    urdf_path = tmp_path / "robot.urdf"
+    urdf_path.write_text("<robot name='test'></robot>", encoding="utf-8")
+
+    spec = robot_tf_service_spec(ros_distro="humble", urdf_path=urdf_path)
+
+    assert spec.key == "robot_tf"
+    assert spec.command[:2] == ("bash", "-lc")
+    assert "modules.robot_description.joint_state_bridge" in spec.command[2]
+    assert "/joint_states_single_l" in spec.command[2]
+    assert "/joint_states_single_r" in spec.command[2]
+    assert "--lifting-input /LiftMotorStatePub" in spec.command[2]
+    assert "--lifting-height-scale 0.001" in spec.command[2]
+    assert "--lifting-joint-min 0.0" in spec.command[2]
+    assert "--lifting-joint-max 0.75" in spec.command[2]
+    assert "--publish-rate-hz 20.0" in spec.command[2]
+    assert "robot_state_publisher robot_state_publisher" in spec.command[2]
+    assert str(urdf_path) in spec.command[2]
+    assert "robot_station_robot_state_publisher" in spec.command[2]
+    assert any("ros_packages/control/lifting/install/setup.bash" in script for script in spec.setup_scripts)
+    assert "robot_station_joint_state_bridge" in spec.cleanup_process_patterns
+    assert "robot_station_robot_state_publisher" in spec.cleanup_process_patterns
+    assert "modules.robot_description.joint_state_bridge" in spec.status_process_patterns
+
+
+def test_default_services_include_robot_tf():
+    specs = default_service_specs()
+
+    assert "robot_tf" in specs
+    assert specs["robot_tf"].name == "Robot description TF"
+
+
 class FakeServiceManager:
     def __init__(self):
         self.calls = []
@@ -176,6 +209,26 @@ def test_autostart_transforms_can_be_disabled(monkeypatch):
     monkeypatch.setattr(server, "get_service_manager", lambda: manager)
 
     assert server.autostart_transforms() is None
+    assert manager.calls == []
+
+
+def test_autostart_robot_tf_starts_runtime_service(monkeypatch):
+    manager = FakeServiceManager()
+    monkeypatch.delenv("ROBOT_STATION_AUTOSTART_ROBOT_TF", raising=False)
+    monkeypatch.setattr(server, "get_service_manager", lambda: manager)
+
+    result = server.autostart_robot_tf()
+
+    assert result["ok"] is True
+    assert manager.calls == [("get", "robot_tf"), ("start", "robot_tf")]
+
+
+def test_autostart_robot_tf_can_be_disabled(monkeypatch):
+    manager = FakeServiceManager()
+    monkeypatch.setenv("ROBOT_STATION_AUTOSTART_ROBOT_TF", "false")
+    monkeypatch.setattr(server, "get_service_manager", lambda: manager)
+
+    assert server.autostart_robot_tf() is None
     assert manager.calls == []
 
 

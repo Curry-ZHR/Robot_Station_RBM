@@ -687,57 +687,117 @@
                 <div>
                   <p class="eyebrow">任务编排</p>
                   <h1>状态机编辑器</h1>
+                  <div class="segmented state-machine-mode-tabs" id="stateMachineModeTabs" aria-label="状态机编辑模式">
+                    <button class="is-active" data-sm-mode="graph" type="button">状态流程</button>
+                    <button data-sm-mode="events" type="button">事件编排</button>
+                  </div>
                 </div>
-                <div class="button-group state-machine-actions">
+                <div class="button-group state-machine-actions" data-sm-actions-panel="graph">
                   <button class="secondary-button" id="stateMachineCopyJsonButton" type="button">复制 JSON</button>
                   <button class="secondary-button" id="stateMachineClearButton" type="button">清空</button>
                   <button class="secondary-button" id="stateMachineRealStopButton" type="button" disabled>停止运行</button>
                   <button class="secondary-button" id="stateMachineRealLoopButton" type="button">循环运行</button>
                   <button class="primary-button" id="stateMachineRealRunButton" type="button">运行</button>
                 </div>
+                <div class="button-group state-machine-actions" data-sm-actions-panel="events" hidden>
+                  <button class="secondary-button" id="eventSequenceClearButton" type="button">清空</button>
+                  <button class="secondary-button" id="eventSequenceSaveButton" type="button">保存序列</button>
+                  <button class="secondary-button" id="eventSequenceStopButton" type="button" disabled>停止运行</button>
+                  <button class="secondary-button" id="eventSequenceLoopButton" type="button">循环运行</button>
+                  <button class="primary-button" id="eventSequenceRunButton" type="button">运行序列</button>
+                </div>
               </div>
 
-              <div class="state-machine-layout">
-                <article class="panel state-machine-palette">
+              <div class="state-machine-mode-panel" data-sm-mode-panel="graph">
+                <div class="state-machine-layout">
+                  <article class="panel state-machine-palette">
+                    <div class="panel-head">
+                      <div>
+                        <h2>状态库</h2>
+                        <p>点击加号自定义状态，拖到画布使用</p>
+                      </div>
+                    </div>
+                    <div class="state-machine-node-library" id="stateMachineNodeLibrary"></div>
+                  </article>
+
+                  <article class="panel state-machine-canvas-panel">
+                    <div class="panel-head state-machine-canvas-head">
+                      <div>
+                        <h2 id="stateMachineTitle">状态机草稿</h2>
+                        <p id="stateMachineSummary">Start / End 固定，多出口随机执行</p>
+                      </div>
+                      <span class="state-badge idle" id="stateMachineBadge">编辑中</span>
+                    </div>
+                    <div class="state-machine-graph-bar">
+                      <label class="state-machine-name-field">
+                        <span class="field-label">流程名称</span>
+                        <input id="stateMachineNameInput" type="text" value="取物流程草稿" autocomplete="off">
+                      </label>
+                      <label class="state-machine-graph-field">
+                        <span class="field-label">已保存流程</span>
+                        <select id="stateMachineGraphSelect"></select>
+                      </label>
+                      <div class="button-group state-machine-graph-actions">
+                        <button class="primary-button" id="stateMachineGraphSaveButton" type="button">保存</button>
+                        <button class="secondary-button" id="stateMachineGraphLoadButton" type="button">载入</button>
+                        <button class="secondary-button" id="stateMachineGraphDeleteButton" type="button">删除</button>
+                      </div>
+                    </div>
+                    <div class="state-machine-canvas-help">
+                      <span>拖拽状态创建节点</span>
+                      <span>点击“连线”后再点目标节点</span>
+                      <span>点连线上的 × 可删除连线</span>
+                      <span>多出口随机选一个执行</span>
+                    </div>
+                    <div class="state-machine-canvas" id="stateMachineCanvas" aria-label="状态机画布"></div>
+                  </article>
+                </div>
+              </div>
+
+              <div class="state-machine-mode-panel state-machine-event-layout" data-sm-mode-panel="events" hidden>
+                <article class="panel state-machine-event-library-panel">
                   <div class="panel-head">
                     <div>
-                      <h2>状态库</h2>
-                      <p>点击加号自定义状态，拖到画布使用</p>
+                      <h2>事件库</h2>
+                      <p>已保存流程可作为事件加入序列</p>
                     </div>
                   </div>
-                  <div class="state-machine-node-library" id="stateMachineNodeLibrary"></div>
+                  <div class="state-machine-event-library" id="stateMachineEventLibrary"></div>
                 </article>
 
-                <article class="panel state-machine-canvas-panel">
+                <article class="panel state-machine-event-sequence-panel">
                   <div class="panel-head state-machine-canvas-head">
                     <div>
-                      <h2 id="stateMachineTitle">状态机草稿</h2>
-                      <p id="stateMachineSummary">Start / End 固定，多出口随机执行</p>
+                      <h2 id="eventSequenceTitle">事件序列草稿</h2>
+                      <p id="eventSequenceSummary">0 个事件</p>
                     </div>
-                    <span class="state-badge idle" id="stateMachineBadge">编辑中</span>
+                    <span class="state-badge idle" id="eventSequenceBadge">编辑中</span>
                   </div>
-                  <div class="state-machine-graph-bar">
+                  <div class="state-machine-graph-bar state-machine-event-bar">
                     <label class="state-machine-name-field">
-                      <span class="field-label">流程名称</span>
-                      <input id="stateMachineNameInput" type="text" value="取物流程草稿" autocomplete="off">
+                      <span class="field-label">序列名称</span>
+                      <input id="eventSequenceNameInput" type="text" value="完整任务序列" autocomplete="off">
                     </label>
                     <label class="state-machine-graph-field">
-                      <span class="field-label">已保存流程</span>
-                      <select id="stateMachineGraphSelect"></select>
+                      <span class="field-label">已保存序列</span>
+                      <select id="eventSequenceSelect"></select>
                     </label>
                     <div class="button-group state-machine-graph-actions">
-                      <button class="primary-button" id="stateMachineGraphSaveButton" type="button">保存</button>
-                      <button class="secondary-button" id="stateMachineGraphLoadButton" type="button">载入</button>
-                      <button class="secondary-button" id="stateMachineGraphDeleteButton" type="button">删除</button>
+                      <button class="secondary-button" id="eventSequenceLoadButton" type="button">载入</button>
+                      <button class="secondary-button" id="eventSequenceDeleteButton" type="button">删除</button>
                     </div>
                   </div>
-                  <div class="state-machine-canvas-help">
-                    <span>拖拽状态创建节点</span>
-                    <span>点击“连线”后再点目标节点</span>
-                    <span>点连线上的 × 可删除连线</span>
-                    <span>多出口随机选一个执行</span>
+                  <div class="state-machine-event-sequence-list" id="stateMachineEventSequenceList"></div>
+                </article>
+
+                <article class="panel state-machine-event-detail-panel">
+                  <div class="panel-head">
+                    <div>
+                      <h2>事件详情</h2>
+                      <p>当前事件与子流程状态</p>
+                    </div>
                   </div>
-                  <div class="state-machine-canvas" id="stateMachineCanvas" aria-label="状态机画布"></div>
+                  <div class="state-machine-event-detail" id="stateMachineEventDetail"></div>
                 </article>
               </div>
 
