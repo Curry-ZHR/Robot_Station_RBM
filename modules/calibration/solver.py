@@ -164,6 +164,38 @@ def _board_pose_to_matrix(board_pose, np):
     return matrix
 
 
+def _checkerboard_flip_matrix(sample, np):
+    board = sample.get("board") if isinstance(sample, dict) else None
+    if not isinstance(board, dict):
+        return None
+    board_type = str(board.get("type") or "").strip().lower()
+    if board_type not in {"checkerboard", "chessboard"}:
+        return None
+
+    columns = int(round(_number(board.get("columns"), 0.0)))
+    rows = int(round(_number(board.get("rows"), 0.0)))
+    square_size_m = _number(board.get("squareSizeMm"), 0.0) / 1000.0
+    if columns < 2 or rows < 2 or square_size_m <= 0.0:
+        return None
+
+    matrix = np.eye(4, dtype=np.float64)
+    matrix[:3, :3] = np.diag([-1.0, -1.0, 1.0])
+    matrix[:3, 3] = [
+        float(columns - 1) * square_size_m,
+        float(rows - 1) * square_size_m,
+        0.0,
+    ]
+    return matrix
+
+
+def _board_pose_variants(sample, np):
+    pose = _board_pose_to_matrix(sample["boardPoseCamera"], np)
+    flip = _checkerboard_flip_matrix(sample, np)
+    if flip is None:
+        return [(pose, False)]
+    return [(pose, False), (pose @ flip, True)]
+
+
 def _matrix_to_transform(name, parent, child, matrix, **metadata):
     roll, pitch, yaw = _matrix_to_rpy(matrix[:3, :3])
     transform = {
@@ -223,13 +255,12 @@ def _rotation_angle(rotation):
     return math.acos(value)
 
 
-def _solve_metrics(samples, parent_to_optical, np):
+def _solve_metrics_from_board_poses(samples, parent_to_optical, camera_to_board, np):
     board_poses = []
     reprojection = []
-    for sample in samples:
+    for sample, board_pose in zip(samples, camera_to_board):
         base_to_parent = _plain_transform_to_matrix(sample["parentTransform"], np)
-        camera_to_board = _board_pose_to_matrix(sample["boardPoseCamera"], np)
-        board_poses.append(base_to_parent @ parent_to_optical @ camera_to_board)
+        board_poses.append(base_to_parent @ parent_to_optical @ board_pose)
         rms = sample.get("boardPoseCamera", {}).get("reprojectionRmsPx")
         if rms is not None:
             reprojection.append(_number(rms, 0.0))
@@ -249,6 +280,107 @@ def _solve_metrics(samples, parent_to_optical, np):
         "reprojectionRmsPx": sum(reprojection) / len(reprojection) if reprojection else None,
         "boardTranslationRmsM": translation_rms,
         "boardRotationRmsDeg": math.degrees(rotation_rms),
+    }
+
+
+def _solve_metrics(samples, parent_to_optical, np):
+    camera_to_board = [_board_pose_to_matrix(sample["boardPoseCamera"], np) for sample in samples]
+    return _solve_metrics_from_board_poses(samples, parent_to_optical, camera_to_board, np)
+
+
+def _calibrate_hand_eye(base_to_parent, camera_to_board, method_flag, cv2, np):
+    rotations_gripper_to_base = [matrix[:3, :3] for matrix in base_to_parent]
+    translations_gripper_to_base = [matrix[:3, 3].reshape(3, 1) for matrix in base_to_parent]
+    rotations_target_to_camera = [matrix[:3, :3] for matrix in camera_to_board]
+    translations_target_to_camera = [matrix[:3, 3].reshape(3, 1) for matrix in camera_to_board]
+    rotation, translation = cv2.calibrateHandEye(
+        rotations_gripper_to_base,
+        translations_gripper_to_base,
+        rotations_target_to_camera,
+        translations_target_to_camera,
+        method=method_flag,
+    )
+    parent_to_optical = np.eye(4, dtype=np.float64)
+    parent_to_optical[:3, :3] = np.asarray(rotation, dtype=np.float64).reshape(3, 3)
+    parent_to_optical[:3, 3] = np.asarray(translation, dtype=np.float64).reshape(3)
+    return parent_to_optical
+
+
+def _board_consistency_cost(reference, pose, np):
+    delta = np.linalg.inv(reference) @ pose
+    translation_m = float(np.linalg.norm(delta[:3, 3]))
+    rotation_rad = float(_rotation_angle(delta[:3, :3]))
+    return rotation_rad * rotation_rad + (translation_m / 0.05) * (translation_m / 0.05)
+
+
+def _variant_selection_score(samples, parent_to_optical, camera_to_board, np):
+    board_poses = []
+    for sample, board_pose in zip(samples, camera_to_board):
+        base_to_parent = _plain_transform_to_matrix(sample["parentTransform"], np)
+        board_poses.append(base_to_parent @ parent_to_optical @ board_pose)
+
+    reference = board_poses[0]
+    costs = [_board_consistency_cost(reference, pose, np) for pose in board_poses[1:]]
+    return sum(costs) / len(costs) if costs else 0.0
+
+
+def _sample_label(sample, fallback_index):
+    value = sample.get("id") or sample.get("_metadataPath") or sample.get("metadataPath") or f"sample_{fallback_index}"
+    return str(value)
+
+
+def _select_board_pose_variants(samples, base_to_parent, board_pose_variants, method_flag, cv2, np):
+    variant_sample_count = sum(1 for variants in board_pose_variants if len(variants) > 1)
+    if variant_sample_count <= 0:
+        camera_to_board = [variants[0][0] for variants in board_pose_variants]
+        return camera_to_board, {
+            "enabled": False,
+            "candidateSampleCount": 0,
+            "flippedSampleCount": 0,
+            "iterations": 0,
+            "anchorSample": _sample_label(samples[0], 0) if samples else "",
+            "flippedSamples": [],
+        }
+
+    def solve_for_choices(choices):
+        poses = [variants[choice][0] for variants, choice in zip(board_pose_variants, choices)]
+        parent_to_optical = _calibrate_hand_eye(base_to_parent, poses, method_flag, cv2, np)
+        return poses, parent_to_optical
+
+    choices = [0] * len(board_pose_variants)
+    iterations = 0
+    for iteration in range(8):
+        iterations = iteration + 1
+        poses, parent_to_optical = solve_for_choices(choices)
+        reference = base_to_parent[0] @ parent_to_optical @ poses[0]
+        next_choices = [0]
+        for index, variants in enumerate(board_pose_variants[1:], start=1):
+            if len(variants) == 1:
+                next_choices.append(0)
+                continue
+            costs = []
+            for pose, _flipped in variants:
+                board_pose = base_to_parent[index] @ parent_to_optical @ pose
+                costs.append(_board_consistency_cost(reference, board_pose, np))
+            next_choices.append(int(min(range(len(costs)), key=costs.__getitem__)))
+        if next_choices == choices:
+            break
+        choices = next_choices
+
+    poses, parent_to_optical = solve_for_choices(choices)
+    flipped_samples = [
+        _sample_label(sample, index)
+        for index, (sample, variants, choice) in enumerate(zip(samples, board_pose_variants, choices))
+        if variants[choice][1]
+    ]
+    return poses, {
+        "enabled": True,
+        "candidateSampleCount": variant_sample_count,
+        "flippedSampleCount": len(flipped_samples),
+        "iterations": int(iterations),
+        "anchorSample": _sample_label(samples[0], 0) if samples else "",
+        "flippedSamples": flipped_samples,
+        "score": _variant_selection_score(samples, parent_to_optical, poses, np),
     }
 
 
@@ -323,24 +455,37 @@ def solve_single_camera(
     method_key, method_flag = _hand_eye_method(method, cv2)
     try:
         base_to_parent = [_plain_transform_to_matrix(sample["parentTransform"], np) for sample in samples]
-        camera_to_board = [_board_pose_to_matrix(sample["boardPoseCamera"], np) for sample in samples]
-        rotations_gripper_to_base = [matrix[:3, :3] for matrix in base_to_parent]
-        translations_gripper_to_base = [matrix[:3, 3].reshape(3, 1) for matrix in base_to_parent]
-        rotations_target_to_camera = [matrix[:3, :3] for matrix in camera_to_board]
-        translations_target_to_camera = [matrix[:3, 3].reshape(3, 1) for matrix in camera_to_board]
-        rotation, translation = cv2.calibrateHandEye(
-            rotations_gripper_to_base,
-            translations_gripper_to_base,
-            rotations_target_to_camera,
-            translations_target_to_camera,
-            method=method_flag,
+        board_pose_variants = [_board_pose_variants(sample, np) for sample in samples]
+        camera_to_board, board_pose_normalization = _select_board_pose_variants(
+            samples,
+            base_to_parent,
+            board_pose_variants,
+            method_flag,
+            cv2,
+            np,
         )
+        if board_pose_normalization.get("flippedSampleCount", 0) > 0:
+            flipped = board_pose_normalization.get("flippedSamples") or []
+            preview = ", ".join(flipped[:5])
+            if len(flipped) > 5:
+                preview = f"{preview}, ..."
+            return _result(
+                False,
+                "CAL-SOLVE-BOARD-FLIP",
+                (
+                    f"{camera_key} detected {len(flipped)} checkerboard sample(s) with 180 degree corner-order "
+                    f"flips relative to anchor sample {board_pose_normalization.get('anchorSample')}. "
+                    f"Re-capture those samples before saving extrinsics: {preview}"
+                ),
+                camera=camera_key,
+                sampleCount=len(samples),
+                method=method_key,
+                boardPoseNormalization=board_pose_normalization,
+            )
+        parent_to_optical = _calibrate_hand_eye(base_to_parent, camera_to_board, method_flag, cv2, np)
     except Exception as exc:
         return _result(False, "CAL-SOLVE-PROCESS", str(exc), camera=camera_key, sampleCount=len(samples))
 
-    parent_to_optical = np.eye(4, dtype=np.float64)
-    parent_to_optical[:3, :3] = np.asarray(rotation, dtype=np.float64).reshape(3, 3)
-    parent_to_optical[:3, 3] = np.asarray(translation, dtype=np.float64).reshape(3)
     if not np.isfinite(parent_to_optical).all():
         return _result(False, "CAL-SOLVE-PROCESS", "OpenCV returned a non-finite transform.", camera=camera_key)
 
@@ -350,7 +495,7 @@ def solve_single_camera(
     driver_to_target, driver_target_source, driver_target_warning = _driver_to_target_matrix(target, tf_reader, wait_sec, np)
     parent_to_extrinsic = parent_to_optical @ np.linalg.inv(extrinsic_to_driver @ driver_to_target)
     solved_at = time.strftime("%Y-%m-%d %H:%M:%S")
-    metrics = _solve_metrics(samples, parent_to_optical, np)
+    metrics = _solve_metrics_from_board_poses(samples, parent_to_optical, camera_to_board, np)
 
     primary = _matrix_to_transform(
         f"{target['parentFrame'].replace('/', '_')}_to_{target['extrinsicFrame']}",
@@ -379,6 +524,7 @@ def solve_single_camera(
         method=method_key,
         sampleCount=len(samples),
         metrics=metrics,
+        boardPoseNormalization=board_pose_normalization,
         primaryTransform=primary,
         bridgeTransform=bridge,
         driverTargetSource=driver_target_source,
@@ -449,10 +595,14 @@ def solve_camera_extrinsics(
     solved = [result for result in results if result.get("ok")]
     failed = [result for result in results if not result.get("ok")]
     if failed and (not solved or not allow_partial):
+        detail = "Camera calibration solve did not complete for all requested cameras."
+        first_failure_detail = failed[0].get("detail")
+        if first_failure_detail:
+            detail = str(first_failure_detail)
         return _result(
             False,
             "CAL-SOLVE-INCOMPLETE",
-            "Camera calibration solve did not complete for all requested cameras.",
+            detail,
             camera=requested,
             cameraResults=results,
             solvedCameras=[result["camera"] for result in solved],

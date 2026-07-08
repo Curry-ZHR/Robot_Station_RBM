@@ -35,6 +35,7 @@ PHASE_LATERAL_TRANSLATE = "lateral_translate"
 PHASE_FORWARD_TRANSLATE = "forward_translate"
 PHASE_OMNI_TRANSLATE = "omni_translate"
 PHASE_ROTATE = "rotate"
+PHASE_WAITING_LOCALIZATION = "waiting_localization"
 PHASE_COMPLETED = "completed"
 PHASE_STOPPED = "stopped"
 PHASE_FAILED = "failed"
@@ -252,6 +253,8 @@ class NavigationManager:
             "completedAt": None,
             "stoppedAt": None,
             "failedAt": None,
+            "localizationWaitStartedAt": None,
+            "lastLocalizationError": "",
             "detail": "Navigation is idle.",
             "lastError": "",
             "lastPublish": None,
@@ -526,8 +529,10 @@ class NavigationManager:
                 params = state.get("params") or self._default_params()
                 pose, error = self._read_current_pose(params)
                 if pose is None:
-                    self._fail(f"Navigation stopped: {error}")
-                    return
+                    if not self._wait_for_localization(error):
+                        return
+                    time.sleep(1.0 / params["controlRateHz"])
+                    continue
 
                 command, next_phase, errors, done = self._next_command(state, target, params, pose)
                 if done:
@@ -556,6 +561,8 @@ class NavigationManager:
                             "command": command,
                             "updatedAt": now_text,
                             "detail": f"Navigation phase: {next_phase}.",
+                            "localizationWaitStartedAt": None,
+                            "lastLocalizationError": "",
                             "lastPublish": publish_result,
                         }
                     )
@@ -803,6 +810,32 @@ class NavigationManager:
     def _publish_stop(self):
         return self._publisher(_zero_command())
 
+    def _wait_for_localization(self, error):
+        detail = error or "Localization pose is unavailable."
+        publish_result = self._publish_stop()
+        if not publish_result.get("ok"):
+            self._fail(publish_result.get("detail", "Failed to publish chassis stop command."))
+            return False
+        with self._lock:
+            if not self._state.get("running"):
+                return False
+            now_text = time.strftime("%H:%M:%S")
+            wait_started = self._state.get("localizationWaitStartedAt") or now_text
+            self._state.update(
+                {
+                    "status": "running",
+                    "phase": PHASE_WAITING_LOCALIZATION,
+                    "running": True,
+                    "command": _zero_command(),
+                    "updatedAt": now_text,
+                    "localizationWaitStartedAt": wait_started,
+                    "lastLocalizationError": detail,
+                    "detail": f"Waiting for localization pose: {detail}",
+                    "lastPublish": publish_result,
+                }
+            )
+        return True
+
     def _arrival_from_errors(self, errors):
         arrival = self._arrival_state()
         if not isinstance(errors, dict):
@@ -835,6 +868,8 @@ class NavigationManager:
                     "command": _zero_command(),
                     "completedAt": now_text,
                     "updatedAt": now_text,
+                    "localizationWaitStartedAt": None,
+                    "lastLocalizationError": "",
                     "detail": "Navigation completed.",
                     "lastPublish": publish_result,
                 }

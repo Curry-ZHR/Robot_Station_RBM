@@ -239,6 +239,8 @@ const state = {
     canceledAt: null,
     stoppedAt: null,
     failedAt: null,
+    localizationWaitStartedAt: null,
+    lastLocalizationError: "",
     lastError: "",
   },
   stateMachine: {
@@ -2368,7 +2370,7 @@ function stateMachineTaskStatusRows(taskStatus) {
     const errors = data.errors || {};
     const params = data.params || {};
     rows.push(
-      ["阶段", data.phase || "--"],
+      ["阶段", navigationPhaseText(data.phase)],
       ["当前位姿", stateMachineTaskPoseText(data.currentPose)],
       ["距离误差", formatLocalizationNumber(errors.distance, 3, " m")],
       ["车体系误差", `${formatLocalizationNumber(errors.bodyX, 3)} / ${formatLocalizationNumber(errors.bodyY, 3)} m`],
@@ -7299,6 +7301,7 @@ function navigationPhaseText(value = state.navigation.phase) {
     forward_translate: "前后平移",
     omni_translate: "全向平移",
     rotate: "旋转对齐",
+    waiting_localization: "等待定位",
     completed: "已完成",
     stopped: "已停止",
     failed: "失败",
@@ -7308,6 +7311,7 @@ function navigationPhaseText(value = state.navigation.phase) {
 
 function navigationBadgeMeta() {
   const navigation = state.navigation;
+  if (navigation.running && navigation.phase === "waiting_localization") return { text: "等定位", level: "warn" };
   if (navigation.status === "running") return { text: "导航中", level: "ok" };
   if (navigation.status === "paused") return { text: "已暂停", level: "warn" };
   if (navigation.status === "completed") return { text: "已完成", level: "ok" };
@@ -7328,6 +7332,9 @@ function navigationWorkSummaryText() {
   if (!navigationMapReady()) return "定位地图未显示";
   if (!navigationTargetValues()) return "设置终止 pose";
   if (!navigationStartPose()) return "等待当前定位位姿";
+  if (navigation.running && navigation.phase === "waiting_localization") {
+    return navigation.lastLocalizationError ? `等待定位：${navigation.lastLocalizationError}` : "等待定位恢复";
+  }
   if (navigation.plan?.stale) return navigation.plan.staleReason || "路径需重新规划";
   if (navigation.status === "completed" && navigation.completedAt) return `导航完成：${navigation.completedAt}`;
   if (navigation.status === "canceled" && navigation.canceledAt) return `导航已取消：${navigation.canceledAt}`;
@@ -7464,6 +7471,8 @@ function applyNavigationBackendStatus(result = {}, options = {}) {
   navigation.completedAt = result.completedAt || navigation.completedAt;
   navigation.stoppedAt = result.stoppedAt || navigation.stoppedAt;
   navigation.failedAt = result.failedAt || navigation.failedAt;
+  navigation.localizationWaitStartedAt = result.localizationWaitStartedAt || null;
+  navigation.lastLocalizationError = result.lastLocalizationError || "";
   navigation.lastError = result.lastError || (result.ok === false ? result.detail || result.code || "导航状态异常" : "");
   if (navigation.running && !navigation.plan?.points?.length && navigationStartPose() && navigationTargetValues()) {
     planNavigationPath({ quiet: true });
@@ -7957,6 +7966,8 @@ function renderNavigationStatus() {
       ["定位超时", formatLocalizationNumber(params.localizationStaleSec, 1, " s")],
       ["控制频率", formatLocalizationNumber(params.controlRateHz, 0, " Hz")],
       ["开始时间", navigation.startedAt || "--"],
+      ["等待定位开始", navigation.localizationWaitStartedAt || "--"],
+      ["定位等待错误", navigation.lastLocalizationError || "--"],
       ["完成时间", navigation.completedAt || "--"],
       ["停止时间", navigation.stoppedAt || "--"],
       ["失败时间", navigation.failedAt || "--"],

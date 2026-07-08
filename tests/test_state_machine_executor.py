@@ -322,6 +322,49 @@ def test_navigation_state_runs_to_completed(monkeypatch):
     assert run["taskStatus"]["data"]["phase"] == "completed"
 
 
+def test_navigation_state_waits_while_navigation_waits_for_localization(monkeypatch):
+    fake_navigation = FakeNavigationManager(
+        [
+            {
+                "ok": True,
+                "code": "NAV-STATUS",
+                "status": "running",
+                "phase": "waiting_localization",
+                "detail": "Waiting for localization pose.",
+                "lastLocalizationError": "No message received from /localization/pose.",
+            },
+            {
+                "ok": True,
+                "code": "NAV-STATUS",
+                "status": "completed",
+                "phase": "completed",
+                "detail": "Navigation completed.",
+                "currentPose": {"x": 1.0, "y": 0.0, "yawDeg": 0.0},
+                "errors": {"distance": 0.0, "bodyX": 0.0, "bodyY": 0.0, "yawDeg": 0.0},
+                "command": {"linearX": 0.0, "linearY": 0.0, "angularZ": 0.0},
+            },
+        ]
+    )
+    monkeypatch.setattr(executor_module, "get_navigation_manager", lambda: fake_navigation)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    manager.start(
+        {
+            "name": "等待定位流程",
+            "nodes": [
+                _start(["nav"]),
+                _node("nav", "navigation", params={"mode": "lateral", "x": 1, "y": 0, "yawDeg": 0}, outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert run["status"] == "completed"
+    assert run["taskStatus"]["status"] == "completed"
+    assert run["taskStatus"]["data"]["phase"] == "completed"
+
+
 def test_reset_odom_state_runs_once_and_continues(monkeypatch):
     calls = []
 

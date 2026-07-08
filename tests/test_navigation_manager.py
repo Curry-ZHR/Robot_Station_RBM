@@ -9,6 +9,7 @@ from modules.navigation.manager import (
     PHASE_LATERAL_TRANSLATE,
     PHASE_OMNI_TRANSLATE,
     PHASE_ROTATE,
+    PHASE_WAITING_LOCALIZATION,
     NavigationManager,
 )
 
@@ -22,6 +23,26 @@ def _pose(x=0.0, y=0.0, yaw=0.0, age_ms=0):
         "yawDeg": math.degrees(yaw),
         "frameId": "map",
         "ageMs": age_ms,
+    }
+
+
+def _pose_result(x=0.0, y=0.0, yaw=0.0, age_ms=0):
+    return {
+        "ok": True,
+        "stale": False,
+        "ageMs": age_ms,
+        "data": {
+            "header": {"frame_id": "map"},
+            "pose": {
+                "position": {"x": x, "y": y, "z": 0.0},
+                "orientation": {
+                    "x": 0.0,
+                    "y": 0.0,
+                    "z": math.sin(yaw / 2.0),
+                    "w": math.cos(yaw / 2.0),
+                },
+            },
+        },
     }
 
 
@@ -268,3 +289,70 @@ def test_start_rejects_stale_localization(monkeypatch):
 
     assert result["code"] == "NAV-LOCALIZATION"
     assert result["status"] == "failed"
+
+
+def test_running_navigation_waits_for_localization_pose_and_resumes(monkeypatch):
+    class FakeReader:
+        def __init__(self):
+            self.calls = 0
+            self.recovered = False
+
+        def read(self, key, timeout_sec=0.0):
+            self.calls += 1
+            if self.calls == 1:
+                return _pose_result(0.0, 0.0, 0.0)
+            if not self.recovered:
+                return {
+                    "ok": False,
+                    "code": "ROS-R-NODATA",
+                    "detail": "No message received from /localization/pose.",
+                }
+            return _pose_result(0.0, 0.0, 0.0)
+
+    monkeypatch.setattr(
+        navigation_manager,
+        "chassis_limits",
+        lambda: {"limits": {"maxLinearMps": 0.2, "maxLateralMps": 0.15, "maxAngularRadS": 0.5}},
+    )
+    reader = FakeReader()
+    commands = []
+
+    def publish(command):
+        commands.append(command)
+        return {"ok": True, "command": command}
+
+    manager = NavigationManager(reader=reader, publisher=publish)
+    result = manager.start(
+        {
+            "mode": "lateral",
+            "x": 0.0,
+            "y": 0.0,
+            "yawDeg": 0,
+            "arrivalStableSec": 0,
+            "controlRateHz": 50,
+        }
+    )
+    assert result["ok"] is True
+
+    deadline = time.time() + 1.0
+    status = manager.status()
+    while time.time() < deadline and status.get("phase") != PHASE_WAITING_LOCALIZATION:
+        time.sleep(0.01)
+        status = manager.status()
+
+    assert status["status"] == "running"
+    assert status["phase"] == PHASE_WAITING_LOCALIZATION
+    assert status["running"] is True
+    assert status["command"] == {"linearX": 0.0, "linearY": 0.0, "angularZ": 0.0}
+    assert "No message" in status["lastLocalizationError"]
+    assert commands[-1] == {"linearX": 0.0, "linearY": 0.0, "angularZ": 0.0}
+
+    reader.recovered = True
+    deadline = time.time() + 1.0
+    status = manager.status()
+    while time.time() < deadline and status.get("status") not in {"completed", "failed", "stopped"}:
+        time.sleep(0.01)
+        status = manager.status()
+
+    assert status["status"] == "completed"
+    assert status["lastLocalizationError"] == ""
