@@ -345,6 +345,26 @@ class LocalizationManager:
             "mapFrame": str(payload.get("mapFrame") or "map").strip() or "map",
             "baseFrame": str(payload.get("baseFrame") or "base_link").strip() or "base_link",
             "maxFailedFrames": _safe_int(payload.get("maxFailedFrames"), 15, 1, 100),
+            "recoverySearchEnabled": _safe_bool(payload.get("recoverySearchEnabled"), default=True),
+            "recoveryAfterFailedFrames": _safe_int(
+                payload.get("recoveryAfterFailedFrames"),
+                5,
+                1,
+                100,
+            ),
+            "recoveryConfirmFrames": _safe_int(payload.get("recoveryConfirmFrames"), 2, 1, 10),
+            "recoveryMaxCandidatesPerFrame": _safe_int(
+                payload.get("recoveryMaxCandidatesPerFrame"),
+                48,
+                1,
+                500,
+            ),
+            "recoveryWideEveryNFrames": _safe_int(
+                payload.get("recoveryWideEveryNFrames"),
+                3,
+                1,
+                50,
+            ),
             "minSourcePoints": _safe_int(payload.get("minSourcePoints"), 50, 1, 100000),
             "voxelLeafM": _safe_float(payload.get("voxelLeafM"), 0.08, 0.0, 0.50),
             "useNdtWhenTracking": _safe_bool(
@@ -374,6 +394,8 @@ class LocalizationManager:
             "odomDeltaScale": _safe_float(payload.get("odomDeltaScale"), 3.0, 0.0, 20.0),
             "fitnessDegradeRatio": _safe_float(payload.get("fitnessDegradeRatio"), 6.0, 1.0, 100.0),
             "fitnessDegradeAbs": _safe_float(payload.get("fitnessDegradeAbs"), 0.08, 0.0, 10.0),
+            "recoveryFitnessRatio": _safe_float(payload.get("recoveryFitnessRatio"), 1.8, 1.0, 100.0),
+            "recoveryFitnessAbs": _safe_float(payload.get("recoveryFitnessAbs"), 0.05, 0.0, 10.0),
         }
 
     def _build_command(self, map_entry, settings):
@@ -400,6 +422,16 @@ class LocalizationManager:
             f"base_frame:={settings['baseFrame']}",
             "-p",
             f"max_failed_frames:={settings['maxFailedFrames']}",
+            "-p",
+            f"recovery_search_enabled:={str(settings['recoverySearchEnabled']).lower()}",
+            "-p",
+            f"recovery_after_failed_frames:={settings['recoveryAfterFailedFrames']}",
+            "-p",
+            f"recovery_confirm_frames:={settings['recoveryConfirmFrames']}",
+            "-p",
+            f"recovery_max_candidates_per_frame:={settings['recoveryMaxCandidatesPerFrame']}",
+            "-p",
+            f"recovery_wide_every_n_frames:={settings['recoveryWideEveryNFrames']}",
             "-p",
             f"min_source_points:={settings['minSourcePoints']}",
             "-p",
@@ -432,6 +464,10 @@ class LocalizationManager:
             f"fitness_degrade_ratio:={settings['fitnessDegradeRatio']}",
             "-p",
             f"fitness_degrade_abs:={settings['fitnessDegradeAbs']}",
+            "-p",
+            f"recovery_fitness_ratio:={settings['recoveryFitnessRatio']}",
+            "-p",
+            f"recovery_fitness_abs:={settings['recoveryFitnessAbs']}",
         ]
 
     def _command_for_backend(self, backend):

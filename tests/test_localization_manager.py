@@ -114,6 +114,11 @@ def test_localization_manager_start_resolves_saved_map_and_builds_command(tmp_pa
     assert "map_name:=lab_map" in commands[0]
     assert "base_frame:=base_link" in commands[0]
     assert "max_failed_frames:=15" in commands[0]
+    assert "recovery_search_enabled:=true" in commands[0]
+    assert "recovery_after_failed_frames:=5" in commands[0]
+    assert "recovery_confirm_frames:=2" in commands[0]
+    assert "recovery_max_candidates_per_frame:=48" in commands[0]
+    assert "recovery_wide_every_n_frames:=3" in commands[0]
     assert "odom_topic:=/odom" in commands[0]
     assert "voxel_leaf:=0.08" in commands[0]
     assert "use_ndt_when_tracking:=true" in commands[0]
@@ -121,6 +126,8 @@ def test_localization_manager_start_resolves_saved_map_and_builds_command(tmp_pa
     assert "odom_max_age_sec:=1.0" in commands[0]
     assert "max_pose_jump_m:=0.35" in commands[0]
     assert "fitness_degrade_ratio:=6.0" in commands[0]
+    assert "recovery_fitness_ratio:=1.8" in commands[0]
+    assert "recovery_fitness_abs:=0.05" in commands[0]
     assert result["process"]["running"] is True
 
 
@@ -197,6 +204,13 @@ def test_localization_manager_start_passes_localization_tuning(tmp_path, monkeyp
             "ndtMaxIterations": 18,
             "gicpMaxCorrespondenceM": 0.35,
             "gicpMaxIterations": 16,
+            "recoverySearchEnabled": False,
+            "recoveryAfterFailedFrames": 7,
+            "recoveryConfirmFrames": 3,
+            "recoveryMaxCandidatesPerFrame": 48,
+            "recoveryWideEveryNFrames": 4,
+            "recoveryFitnessRatio": 1.4,
+            "recoveryFitnessAbs": 0.02,
         }
     )
 
@@ -215,6 +229,13 @@ def test_localization_manager_start_passes_localization_tuning(tmp_path, monkeyp
     assert "ndt_max_iterations:=18" in commands[0]
     assert "gicp_max_correspondence:=0.35" in commands[0]
     assert "gicp_max_iterations:=16" in commands[0]
+    assert "recovery_search_enabled:=false" in commands[0]
+    assert "recovery_after_failed_frames:=7" in commands[0]
+    assert "recovery_confirm_frames:=3" in commands[0]
+    assert "recovery_max_candidates_per_frame:=48" in commands[0]
+    assert "recovery_wide_every_n_frames:=4" in commands[0]
+    assert "recovery_fitness_ratio:=1.4" in commands[0]
+    assert "recovery_fitness_abs:=0.02" in commands[0]
 
 
 def test_localization_manager_rejects_unknown_backend(tmp_path, monkeypatch):

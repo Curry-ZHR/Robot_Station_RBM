@@ -6389,6 +6389,7 @@ function localizationBadgeMeta() {
   const localization = state.localization;
   const maps = Array.isArray(localization.maps) ? localization.maps : [];
   if (localization.running && localization.status === "error") return { text: "定位异常", level: "danger" };
+  if (localization.running && localization.status === "recovering") return { text: "恢复确认", level: "warn" };
   if (localization.running && localization.status === "lost") return { text: "定位恢复中", level: "warn" };
   if (localization.running && localization.status === "degraded") return { text: "定位退化", level: "warn" };
   if (localization.running && localization.status === "waiting_initial_pose") return { text: "待初值", level: "warn" };
@@ -6408,6 +6409,7 @@ function localizationStatusText(stateValue = state.localization.status) {
     waiting_initial_pose: "等待初值",
     localizing: "定位中",
     degraded: "定位退化",
+    recovering: "恢复确认",
     lost: "定位恢复中",
     error: "定位异常",
     failed: "进程异常",

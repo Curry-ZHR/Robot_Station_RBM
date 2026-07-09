@@ -41,6 +41,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace fs = std::filesystem;
 using PointT = pcl::PointXYZI;
@@ -67,6 +68,11 @@ struct LocalizerOptions
   std::string map_frame = "map";
   std::string base_frame = "base_link";
   int max_failed_frames = 15;
+  bool recovery_search_enabled = true;
+  int recovery_after_failed_frames = 5;
+  int recovery_confirm_frames = 2;
+  int recovery_max_candidates_per_frame = 48;
+  int recovery_wide_every_n_frames = 3;
   int min_source_points = 50;
   double voxel_leaf = 0.08;
   bool use_ndt_when_tracking = kUseNdtWhenTracking;
@@ -88,6 +94,8 @@ struct LocalizerOptions
   double odom_delta_scale = 3.0;
   double fitness_degrade_ratio = 6.0;
   double fitness_degrade_abs = 0.08;
+  double recovery_fitness_ratio = 1.8;
+  double recovery_fitness_abs = 0.05;
   std::string registration_backend = kRegistrationBackend;
 };
 
@@ -126,6 +134,13 @@ struct RegistrationResult
   int source_points = 0;
   int raw_source_points = 0;
   bool used_odom_retry = false;
+  bool odom_retry_failed = false;
+  bool used_recovery_search = false;
+  std::string recovery_stage;
+  int recovery_candidate_count = 0;
+  bool recovery_center_last_pose = false;
+  bool recovery_cursor_valid = false;
+  std::size_t recovery_next_cursor = 0;
   Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
 };
 
@@ -364,6 +379,12 @@ private:
     declare_parameter<std::string>("map_frame", options_.map_frame);
     declare_parameter<std::string>("base_frame", options_.base_frame);
     declare_parameter<int>("max_failed_frames", options_.max_failed_frames);
+    declare_parameter<bool>("recovery_search_enabled", options_.recovery_search_enabled);
+    declare_parameter<int>("recovery_after_failed_frames", options_.recovery_after_failed_frames);
+    declare_parameter<int>("recovery_confirm_frames", options_.recovery_confirm_frames);
+    declare_parameter<int>(
+      "recovery_max_candidates_per_frame", options_.recovery_max_candidates_per_frame);
+    declare_parameter<int>("recovery_wide_every_n_frames", options_.recovery_wide_every_n_frames);
     declare_parameter<int>("min_source_points", options_.min_source_points);
     declare_parameter<double>("voxel_leaf", options_.voxel_leaf);
     declare_parameter<bool>("use_ndt_when_tracking", options_.use_ndt_when_tracking);
@@ -389,6 +410,8 @@ private:
     declare_parameter<double>("odom_delta_scale", options_.odom_delta_scale);
     declare_parameter<double>("fitness_degrade_ratio", options_.fitness_degrade_ratio);
     declare_parameter<double>("fitness_degrade_abs", options_.fitness_degrade_abs);
+    declare_parameter<double>("recovery_fitness_ratio", options_.recovery_fitness_ratio);
+    declare_parameter<double>("recovery_fitness_abs", options_.recovery_fitness_abs);
   }
 
   void readParameters()
@@ -404,6 +427,15 @@ private:
     options_.base_frame = normalizeFrame(get_parameter("base_frame").as_string());
     options_.max_failed_frames =
       std::max(1, static_cast<int>(get_parameter("max_failed_frames").as_int()));
+    options_.recovery_search_enabled = get_parameter("recovery_search_enabled").as_bool();
+    options_.recovery_after_failed_frames =
+      std::max(1, static_cast<int>(get_parameter("recovery_after_failed_frames").as_int()));
+    options_.recovery_confirm_frames =
+      std::max(1, static_cast<int>(get_parameter("recovery_confirm_frames").as_int()));
+    options_.recovery_max_candidates_per_frame = std::max(
+      1, static_cast<int>(get_parameter("recovery_max_candidates_per_frame").as_int()));
+    options_.recovery_wide_every_n_frames =
+      std::max(1, static_cast<int>(get_parameter("recovery_wide_every_n_frames").as_int()));
     options_.min_source_points =
       std::max(1, static_cast<int>(get_parameter("min_source_points").as_int()));
     options_.voxel_leaf = std::max(0.0, get_parameter("voxel_leaf").as_double());
@@ -437,12 +469,20 @@ private:
       std::max(1.0, get_parameter("fitness_degrade_ratio").as_double());
     options_.fitness_degrade_abs =
       std::max(0.0, get_parameter("fitness_degrade_abs").as_double());
+    options_.recovery_fitness_ratio =
+      std::max(1.0, get_parameter("recovery_fitness_ratio").as_double());
+    options_.recovery_fitness_abs =
+      std::max(0.0, get_parameter("recovery_fitness_abs").as_double());
   }
 
   void loadMap()
   {
     std::lock_guard<std::mutex> lock(mutex_);
     state_ = "starting";
+    resetRecoveryLocked();
+    consecutive_odom_retry_failures_ = 0;
+    recovery_sweep_cursor_ = 0;
+    recovery_sweep_last_pose_center_ = true;
     if (options_.map_path.empty()) {
       enterErrorLocked("map_load_failed", "map_path parameter is required.", true);
       return;
@@ -609,11 +649,18 @@ private:
       initialized_ = true;
       tracking_ready_ = false;
       failed_frame_count_ = 0;
+      resetRecoveryLocked();
+      consecutive_odom_retry_failures_ = 0;
+      recovery_sweep_cursor_ = 0;
+      recovery_sweep_last_pose_center_ = true;
       processed_sequence_ = 0;
       last_used_ndt_ = false;
       last_ndt_converged_ = false;
       last_gicp_converged_ = false;
       last_used_odom_retry_ = false;
+      last_used_recovery_search_ = false;
+      last_recovery_stage_.clear();
+      last_recovery_candidate_count_ = 0;
       last_ndt_fitness_ = std::numeric_limits<double>::quiet_NaN();
       last_fitness_ = std::numeric_limits<double>::quiet_NaN();
       state_ = "localizing";
@@ -645,6 +692,11 @@ private:
     last_error_ = code;
     error_detail_ = detail;
     if (code == "registration_failed" || code == "registration_rejected") {
+      resetRecoveryLocked();
+      tracking_ready_ = false;
+    }
+    if (code == "recovery_rejected") {
+      resetRecoveryLocked();
       tracking_ready_ = false;
     }
     if (failed_frame_count_ >= options_.max_failed_frames) {
@@ -662,6 +714,11 @@ private:
       Eigen::Matrix4f initial_guess = Eigen::Matrix4f::Identity();
       std::optional<Eigen::Matrix4f> odom_retry_guess;
       bool use_ndt = true;
+      bool confirming_recovery = false;
+      int failed_frame_count = 0;
+      int odom_retry_failure_count = 0;
+      std::size_t recovery_sweep_cursor = 0;
+      bool recovery_sweep_last_pose_center = true;
       {
         std::unique_lock<std::mutex> lock(mutex_);
         condition_.wait(lock, [this]() {
@@ -675,21 +732,36 @@ private:
         frame = latest_cloud_.value();
         frame.odom = latestOdomLocked();
         processed_sequence_ = frame.sequence;
-        initial_guess = last_pose_;
-        odom_retry_guess = odomRetryGuessLocked(frame.odom);
-        use_ndt = options_.use_ndt_when_tracking || !tracking_ready_ || failed_frame_count_ > 0;
+        confirming_recovery = pending_recovery_pose_.has_value() && recovery_confirm_count_ > 0;
+        initial_guess = confirming_recovery ? pending_recovery_pose_.value() : last_pose_;
+        failed_frame_count = failed_frame_count_;
+        odom_retry_failure_count = consecutive_odom_retry_failures_;
+        recovery_sweep_cursor = recovery_sweep_cursor_;
+        recovery_sweep_last_pose_center = recovery_sweep_last_pose_center_;
+        odom_retry_guess =
+          (confirming_recovery || odomRetrySuppressedLocked())
+            ? std::nullopt
+            : odomRetryGuessLocked(frame.odom);
+        use_ndt =
+          confirming_recovery || options_.use_ndt_when_tracking || !tracking_ready_ ||
+          failed_frame_count_ > 0;
       }
       const auto started_at = Clock::now();
-      RegistrationResult result = registerFrame(frame, initial_guess, odom_retry_guess, use_ndt);
+      RegistrationResult result = registerFrame(
+        frame, initial_guess, odom_retry_guess, use_ndt, confirming_recovery, failed_frame_count,
+        odom_retry_failure_count, recovery_sweep_cursor, recovery_sweep_last_pose_center);
       const double elapsed_sec =
         std::chrono::duration<double>(Clock::now() - started_at).count();
-      finishRegistration(frame, result, elapsed_sec);
+      finishRegistration(frame, result, elapsed_sec, confirming_recovery);
     }
   }
 
   RegistrationResult registerFrame(
     const CloudFrame & frame, const Eigen::Matrix4f & initial_guess,
-    const std::optional<Eigen::Matrix4f> & odom_retry_guess, const bool use_ndt)
+    const std::optional<Eigen::Matrix4f> & odom_retry_guess, const bool use_ndt,
+    const bool confirming_recovery, const int failed_frame_count,
+    const int odom_retry_failure_count, const std::size_t recovery_sweep_cursor,
+    const bool recovery_sweep_last_pose_center)
   {
     RegistrationResult result;
     result.source_points = static_cast<int>(frame.cloud->points.size());
@@ -699,17 +771,239 @@ private:
     {
       return result;
     }
+    if (confirming_recovery) {
+      result = runRegistration(frame, initial_guess, true);
+      result.used_recovery_search = result.ok;
+      result.recovery_stage = "confirm";
+      result.recovery_candidate_count = 1;
+      return result;
+    }
 
     result = runRegistration(frame, initial_guess, use_ndt);
     if (!result.ok && !use_ndt) {
       result = runRegistration(frame, initial_guess, true);
     }
+    int odom_retry_failures_after_attempt = odom_retry_failure_count;
     if (!result.ok && odom_retry_guess.has_value()) {
       RegistrationResult odom_retry = runRegistration(frame, odom_retry_guess.value(), true);
       odom_retry.used_odom_retry = true;
-      return odom_retry;
+      if (odom_retry.ok) {
+        return odom_retry;
+      }
+      odom_retry.odom_retry_failed = true;
+      odom_retry_failures_after_attempt = odom_retry_failure_count + 1;
+      result = odom_retry;
+    }
+    if (!result.ok && recoverySearchDue(failed_frame_count, odom_retry_failures_after_attempt)) {
+      const bool odom_retry_exhausted =
+        odom_retry_failures_after_attempt >= options_.recovery_after_failed_frames;
+      const bool last_pose_center = odom_retry_exhausted || !odom_retry_guess.has_value();
+      const std::size_t search_cursor =
+        (last_pose_center == recovery_sweep_last_pose_center) ? recovery_sweep_cursor : 0;
+      const Eigen::Matrix4f center =
+        last_pose_center ? initial_guess : odom_retry_guess.value();
+      RegistrationResult recovery =
+        runRecoverySearch(frame, center, search_cursor, last_pose_center);
+      recovery.odom_retry_failed = result.odom_retry_failed;
+      return recovery;
     }
     return result;
+  }
+
+  bool recoverySearchDue(
+    const int failed_frame_count, const int odom_retry_failure_count) const
+  {
+    return options_.recovery_search_enabled &&
+           (failed_frame_count >= options_.recovery_after_failed_frames ||
+            odom_retry_failure_count >= options_.recovery_after_failed_frames);
+  }
+
+  std::vector<double> recoveryYawSweepOffsets() const
+  {
+    constexpr double pi = 3.14159265358979323846;
+    std::vector<double> offsets;
+    offsets.reserve(36);
+    offsets.push_back(0.0);
+    for (int degrees = 10; degrees < 180; degrees += 10) {
+      const double radians = static_cast<double>(degrees) * pi / 180.0;
+      offsets.push_back(radians);
+      offsets.push_back(-radians);
+    }
+    offsets.push_back(pi);
+    return offsets;
+  }
+
+  std::vector<Eigen::Matrix4f> recoverySweepGuesses(
+    const Eigen::Matrix4f & center, const std::size_t cursor, int & total_candidates,
+    std::size_t & next_cursor) const
+  {
+    constexpr double pi = 3.14159265358979323846;
+    const std::vector<double> yaw_offsets = recoveryYawSweepOffsets();
+    std::vector<Eigen::Matrix4f> all;
+
+    for (const double yaw_offset : yaw_offsets) {
+      all.push_back(center * transform2D(0.0, 0.0, yaw_offset));
+    }
+
+    for (int radius_step = 1; radius_step <= 20; ++radius_step) {
+      const double radius = static_cast<double>(radius_step) * 0.10;
+      for (const double yaw_offset : yaw_offsets) {
+        for (int index = 0; index < 8; ++index) {
+          const double angle = static_cast<double>(index) * pi / 4.0;
+          all.push_back(
+            center * transform2D(radius * std::cos(angle), radius * std::sin(angle), yaw_offset));
+        }
+      }
+    }
+
+    total_candidates = static_cast<int>(all.size());
+    if (all.empty()) {
+      next_cursor = 0;
+      return {};
+    }
+
+    const std::size_t max_candidates =
+      static_cast<std::size_t>(options_.recovery_max_candidates_per_frame);
+    if (all.size() <= max_candidates) {
+      next_cursor = 0;
+      return all;
+    }
+
+    std::vector<Eigen::Matrix4f> selected;
+    selected.reserve(max_candidates);
+    const std::size_t start = cursor % all.size();
+    for (std::size_t index = 0; index < max_candidates; ++index) {
+      selected.push_back(all[(start + index) % all.size()]);
+    }
+    next_cursor = (start + max_candidates) % all.size();
+    return selected;
+  }
+
+  std::vector<Eigen::Matrix4f> recoveryRefineGuesses(const Eigen::Matrix4f & center) const
+  {
+    constexpr double pi = 3.14159265358979323846;
+    const std::vector<std::pair<double, double>> offsets = {
+      {0.0, 0.0}, {0.15, 0.0}, {-0.15, 0.0}, {0.0, 0.15}, {0.0, -0.15},
+      {0.15, 0.15}, {0.15, -0.15}, {-0.15, 0.15}, {-0.15, -0.15}};
+    const std::vector<double> yaw_offsets = {
+      0.0, 5.0 * pi / 180.0, -5.0 * pi / 180.0, 10.0 * pi / 180.0,
+      -10.0 * pi / 180.0};
+    std::vector<Eigen::Matrix4f> guesses;
+    guesses.reserve(offsets.size() * yaw_offsets.size());
+    for (const auto & offset : offsets) {
+      for (const double yaw_offset : yaw_offsets) {
+        guesses.push_back(center * transform2D(offset.first, offset.second, yaw_offset));
+      }
+    }
+    return guesses;
+  }
+
+  bool betterRegistration(
+    const RegistrationResult & candidate, const RegistrationResult & current_best) const
+  {
+    if (!candidate.ok) {
+      return false;
+    }
+    if (!current_best.ok) {
+      return true;
+    }
+    const bool candidate_finite = std::isfinite(candidate.fitness);
+    const bool best_finite = std::isfinite(current_best.fitness);
+    if (candidate_finite && best_finite) {
+      return candidate.fitness < current_best.fitness;
+    }
+    return candidate_finite && !best_finite;
+  }
+
+  RegistrationResult runRecoverySearch(
+    const CloudFrame & frame, const Eigen::Matrix4f & center,
+    const std::size_t recovery_sweep_cursor, const bool last_pose_center)
+  {
+    constexpr double rad_to_deg = 180.0 / 3.14159265358979323846;
+    int total_candidates = 0;
+    std::size_t next_cursor = 0;
+    auto guesses =
+      recoverySweepGuesses(center, recovery_sweep_cursor, total_candidates, next_cursor);
+    std::string stage = last_pose_center ? "sweep_last_pose" : "sweep_odom";
+    if (total_candidates > static_cast<int>(guesses.size())) {
+      stage += "_batch";
+    }
+
+    RegistrationResult best;
+    best.source_points = static_cast<int>(frame.cloud->points.size());
+    best.raw_source_points = frame.raw_source_points;
+    best.used_recovery_search = true;
+    best.recovery_stage = stage;
+    best.recovery_center_last_pose = last_pose_center;
+    best.recovery_cursor_valid = true;
+    best.recovery_next_cursor = next_cursor;
+    const Pose2D center_pose = poseFromMatrix2D(center);
+    RCLCPP_INFO(
+      get_logger(),
+      "Recovery search start: stage=%s frame_sequence=%lu center=(x=%.3f y=%.3f yaw=%.1fdeg) "
+      "cursor=%zu next_cursor=%zu batch_candidates=%zu total_candidates=%d",
+      stage.c_str(), static_cast<unsigned long>(frame.sequence), center_pose.x, center_pose.y,
+      center_pose.yaw * rad_to_deg, recovery_sweep_cursor, next_cursor, guesses.size(),
+      total_candidates);
+    int tested_candidates = 0;
+    for (const auto & guess : guesses) {
+      const Pose2D guess_pose = poseFromMatrix2D(guess);
+      RCLCPP_INFO(
+        get_logger(),
+        "Recovery search guess: stage=%s index=%d/%zu x=%.3f y=%.3f yaw=%.1fdeg",
+        stage.c_str(), tested_candidates + 1, guesses.size(), guess_pose.x, guess_pose.y,
+        guess_pose.yaw * rad_to_deg);
+      RegistrationResult candidate = runRegistration(frame, guess, true);
+      ++tested_candidates;
+      const Pose2D candidate_pose = poseFromMatrix2D(candidate.transform);
+      RCLCPP_INFO(
+        get_logger(),
+        "Recovery search result: stage=%s index=%d/%zu ok=%s ndt=%s gicp=%s fitness=%.6f "
+        "final=(x=%.3f y=%.3f yaw=%.1fdeg)",
+        stage.c_str(), tested_candidates, guesses.size(), candidate.ok ? "true" : "false",
+        candidate.ndt_converged ? "true" : "false",
+        candidate.gicp_converged ? "true" : "false", candidate.fitness, candidate_pose.x,
+        candidate_pose.y, candidate_pose.yaw * rad_to_deg);
+      if (betterRegistration(candidate, best)) {
+        best = candidate;
+      }
+    }
+
+    if (!best.ok) {
+      best.recovery_candidate_count = tested_candidates;
+      return best;
+    }
+
+    int refine_candidates = 0;
+    for (const auto & guess : recoveryRefineGuesses(best.transform)) {
+      const Pose2D guess_pose = poseFromMatrix2D(guess);
+      RCLCPP_INFO(
+        get_logger(),
+        "Recovery refine guess: stage=%s index=%d x=%.3f y=%.3f yaw=%.1fdeg",
+        stage.c_str(), refine_candidates + 1, guess_pose.x, guess_pose.y,
+        guess_pose.yaw * rad_to_deg);
+      RegistrationResult refined = runRegistration(frame, guess, true);
+      ++refine_candidates;
+      const Pose2D refined_pose = poseFromMatrix2D(refined.transform);
+      RCLCPP_INFO(
+        get_logger(),
+        "Recovery refine result: stage=%s index=%d ok=%s ndt=%s gicp=%s fitness=%.6f "
+        "final=(x=%.3f y=%.3f yaw=%.1fdeg)",
+        stage.c_str(), refine_candidates, refined.ok ? "true" : "false",
+        refined.ndt_converged ? "true" : "false", refined.gicp_converged ? "true" : "false",
+        refined.fitness, refined_pose.x, refined_pose.y, refined_pose.yaw * rad_to_deg);
+      if (betterRegistration(refined, best)) {
+        best = refined;
+      }
+    }
+
+    best.used_recovery_search = true;
+    best.recovery_stage = stage + "+refine";
+    best.recovery_candidate_count = tested_candidates + refine_candidates;
+    best.recovery_center_last_pose = last_pose_center;
+    best.recovery_cursor_valid = true;
+    best.recovery_next_cursor = next_cursor;
+    return best;
   }
 
   RegistrationResult runRegistration(
@@ -749,57 +1043,194 @@ private:
   }
 
   void finishRegistration(
-    const CloudFrame & frame, const RegistrationResult & result, const double elapsed_sec)
+    const CloudFrame & frame, const RegistrationResult & result, const double elapsed_sec,
+    const bool confirming_recovery)
   {
     if (!result.ok) {
-      const std::string detail = result.used_odom_retry
-                                   ? "Odom retry NDT/GICP did not converge."
-                                   : (result.used_ndt ? "NDT/GICP did not converge."
-                                                      : "FastVGICP did not converge.");
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        updateRecoveryProgressLocked(result);
+        if (confirming_recovery) {
+          resetRecoveryLocked();
+        }
+      }
+      const std::string detail =
+        result.used_recovery_search
+          ? "Recovery sweep NDT/GICP did not converge."
+          : (result.used_odom_retry
+               ? "Odom retry NDT/GICP did not converge."
+               : (confirming_recovery
+                    ? "Recovery confirmation NDT/GICP did not converge."
+                    : (result.used_ndt ? "NDT/GICP did not converge."
+                                       : "FastVGICP did not converge.")));
       recordFrameFailure(
         "registration_failed",
         detail);
       return;
     }
 
+    bool should_publish_pose = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       std::string rejection_detail;
-      if (!acceptRegistrationLocked(frame, result, rejection_detail)) {
+      updateRecoveryProgressLocked(result);
+      const bool recovery_result = confirming_recovery || result.used_recovery_search;
+      if (!acceptRegistrationLocked(frame, result, rejection_detail, recovery_result)) {
+        RCLCPP_WARN(
+          get_logger(), "Registration rejected: recovery=%s detail=%s",
+          recovery_result ? "true" : "false", rejection_detail.c_str());
+        if (recovery_result) {
+          resetRecoveryLocked();
+        }
         recordFrameFailureLocked("registration_rejected", rejection_detail);
         publishStatusLocked();
         return;
       }
+
+      if (recovery_result) {
+        if (!acceptRecoveryFitnessLocked(result, rejection_detail)) {
+          RCLCPP_WARN(
+            get_logger(), "Recovery rejected: fitness=%.6f last_fitness=%.6f detail=%s",
+            result.fitness, last_fitness_, rejection_detail.c_str());
+          resetRecoveryLocked();
+          recordFrameFailureLocked("recovery_rejected", rejection_detail);
+          publishStatusLocked();
+          return;
+        }
+        pending_recovery_pose_ = result.transform;
+        pending_recovery_fitness_ = result.fitness;
+        recovery_confirm_count_ = confirming_recovery ? recovery_confirm_count_ + 1 : 1;
+        state_ = "recovering";
+        tracking_ready_ = false;
+        last_used_ndt_ = result.used_ndt;
+        last_ndt_converged_ = result.ndt_converged;
+        last_gicp_converged_ = result.gicp_converged;
+        last_raw_source_points_ = result.raw_source_points;
+        last_source_points_ = result.source_points;
+        last_cloud_frame_ = frame.cloud_frame;
+        last_used_odom_retry_ = result.used_odom_retry || result.odom_retry_failed;
+        last_used_recovery_search_ = true;
+        last_recovery_stage_ = result.recovery_stage;
+        last_recovery_candidate_count_ = result.recovery_candidate_count;
+        last_error_.clear();
+        error_detail_ = "Recovery candidate awaiting confirmation.";
+        if (elapsed_sec > 0.0) {
+          frequency_hz_ = 1.0 / elapsed_sec;
+        }
+        const Pose2D recovery_pose = poseFromMatrix2D(result.transform);
+        if (recovery_confirm_count_ < options_.recovery_confirm_frames) {
+          RCLCPP_INFO(
+            get_logger(),
+            "Recovery candidate accepted pending confirmation: count=%d/%d fitness=%.6f "
+            "last_fitness=%.6f pose=(x=%.3f y=%.3f yaw=%.1fdeg)",
+            recovery_confirm_count_, options_.recovery_confirm_frames, result.fitness,
+            last_fitness_, recovery_pose.x, recovery_pose.y,
+            recovery_pose.yaw * 180.0 / 3.14159265358979323846);
+          publishStatusLocked();
+          return;
+        }
+        RCLCPP_INFO(
+          get_logger(),
+          "Recovery confirmed: count=%d/%d fitness=%.6f last_fitness=%.6f pose=(x=%.3f "
+          "y=%.3f yaw=%.1fdeg)",
+          recovery_confirm_count_, options_.recovery_confirm_frames, result.fitness, last_fitness_,
+          recovery_pose.x, recovery_pose.y,
+          recovery_pose.yaw * 180.0 / 3.14159265358979323846);
+      }
+      applySuccessfulRegistrationLocked(frame, result, elapsed_sec);
+      should_publish_pose = true;
     }
 
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      last_pose_ = result.transform;
-      last_used_ndt_ = result.used_ndt;
-      last_ndt_converged_ = result.ndt_converged;
-      last_gicp_converged_ = result.gicp_converged;
-      last_ndt_fitness_ = result.ndt_fitness;
-      last_fitness_ = result.fitness;
-      last_raw_source_points_ = result.raw_source_points;
-      last_source_points_ = result.source_points;
-      last_cloud_frame_ = frame.cloud_frame;
-      last_success_odom_ = frame.odom;
-      failed_frame_count_ = 0;
-      tracking_ready_ = true;
-      state_ = "localizing";
-      last_used_odom_retry_ = result.used_odom_retry;
-      last_error_.clear();
-      error_detail_.clear();
-      if (elapsed_sec > 0.0) {
-        frequency_hz_ = 1.0 / elapsed_sec;
-      }
+    if (should_publish_pose) {
+      publishPose(result.transform, frame.stamp);
+      publishStatus();
     }
-    publishPose(result.transform, frame.stamp);
-    publishStatus();
+  }
+
+  void applySuccessfulRegistrationLocked(
+    const CloudFrame & frame, const RegistrationResult & result, const double elapsed_sec)
+  {
+    last_pose_ = result.transform;
+    last_used_ndt_ = result.used_ndt;
+    last_ndt_converged_ = result.ndt_converged;
+    last_gicp_converged_ = result.gicp_converged;
+    last_ndt_fitness_ = result.ndt_fitness;
+    last_fitness_ = result.fitness;
+    last_raw_source_points_ = result.raw_source_points;
+    last_source_points_ = result.source_points;
+    last_cloud_frame_ = frame.cloud_frame;
+    last_success_odom_ = frame.odom;
+    failed_frame_count_ = 0;
+    tracking_ready_ = true;
+    state_ = "localizing";
+    last_used_odom_retry_ = result.used_odom_retry;
+    last_used_recovery_search_ = result.used_recovery_search;
+    last_recovery_stage_ = result.recovery_stage;
+    last_recovery_candidate_count_ = result.recovery_candidate_count;
+    consecutive_odom_retry_failures_ = 0;
+    recovery_sweep_cursor_ = 0;
+    recovery_sweep_last_pose_center_ = true;
+    resetRecoveryLocked();
+    last_error_.clear();
+    error_detail_.clear();
+    if (elapsed_sec > 0.0) {
+      frequency_hz_ = 1.0 / elapsed_sec;
+    }
+  }
+
+  void resetRecoveryLocked()
+  {
+    pending_recovery_pose_.reset();
+    pending_recovery_fitness_ = std::numeric_limits<double>::quiet_NaN();
+    recovery_confirm_count_ = 0;
+  }
+
+  void updateRecoveryProgressLocked(const RegistrationResult & result)
+  {
+    if (result.odom_retry_failed) {
+      ++consecutive_odom_retry_failures_;
+    }
+    if (result.recovery_cursor_valid) {
+      recovery_sweep_cursor_ = result.recovery_next_cursor;
+      recovery_sweep_last_pose_center_ = result.recovery_center_last_pose;
+    }
+    if (result.used_odom_retry || result.odom_retry_failed) {
+      last_used_odom_retry_ = true;
+    }
+    if (result.used_recovery_search) {
+      last_used_recovery_search_ = true;
+      last_recovery_stage_ = result.recovery_stage;
+      last_recovery_candidate_count_ = result.recovery_candidate_count;
+    }
+  }
+
+  bool acceptRecoveryFitnessLocked(
+    const RegistrationResult & result, std::string & detail) const
+  {
+    if (!std::isfinite(result.fitness)) {
+      detail = "Rejected recovery candidate because fitness is unavailable.";
+      return false;
+    }
+    if (!std::isfinite(last_fitness_)) {
+      return true;
+    }
+    const double ratio_limit = last_fitness_ * options_.recovery_fitness_ratio;
+    const double absolute_limit = last_fitness_ + options_.recovery_fitness_abs;
+    const double limit = std::max(ratio_limit, absolute_limit);
+    if (result.fitness > limit) {
+      std::ostringstream out;
+      out << "Rejected recovery candidate because fitness exceeded strict limit: fitness="
+          << std::setprecision(6) << result.fitness << " previous=" << last_fitness_
+          << " limit=" << limit << ".";
+      detail = out.str();
+      return false;
+    }
+    return true;
   }
 
   bool acceptRegistrationLocked(
-    const CloudFrame & frame, const RegistrationResult & result, std::string & detail) const
+    const CloudFrame & frame, const RegistrationResult & result, std::string & detail,
+    const bool allow_pose_jump) const
   {
     if (!tracking_ready_ && !std::isfinite(last_fitness_)) {
       return true;
@@ -828,7 +1259,7 @@ private:
       allowed_jump_yaw = std::min(allowed_jump_yaw, odom_jump_yaw);
     }
 
-    if (pose_jump_m > allowed_jump_m || pose_jump_yaw > allowed_jump_yaw) {
+    if (!allow_pose_jump && (pose_jump_m > allowed_jump_m || pose_jump_yaw > allowed_jump_yaw)) {
       std::ostringstream out;
       out << "Rejected converged registration because pose jump exceeded guard: "
           << "translation=" << std::setprecision(4) << pose_jump_m
@@ -935,6 +1366,12 @@ private:
            last_success_odom_.has_value();
   }
 
+  bool odomRetrySuppressedLocked() const
+  {
+    return options_.use_odom_retry &&
+           consecutive_odom_retry_failures_ >= options_.recovery_after_failed_frames;
+  }
+
   double odomAgeSecLocked() const
   {
     if (!latest_odom_.has_value()) {
@@ -961,9 +1398,24 @@ private:
     out << "\"baseFrame\":" << jsonString(options_.base_frame) << ",";
     out << "\"odomTopic\":" << jsonString(options_.odom_topic) << ",";
     out << "\"useOdomRetry\":" << (options_.use_odom_retry ? "true" : "false") << ",";
+    out << "\"recoverySearchEnabled\":"
+        << (options_.recovery_search_enabled ? "true" : "false") << ",";
     out << "\"odomRetryAvailable\":" << (odomRetryAvailableLocked() ? "true" : "false")
         << ",";
+    out << "\"odomRetrySuppressed\":"
+        << (odomRetrySuppressedLocked() ? "true" : "false") << ",";
+    out << "\"consecutiveOdomRetryFailures\":" << consecutive_odom_retry_failures_ << ",";
     out << "\"usedOdomRetry\":" << (last_used_odom_retry_ ? "true" : "false") << ",";
+    out << "\"usedRecoverySearch\":" << (last_used_recovery_search_ ? "true" : "false")
+        << ",";
+    out << "\"recoveryStage\":" << jsonString(last_recovery_stage_) << ",";
+    out << "\"recoveryCandidateCount\":" << last_recovery_candidate_count_ << ",";
+    out << "\"recoverySweepCursor\":" << recovery_sweep_cursor_ << ",";
+    out << "\"recoverySweepLastPoseCenter\":"
+        << (recovery_sweep_last_pose_center_ ? "true" : "false") << ",";
+    out << "\"recoveryConfirmCount\":" << recovery_confirm_count_ << ",";
+    out << "\"recoveryConfirmFrames\":" << options_.recovery_confirm_frames << ",";
+    out << "\"pendingRecoveryFitness\":" << jsonNumber(pending_recovery_fitness_) << ",";
     out << "\"odomAgeSec\":" << jsonNumber(odomAgeSecLocked()) << ",";
     out << "\"cloudFrame\":" << jsonString(last_cloud_frame_) << ",";
     out << "\"rawSourcePoints\":" << last_raw_source_points_ << ",";
@@ -1031,6 +1483,7 @@ private:
   Eigen::Matrix4f last_pose_ = Eigen::Matrix4f::Identity();
   std::optional<OdomFrame> latest_odom_;
   std::optional<OdomFrame> last_success_odom_;
+  std::optional<Eigen::Matrix4f> pending_recovery_pose_;
 
   std::string state_ = "starting";
   std::string last_error_;
@@ -1043,8 +1496,16 @@ private:
   bool last_ndt_converged_ = false;
   bool last_gicp_converged_ = false;
   bool last_used_odom_retry_ = false;
+  bool last_used_recovery_search_ = false;
+  std::string last_recovery_stage_;
+  int last_recovery_candidate_count_ = 0;
+  int recovery_confirm_count_ = 0;
+  int consecutive_odom_retry_failures_ = 0;
+  std::size_t recovery_sweep_cursor_ = 0;
+  bool recovery_sweep_last_pose_center_ = true;
   double last_ndt_fitness_ = std::numeric_limits<double>::quiet_NaN();
   double last_fitness_ = std::numeric_limits<double>::quiet_NaN();
+  double pending_recovery_fitness_ = std::numeric_limits<double>::quiet_NaN();
   double frequency_hz_ = std::numeric_limits<double>::quiet_NaN();
 
   tf2_ros::Buffer tf_buffer_;
