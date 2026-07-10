@@ -160,6 +160,25 @@ def test_omni_mode_zeroes_tiny_linear_x_when_lateral_dominates(monkeypatch):
     assert abs(errors["bodyX"]) < params["lateralDominantLinearDeadbandMps"]
 
 
+def test_omni_mode_projects_with_current_yaw_not_start_yaw(monkeypatch):
+    manager = _manager(monkeypatch)
+    target, params = manager._command_from_payload({"mode": "omni", "x": 1.76, "y": 0.41, "yawDeg": 0})
+    stale_start_yaw = math.radians(171.53779635654254)
+    current_yaw = math.radians(-41.13088024282365)
+
+    command, phase, errors, done = manager._next_command(
+        _state(manager, target, params, PHASE_OMNI_TRANSLATE, translation_yaw=stale_start_yaw),
+        target,
+        params,
+        _pose(1.793310523033142, -1.1563531160354614, current_yaw),
+    )
+
+    assert not done
+    assert phase == PHASE_OMNI_TRANSLATE
+    assert errors["bodyY"] > 0.0
+    assert command["linearY"] > 0.0
+
+
 def test_omni_near_target_uses_single_axis_when_axis_errors_inside_tolerance_but_distance_outside(monkeypatch):
     manager = _manager(monkeypatch)
     target, params = manager._command_from_payload({"mode": "omni", "x": 0.04, "y": 0.04, "yawDeg": 0})
@@ -268,7 +287,7 @@ def test_rotate_phase_replans_when_position_leaves_hold_band(monkeypatch):
     assert command["linearY"] == 0.0
 
 
-def test_start_rejects_stale_localization(monkeypatch):
+def test_start_waits_for_stale_localization(monkeypatch):
     class FakeReader:
         def read(self, key, timeout_sec=0.0):
             return {
@@ -287,8 +306,76 @@ def test_start_rejects_stale_localization(monkeypatch):
 
     result = manager.start({"mode": "lateral", "x": 1.0, "y": 0.0, "yawDeg": 0})
 
-    assert result["code"] == "NAV-LOCALIZATION"
-    assert result["status"] == "failed"
+    assert result["ok"] is True
+    assert result["status"] == "running"
+    assert result["phase"] == PHASE_WAITING_LOCALIZATION
+    assert result["running"] is True
+    assert "stale pose" in result["lastLocalizationError"]
+    manager.stop()
+
+
+def test_start_waits_for_initial_localization_pose_and_resumes(monkeypatch):
+    class FakeReader:
+        def __init__(self):
+            self.recovered = False
+
+        def read(self, key, timeout_sec=0.0):
+            if not self.recovered:
+                return {
+                    "ok": False,
+                    "code": "ROS-R-NODATA",
+                    "detail": "No message received from /localization/pose.",
+                }
+            return _pose_result(0.0, 0.0, 0.0)
+
+    monkeypatch.setattr(
+        navigation_manager,
+        "chassis_limits",
+        lambda: {"limits": {"maxLinearMps": 0.2, "maxLateralMps": 0.15, "maxAngularRadS": 0.5}},
+    )
+    reader = FakeReader()
+    commands = []
+
+    def publish(command):
+        commands.append(command)
+        return {"ok": True, "command": command}
+
+    manager = NavigationManager(reader=reader, publisher=publish)
+    result = manager.start(
+        {
+            "mode": "lateral",
+            "x": 0.0,
+            "y": 0.0,
+            "yawDeg": 0,
+            "arrivalStableSec": 0,
+            "controlRateHz": 50,
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["status"] == "running"
+    assert result["phase"] == PHASE_WAITING_LOCALIZATION
+    assert result["currentPose"] is None
+    assert "No message" in result["lastLocalizationError"]
+
+    deadline = time.time() + 1.0
+    status = manager.status()
+    while time.time() < deadline and (status.get("phase") != PHASE_WAITING_LOCALIZATION or not commands):
+        time.sleep(0.01)
+        status = manager.status()
+
+    assert status["phase"] == PHASE_WAITING_LOCALIZATION
+    assert commands[-1] == {"linearX": 0.0, "linearY": 0.0, "angularZ": 0.0}
+
+    reader.recovered = True
+    deadline = time.time() + 1.0
+    status = manager.status()
+    while time.time() < deadline and status.get("status") not in {"completed", "failed", "stopped"}:
+        time.sleep(0.01)
+        status = manager.status()
+
+    assert status["status"] == "completed"
+    assert status["lastLocalizationError"] == ""
 
 
 def test_running_navigation_waits_for_localization_pose_and_resumes(monkeypatch):

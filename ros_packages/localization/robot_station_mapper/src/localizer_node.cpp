@@ -69,10 +69,18 @@ struct LocalizerOptions
   std::string base_frame = "base_link";
   int max_failed_frames = 15;
   bool recovery_search_enabled = true;
-  int recovery_after_failed_frames = 5;
+  int recovery_after_failed_frames = 7;
   int recovery_confirm_frames = 2;
   int recovery_max_candidates_per_frame = 48;
   int recovery_wide_every_n_frames = 3;
+  bool recovery_near_gicp_only_enabled = true;
+  double recovery_near_radius_m = 0.8;
+  double recovery_near_xy_step_m = 0.2;
+  double recovery_near_yaw_step_deg = 10.0;
+  double recovery_far_radius_m = 2.0;
+  double recovery_far_radius_step_m = 0.25;
+  double recovery_far_yaw_step_deg = 15.0;
+  int recovery_far_angle_count = 8;
   int min_source_points = 50;
   double voxel_leaf = 0.08;
   bool use_ndt_when_tracking = kUseNdtWhenTracking;
@@ -92,6 +100,7 @@ struct LocalizerOptions
   double odom_translation_margin_m = 0.12;
   double odom_yaw_margin_deg = 8.0;
   double odom_delta_scale = 3.0;
+  double fitness_max_abs = 0.03;
   double fitness_degrade_ratio = 6.0;
   double fitness_degrade_abs = 0.08;
   double recovery_fitness_ratio = 1.8;
@@ -142,6 +151,13 @@ struct RegistrationResult
   bool recovery_cursor_valid = false;
   std::size_t recovery_next_cursor = 0;
   Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
+};
+
+struct RecoveryGuess
+{
+  Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
+  bool use_ndt = true;
+  std::string mode = "ndt_gicp";
 };
 
 std::string escapeJson(const std::string & text)
@@ -385,6 +401,16 @@ private:
     declare_parameter<int>(
       "recovery_max_candidates_per_frame", options_.recovery_max_candidates_per_frame);
     declare_parameter<int>("recovery_wide_every_n_frames", options_.recovery_wide_every_n_frames);
+    declare_parameter<bool>(
+      "recovery_near_gicp_only_enabled", options_.recovery_near_gicp_only_enabled);
+    declare_parameter<double>("recovery_near_radius_m", options_.recovery_near_radius_m);
+    declare_parameter<double>("recovery_near_xy_step_m", options_.recovery_near_xy_step_m);
+    declare_parameter<double>(
+      "recovery_near_yaw_step_deg", options_.recovery_near_yaw_step_deg);
+    declare_parameter<double>("recovery_far_radius_m", options_.recovery_far_radius_m);
+    declare_parameter<double>("recovery_far_radius_step_m", options_.recovery_far_radius_step_m);
+    declare_parameter<double>("recovery_far_yaw_step_deg", options_.recovery_far_yaw_step_deg);
+    declare_parameter<int>("recovery_far_angle_count", options_.recovery_far_angle_count);
     declare_parameter<int>("min_source_points", options_.min_source_points);
     declare_parameter<double>("voxel_leaf", options_.voxel_leaf);
     declare_parameter<bool>("use_ndt_when_tracking", options_.use_ndt_when_tracking);
@@ -408,6 +434,7 @@ private:
       "odom_translation_margin_m", options_.odom_translation_margin_m);
     declare_parameter<double>("odom_yaw_margin_deg", options_.odom_yaw_margin_deg);
     declare_parameter<double>("odom_delta_scale", options_.odom_delta_scale);
+    declare_parameter<double>("fitness_max_abs", options_.fitness_max_abs);
     declare_parameter<double>("fitness_degrade_ratio", options_.fitness_degrade_ratio);
     declare_parameter<double>("fitness_degrade_abs", options_.fitness_degrade_abs);
     declare_parameter<double>("recovery_fitness_ratio", options_.recovery_fitness_ratio);
@@ -436,6 +463,22 @@ private:
       1, static_cast<int>(get_parameter("recovery_max_candidates_per_frame").as_int()));
     options_.recovery_wide_every_n_frames =
       std::max(1, static_cast<int>(get_parameter("recovery_wide_every_n_frames").as_int()));
+    options_.recovery_near_gicp_only_enabled =
+      get_parameter("recovery_near_gicp_only_enabled").as_bool();
+    options_.recovery_near_radius_m =
+      std::max(0.0, get_parameter("recovery_near_radius_m").as_double());
+    options_.recovery_near_xy_step_m =
+      std::max(0.02, get_parameter("recovery_near_xy_step_m").as_double());
+    options_.recovery_near_yaw_step_deg =
+      std::max(1.0, get_parameter("recovery_near_yaw_step_deg").as_double());
+    options_.recovery_far_radius_m =
+      std::max(0.0, get_parameter("recovery_far_radius_m").as_double());
+    options_.recovery_far_radius_step_m =
+      std::max(0.05, get_parameter("recovery_far_radius_step_m").as_double());
+    options_.recovery_far_yaw_step_deg =
+      std::max(1.0, get_parameter("recovery_far_yaw_step_deg").as_double());
+    options_.recovery_far_angle_count =
+      std::max(1, static_cast<int>(get_parameter("recovery_far_angle_count").as_int()));
     options_.min_source_points =
       std::max(1, static_cast<int>(get_parameter("min_source_points").as_int()));
     options_.voxel_leaf = std::max(0.0, get_parameter("voxel_leaf").as_double());
@@ -465,6 +508,8 @@ private:
     options_.odom_yaw_margin_deg =
       std::max(0.0, get_parameter("odom_yaw_margin_deg").as_double());
     options_.odom_delta_scale = std::max(0.0, get_parameter("odom_delta_scale").as_double());
+    options_.fitness_max_abs =
+      std::max(0.0, get_parameter("fitness_max_abs").as_double());
     options_.fitness_degrade_ratio =
       std::max(1.0, get_parameter("fitness_degrade_ratio").as_double());
     options_.fitness_degrade_abs =
@@ -794,7 +839,7 @@ private:
       odom_retry_failures_after_attempt = odom_retry_failure_count + 1;
       result = odom_retry;
     }
-    if (!result.ok && recoverySearchDue(failed_frame_count, odom_retry_failures_after_attempt)) {
+    if (recoverySearchDue(failed_frame_count, odom_retry_failures_after_attempt)) {
       const bool odom_retry_exhausted =
         odom_retry_failures_after_attempt >= options_.recovery_after_failed_frames;
       const bool last_pose_center = odom_retry_exhausted || !odom_retry_guess.has_value();
@@ -818,13 +863,14 @@ private:
             odom_retry_failure_count >= options_.recovery_after_failed_frames);
   }
 
-  std::vector<double> recoveryYawSweepOffsets() const
+  std::vector<double> recoveryYawSweepOffsets(const double step_deg) const
   {
     constexpr double pi = 3.14159265358979323846;
+    const int step = std::max(1, std::min(180, static_cast<int>(std::round(step_deg))));
     std::vector<double> offsets;
-    offsets.reserve(36);
+    offsets.reserve(static_cast<std::size_t>(360 / step + 1));
     offsets.push_back(0.0);
-    for (int degrees = 10; degrees < 180; degrees += 10) {
+    for (int degrees = step; degrees < 180; degrees += step) {
       const double radians = static_cast<double>(degrees) * pi / 180.0;
       offsets.push_back(radians);
       offsets.push_back(-radians);
@@ -833,28 +879,97 @@ private:
     return offsets;
   }
 
-  std::vector<Eigen::Matrix4f> recoverySweepGuesses(
+  std::vector<RecoveryGuess> interleaveRecoveryGuesses(
+    const std::vector<RecoveryGuess> & near_guesses,
+    const std::vector<RecoveryGuess> & far_guesses) const
+  {
+    std::vector<RecoveryGuess> merged;
+    merged.reserve(near_guesses.size() + far_guesses.size());
+    std::size_t near_index = 0;
+    std::size_t far_index = 0;
+    while (near_index < near_guesses.size() || far_index < far_guesses.size()) {
+      for (int count = 0; count < 2 && near_index < near_guesses.size(); ++count) {
+        merged.push_back(near_guesses[near_index++]);
+      }
+      if (far_index < far_guesses.size()) {
+        merged.push_back(far_guesses[far_index++]);
+      }
+    }
+    return merged;
+  }
+
+  std::vector<RecoveryGuess> recoverySweepGuesses(
     const Eigen::Matrix4f & center, const std::size_t cursor, int & total_candidates,
     std::size_t & next_cursor) const
   {
     constexpr double pi = 3.14159265358979323846;
-    const std::vector<double> yaw_offsets = recoveryYawSweepOffsets();
-    std::vector<Eigen::Matrix4f> all;
+    std::vector<RecoveryGuess> near_guesses;
+    std::vector<RecoveryGuess> far_guesses;
 
-    for (const double yaw_offset : yaw_offsets) {
-      all.push_back(center * transform2D(0.0, 0.0, yaw_offset));
-    }
-
-    for (int radius_step = 1; radius_step <= 20; ++radius_step) {
-      const double radius = static_cast<double>(radius_step) * 0.10;
-      for (const double yaw_offset : yaw_offsets) {
-        for (int index = 0; index < 8; ++index) {
-          const double angle = static_cast<double>(index) * pi / 4.0;
-          all.push_back(
-            center * transform2D(radius * std::cos(angle), radius * std::sin(angle), yaw_offset));
+    if (options_.recovery_near_gicp_only_enabled && options_.recovery_near_radius_m > 0.0) {
+      const std::vector<double> yaw_offsets =
+        recoveryYawSweepOffsets(options_.recovery_near_yaw_step_deg);
+      std::vector<std::pair<double, double>> xy_offsets;
+      const int max_step =
+        static_cast<int>(std::ceil(options_.recovery_near_radius_m / options_.recovery_near_xy_step_m));
+      for (int ix = -max_step; ix <= max_step; ++ix) {
+        const double x = static_cast<double>(ix) * options_.recovery_near_xy_step_m;
+        for (int iy = -max_step; iy <= max_step; ++iy) {
+          const double y = static_cast<double>(iy) * options_.recovery_near_xy_step_m;
+          if (std::hypot(x, y) <= options_.recovery_near_radius_m + 1e-6) {
+            xy_offsets.emplace_back(x, y);
+          }
+        }
+      }
+      std::sort(xy_offsets.begin(), xy_offsets.end(), [](const auto & lhs, const auto & rhs) {
+        const double lhs_radius = std::hypot(lhs.first, lhs.second);
+        const double rhs_radius = std::hypot(rhs.first, rhs.second);
+        if (std::abs(lhs_radius - rhs_radius) > 1e-9) {
+          return lhs_radius < rhs_radius;
+        }
+        return std::atan2(lhs.second, lhs.first) < std::atan2(rhs.second, rhs.first);
+      });
+      near_guesses.reserve(xy_offsets.size() * yaw_offsets.size());
+      for (const auto & offset : xy_offsets) {
+        for (const double yaw_offset : yaw_offsets) {
+          near_guesses.push_back(
+            RecoveryGuess{center * transform2D(offset.first, offset.second, yaw_offset), false,
+              "gicp_only_near"});
         }
       }
     }
+
+    const double far_radius_max =
+      std::max(options_.recovery_far_radius_m, options_.recovery_near_radius_m);
+    if (far_radius_max > 0.0) {
+      const std::vector<double> yaw_offsets =
+        recoveryYawSweepOffsets(options_.recovery_far_yaw_step_deg);
+      for (const double yaw_offset : yaw_offsets) {
+        far_guesses.push_back(
+          RecoveryGuess{center * transform2D(0.0, 0.0, yaw_offset), true, "ndt_gicp_far"});
+      }
+      const double far_start =
+        options_.recovery_near_gicp_only_enabled
+          ? options_.recovery_near_radius_m + options_.recovery_far_radius_step_m
+          : options_.recovery_far_radius_step_m;
+      for (double radius = far_start; radius <= far_radius_max + 1e-6;
+        radius += options_.recovery_far_radius_step_m)
+      {
+        for (const double yaw_offset : yaw_offsets) {
+          for (int index = 0; index < options_.recovery_far_angle_count; ++index) {
+            const double angle =
+              static_cast<double>(index) * 2.0 * pi /
+              static_cast<double>(options_.recovery_far_angle_count);
+            far_guesses.push_back(
+              RecoveryGuess{
+                center * transform2D(radius * std::cos(angle), radius * std::sin(angle), yaw_offset),
+                true, "ndt_gicp_far"});
+          }
+        }
+      }
+    }
+
+    std::vector<RecoveryGuess> all = interleaveRecoveryGuesses(near_guesses, far_guesses);
 
     total_candidates = static_cast<int>(all.size());
     if (all.empty()) {
@@ -869,7 +984,7 @@ private:
       return all;
     }
 
-    std::vector<Eigen::Matrix4f> selected;
+    std::vector<RecoveryGuess> selected;
     selected.reserve(max_candidates);
     const std::size_t start = cursor % all.size();
     for (std::size_t index = 0; index < max_candidates; ++index) {
@@ -924,7 +1039,7 @@ private:
     std::size_t next_cursor = 0;
     auto guesses =
       recoverySweepGuesses(center, recovery_sweep_cursor, total_candidates, next_cursor);
-    std::string stage = last_pose_center ? "sweep_last_pose" : "sweep_odom";
+    std::string stage = last_pose_center ? "sweep_last_pose_hybrid" : "sweep_odom_hybrid";
     if (total_candidates > static_cast<int>(guesses.size())) {
       stage += "_batch";
     }
@@ -947,21 +1062,21 @@ private:
       total_candidates);
     int tested_candidates = 0;
     for (const auto & guess : guesses) {
-      const Pose2D guess_pose = poseFromMatrix2D(guess);
+      const Pose2D guess_pose = poseFromMatrix2D(guess.transform);
       RCLCPP_INFO(
         get_logger(),
-        "Recovery search guess: stage=%s index=%d/%zu x=%.3f y=%.3f yaw=%.1fdeg",
-        stage.c_str(), tested_candidates + 1, guesses.size(), guess_pose.x, guess_pose.y,
-        guess_pose.yaw * rad_to_deg);
-      RegistrationResult candidate = runRegistration(frame, guess, true);
+        "Recovery search guess: stage=%s mode=%s index=%d/%zu x=%.3f y=%.3f yaw=%.1fdeg",
+        stage.c_str(), guess.mode.c_str(), tested_candidates + 1, guesses.size(), guess_pose.x,
+        guess_pose.y, guess_pose.yaw * rad_to_deg);
+      RegistrationResult candidate = runRegistration(frame, guess.transform, guess.use_ndt);
       ++tested_candidates;
       const Pose2D candidate_pose = poseFromMatrix2D(candidate.transform);
       RCLCPP_INFO(
         get_logger(),
-        "Recovery search result: stage=%s index=%d/%zu ok=%s ndt=%s gicp=%s fitness=%.6f "
+        "Recovery search result: stage=%s mode=%s index=%d/%zu ok=%s ndt=%s gicp=%s fitness=%.6f "
         "final=(x=%.3f y=%.3f yaw=%.1fdeg)",
-        stage.c_str(), tested_candidates, guesses.size(), candidate.ok ? "true" : "false",
-        candidate.ndt_converged ? "true" : "false",
+        stage.c_str(), guess.mode.c_str(), tested_candidates, guesses.size(),
+        candidate.ok ? "true" : "false", candidate.ndt_converged ? "true" : "false",
         candidate.gicp_converged ? "true" : "false", candidate.fitness, candidate_pose.x,
         candidate_pose.y, candidate_pose.yaw * rad_to_deg);
       if (betterRegistration(candidate, best)) {
@@ -979,15 +1094,15 @@ private:
       const Pose2D guess_pose = poseFromMatrix2D(guess);
       RCLCPP_INFO(
         get_logger(),
-        "Recovery refine guess: stage=%s index=%d x=%.3f y=%.3f yaw=%.1fdeg",
+        "Recovery refine guess: stage=%s mode=gicp_only_refine index=%d x=%.3f y=%.3f yaw=%.1fdeg",
         stage.c_str(), refine_candidates + 1, guess_pose.x, guess_pose.y,
         guess_pose.yaw * rad_to_deg);
-      RegistrationResult refined = runRegistration(frame, guess, true);
+      RegistrationResult refined = runRegistration(frame, guess, false);
       ++refine_candidates;
       const Pose2D refined_pose = poseFromMatrix2D(refined.transform);
       RCLCPP_INFO(
         get_logger(),
-        "Recovery refine result: stage=%s index=%d ok=%s ndt=%s gicp=%s fitness=%.6f "
+        "Recovery refine result: stage=%s mode=gicp_only_refine index=%d ok=%s ndt=%s gicp=%s fitness=%.6f "
         "final=(x=%.3f y=%.3f yaw=%.1fdeg)",
         stage.c_str(), refine_candidates, refined.ok ? "true" : "false",
         refined.ndt_converged ? "true" : "false", refined.gicp_converged ? "true" : "false",
@@ -1054,9 +1169,9 @@ private:
           resetRecoveryLocked();
         }
       }
-      const std::string detail =
-        result.used_recovery_search
-          ? "Recovery sweep NDT/GICP did not converge."
+        const std::string detail =
+          result.used_recovery_search
+          ? "Recovery sweep did not converge."
           : (result.used_odom_retry
                ? "Odom retry NDT/GICP did not converge."
                : (confirming_recovery
@@ -1207,8 +1322,7 @@ private:
   bool acceptRecoveryFitnessLocked(
     const RegistrationResult & result, std::string & detail) const
   {
-    if (!std::isfinite(result.fitness)) {
-      detail = "Rejected recovery candidate because fitness is unavailable.";
+    if (!acceptAbsoluteFitnessLocked(result, "recovery candidate", detail)) {
       return false;
     }
     if (!std::isfinite(last_fitness_)) {
@@ -1232,6 +1346,10 @@ private:
     const CloudFrame & frame, const RegistrationResult & result, std::string & detail,
     const bool allow_pose_jump) const
   {
+    if (!acceptAbsoluteFitnessLocked(result, "converged registration", detail)) {
+      return false;
+    }
+
     if (!tracking_ready_ && !std::isfinite(last_fitness_)) {
       return true;
     }
@@ -1286,6 +1404,24 @@ private:
       }
     }
 
+    return true;
+  }
+
+  bool acceptAbsoluteFitnessLocked(
+    const RegistrationResult & result, const std::string & context, std::string & detail) const
+  {
+    if (!std::isfinite(result.fitness)) {
+      detail = "Rejected " + context + " because fitness is unavailable.";
+      return false;
+    }
+    if (options_.fitness_max_abs > 0.0 && result.fitness > options_.fitness_max_abs) {
+      std::ostringstream out;
+      out << "Rejected " << context << " because fitness exceeded hard limit: fitness="
+          << std::setprecision(6) << result.fitness << " limit=" << options_.fitness_max_abs
+          << ".";
+      detail = out.str();
+      return false;
+    }
     return true;
   }
 
@@ -1416,6 +1552,18 @@ private:
     out << "\"recoveryConfirmCount\":" << recovery_confirm_count_ << ",";
     out << "\"recoveryConfirmFrames\":" << options_.recovery_confirm_frames << ",";
     out << "\"pendingRecoveryFitness\":" << jsonNumber(pending_recovery_fitness_) << ",";
+    out << "\"recoveryNearGicpOnlyEnabled\":"
+        << (options_.recovery_near_gicp_only_enabled ? "true" : "false") << ",";
+    out << "\"recoveryNearRadiusM\":" << jsonNumber(options_.recovery_near_radius_m) << ",";
+    out << "\"recoveryNearXyStepM\":" << jsonNumber(options_.recovery_near_xy_step_m) << ",";
+    out << "\"recoveryNearYawStepDeg\":"
+        << jsonNumber(options_.recovery_near_yaw_step_deg) << ",";
+    out << "\"recoveryFarRadiusM\":" << jsonNumber(options_.recovery_far_radius_m) << ",";
+    out << "\"recoveryFarRadiusStepM\":"
+        << jsonNumber(options_.recovery_far_radius_step_m) << ",";
+    out << "\"recoveryFarYawStepDeg\":"
+        << jsonNumber(options_.recovery_far_yaw_step_deg) << ",";
+    out << "\"recoveryFarAngleCount\":" << options_.recovery_far_angle_count << ",";
     out << "\"odomAgeSec\":" << jsonNumber(odomAgeSecLocked()) << ",";
     out << "\"cloudFrame\":" << jsonString(last_cloud_frame_) << ",";
     out << "\"rawSourcePoints\":" << last_raw_source_points_ << ",";
@@ -1429,6 +1577,7 @@ private:
         << jsonNumber(options_.odom_translation_margin_m) << ",";
     out << "\"odomYawMarginDeg\":" << jsonNumber(options_.odom_yaw_margin_deg) << ",";
     out << "\"odomDeltaScale\":" << jsonNumber(options_.odom_delta_scale) << ",";
+    out << "\"fitnessMaxAbs\":" << jsonNumber(options_.fitness_max_abs) << ",";
     out << "\"fitnessDegradeRatio\":" << jsonNumber(options_.fitness_degrade_ratio) << ",";
     out << "\"fitnessDegradeAbs\":" << jsonNumber(options_.fitness_degrade_abs) << ",";
     out << "\"trackingReady\":" << (tracking_ready_ ? "true" : "false") << ",";

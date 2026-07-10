@@ -7164,7 +7164,13 @@ function navigationPlanIsFresh() {
 }
 
 function navigationCanStart() {
-  return Boolean(navigationCanPlan() && !state.navigation.statusLoading);
+  return Boolean(
+    navigationMapReady() &&
+      navigationTargetValues() &&
+      state.localization.running &&
+      !state.navigation.running &&
+      !state.navigation.statusLoading,
+  );
 }
 
 function resetNavigationGoalDrag() {
@@ -7333,10 +7339,10 @@ function navigationWorkSummaryText() {
   if (!state.localization.loadedMap) return "请先在定位作业加载地图";
   if (!navigationMapReady()) return "定位地图未显示";
   if (!navigationTargetValues()) return "设置终止 pose";
-  if (!navigationStartPose()) return "等待当前定位位姿";
   if (navigation.running && navigation.phase === "waiting_localization") {
     return navigation.lastLocalizationError ? `等待定位：${navigation.lastLocalizationError}` : "等待定位恢复";
   }
+  if (!navigationStartPose()) return "等待当前定位位姿";
   if (navigation.plan?.stale) return navigation.plan.staleReason || "路径需重新规划";
   if (navigation.status === "completed" && navigation.completedAt) return `导航完成：${navigation.completedAt}`;
   if (navigation.status === "canceled" && navigation.canceledAt) return `导航已取消：${navigation.canceledAt}`;

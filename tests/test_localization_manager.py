@@ -115,7 +115,7 @@ def test_localization_manager_start_resolves_saved_map_and_builds_command(tmp_pa
     assert "base_frame:=base_link" in commands[0]
     assert "max_failed_frames:=15" in commands[0]
     assert "recovery_search_enabled:=true" in commands[0]
-    assert "recovery_after_failed_frames:=5" in commands[0]
+    assert "recovery_after_failed_frames:=7" in commands[0]
     assert "recovery_confirm_frames:=2" in commands[0]
     assert "recovery_max_candidates_per_frame:=48" in commands[0]
     assert "recovery_wide_every_n_frames:=3" in commands[0]
@@ -125,6 +125,7 @@ def test_localization_manager_start_resolves_saved_map_and_builds_command(tmp_pa
     assert "use_odom_retry:=true" in commands[0]
     assert "odom_max_age_sec:=1.0" in commands[0]
     assert "max_pose_jump_m:=0.35" in commands[0]
+    assert "fitness_max_abs:=0.03" in commands[0]
     assert "fitness_degrade_ratio:=6.0" in commands[0]
     assert "recovery_fitness_ratio:=1.8" in commands[0]
     assert "recovery_fitness_abs:=0.05" in commands[0]
@@ -209,6 +210,7 @@ def test_localization_manager_start_passes_localization_tuning(tmp_path, monkeyp
             "recoveryConfirmFrames": 3,
             "recoveryMaxCandidatesPerFrame": 48,
             "recoveryWideEveryNFrames": 4,
+            "fitnessMaxAbs": 0.04,
             "recoveryFitnessRatio": 1.4,
             "recoveryFitnessAbs": 0.02,
         }
@@ -234,6 +236,7 @@ def test_localization_manager_start_passes_localization_tuning(tmp_path, monkeyp
     assert "recovery_confirm_frames:=3" in commands[0]
     assert "recovery_max_candidates_per_frame:=48" in commands[0]
     assert "recovery_wide_every_n_frames:=4" in commands[0]
+    assert "fitness_max_abs:=0.04" in commands[0]
     assert "recovery_fitness_ratio:=1.4" in commands[0]
     assert "recovery_fitness_abs:=0.02" in commands[0]
 

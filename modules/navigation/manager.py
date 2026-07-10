@@ -294,13 +294,22 @@ class NavigationManager:
             if self._state.get("running"):
                 return _result(False, "NAV-BUSY", "Navigation is already running.", **self._state_payload())
 
+        now_text = time.strftime("%H:%M:%S")
         pose, error = self._read_current_pose(params, wait_sec=0.2)
         if pose is None:
-            return _result(False, "NAV-LOCALIZATION", error, status="failed", phase=PHASE_FAILED)
-
-        now_text = time.strftime("%H:%M:%S")
-        translation_yaw = pose["yawRad"]
-        initial_phase = PHASE_LATERAL_TRANSLATE if target["mode"] == "lateral" else PHASE_OMNI_TRANSLATE
+            translation_yaw = None
+            initial_phase = PHASE_WAITING_LOCALIZATION
+            current_pose = None
+            wait_started = now_text
+            localization_error = error or "Localization pose is unavailable."
+            detail = f"Waiting for localization pose: {localization_error}"
+        else:
+            translation_yaw = pose["yawRad"]
+            initial_phase = PHASE_LATERAL_TRANSLATE if target["mode"] == "lateral" else PHASE_OMNI_TRANSLATE
+            current_pose = _pose_to_status(pose)
+            wait_started = None
+            localization_error = ""
+            detail = "Navigation started."
         self._stop_event.clear()
         with self._lock:
             self._state = self._base_state()
@@ -312,11 +321,13 @@ class NavigationManager:
                     "target": target,
                     "params": params,
                     "translationYawRad": translation_yaw,
-                    "translationYawDeg": math.degrees(translation_yaw),
-                    "currentPose": _pose_to_status(pose),
+                    "translationYawDeg": None if translation_yaw is None else math.degrees(translation_yaw),
+                    "currentPose": current_pose,
                     "startedAt": now_text,
                     "updatedAt": now_text,
-                    "detail": "Navigation started.",
+                    "localizationWaitStartedAt": wait_started,
+                    "lastLocalizationError": localization_error,
+                    "detail": detail,
                 }
             )
 
@@ -324,7 +335,7 @@ class NavigationManager:
         with self._lock:
             self._thread = thread
         thread.start()
-        return _result(True, "NAV-STARTED", "Navigation started.", **self._state_payload())
+        return _result(True, "NAV-STARTED", detail, **self._state_payload())
 
     def stop(self, detail="Navigation stopped."):
         with self._lock:
@@ -554,6 +565,8 @@ class NavigationManager:
                     self._state.update(
                         {
                             "phase": next_phase,
+                            "translationYawRad": state.get("translationYawRad"),
+                            "translationYawDeg": state.get("translationYawDeg"),
                             "currentPose": _pose_to_status(pose),
                             "errors": errors,
                             "arrival": dict(state.get("arrival") or self._arrival_state()),
@@ -714,7 +727,12 @@ class NavigationManager:
     def _next_command(self, state, target, params, pose):
         dx = target["x"] - pose["x"]
         dy = target["y"] - pose["y"]
-        projected = _project_to_reference_frame(dx, dy, state["translationYawRad"])
+        reference_yaw = pose["yawRad"] if target["mode"] == "omni" else state.get("translationYawRad")
+        if reference_yaw is None:
+            reference_yaw = pose["yawRad"]
+        state["translationYawRad"] = reference_yaw
+        state["translationYawDeg"] = math.degrees(reference_yaw)
+        projected = _project_to_reference_frame(dx, dy, reference_yaw)
         distance = math.hypot(dx, dy)
         yaw_error = _normalize_angle(target["yawRad"] - pose["yawRad"])
         errors = {
