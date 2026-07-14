@@ -42,6 +42,11 @@ const state = {
   },
   cameraFrames: {
     activeKind: "color",
+    selectedCameraByKind: {
+      color: "camera_h",
+      depth: "camera_f",
+      ir: "camera_f",
+    },
     previewEnabled: false,
     previewEnabledByKind: {
       color: false,
@@ -816,22 +821,25 @@ const cameraRuntimeLabels = {
 };
 
 const cameraFeedLayout = [
-  { camera: "camera_f", kind: "color", label: "Front RGB" },
-  { camera: "camera_l", kind: "color", label: "Left RGB" },
-  { camera: "camera_r", kind: "color", label: "Right RGB" },
-  { camera: "camera_f", kind: "depth", label: "Front Depth" },
-  { camera: "camera_l", kind: "depth", label: "Left Depth" },
-  { camera: "camera_r", kind: "depth", label: "Right Depth" },
-  { camera: "camera_f", kind: "ir", label: "Front IR" },
-  { camera: "camera_l", kind: "ir", label: "Left IR" },
-  { camera: "camera_r", kind: "ir", label: "Right IR" },
+  { camera: "camera_h", kind: "color", label: "环境广角", sourceLabel: "广角" },
+  { camera: "camera_f", kind: "color", label: "前视 RGB", sourceLabel: "前视" },
+  { camera: "camera_l", kind: "color", label: "左腕 RGB", sourceLabel: "左腕" },
+  { camera: "camera_r", kind: "color", label: "右腕 RGB", sourceLabel: "右腕" },
+  { camera: "camera_f", kind: "depth", label: "前视深度", sourceLabel: "前视" },
+  { camera: "camera_l", kind: "depth", label: "左腕深度", sourceLabel: "左腕" },
+  { camera: "camera_r", kind: "depth", label: "右腕深度", sourceLabel: "右腕" },
+  { camera: "camera_f", kind: "ir", label: "前视 IR", sourceLabel: "前视" },
+  { camera: "camera_l", kind: "ir", label: "左腕 IR", sourceLabel: "左腕" },
+  { camera: "camera_r", kind: "ir", label: "右腕 IR", sourceLabel: "右腕" },
 ];
 const cameraKindOrder = ["color", "depth", "ir"];
 const cameraKindMeta = {
-  color: { label: "RGB", title: "RGB 相机", hint: "三路 RGB 压缩图" },
+  color: { label: "RGB", title: "RGB 相机", hint: "四路 RGB 压缩图" },
   depth: { label: "深度", title: "深度相机", hint: "三路深度压缩图" },
   ir: { label: "IR", title: "IR 相机", hint: "三路 IR 压缩图" },
 };
+const cameraSelectionStorageKey = "robot-station-camera-selection";
+const cameraMobileMedia = window.matchMedia("(max-width: 760px)");
 const cameraFrameIntervalMs = 180;
 const cameraFrameStaggerMs = 70;
 const lidarViewerCloudKey = "rslidar_points";
@@ -11464,6 +11472,27 @@ function currentCameraKindMeta() {
   return cameraKindMeta[currentCameraKind()];
 }
 
+function loadCameraSelection() {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(cameraSelectionStorageKey) || "{}");
+    cameraKindOrder.forEach((kind) => {
+      if (typeof stored[kind] === "string" && stored[kind]) {
+        state.cameraFrames.selectedCameraByKind[kind] = stored[kind];
+      }
+    });
+  } catch (_error) {
+    // Keep deterministic defaults when storage is unavailable or invalid.
+  }
+}
+
+function saveCameraSelection() {
+  try {
+    window.localStorage.setItem(cameraSelectionStorageKey, JSON.stringify(state.cameraFrames.selectedCameraByKind));
+  } catch (_error) {
+    // Camera selection persistence is optional.
+  }
+}
+
 function cameraPreviewEnabled(kind = currentCameraKind()) {
   const normalized = normalizeCameraKind(kind);
   return Boolean(state.cameraFrames.previewEnabledByKind?.[normalized]);
@@ -11495,22 +11524,49 @@ function mergeCameraFeeds(feeds = []) {
     return {
       ...feed,
       ...remote,
-      label: remote.label || feed.label,
+      label: feed.label || remote.label,
       hasFrame: Boolean(remote.hasFrame),
       stale: remote.stale !== undefined ? Boolean(remote.stale) : true,
     };
   });
 }
 
-function activeCameraFeeds(feeds = state.cameraFrames.feeds) {
-  const kind = currentCameraKind();
+function cameraFeedsForKind(kind, feeds = state.cameraFrames.feeds) {
+  const normalizedKind = normalizeCameraKind(kind);
   const allFeeds = feeds.length ? feeds : mergeCameraFeeds();
-  return allFeeds.filter((feed) => normalizeCameraKind(feed.kind) === kind);
+  return allFeeds.filter((feed) => normalizeCameraKind(feed.kind) === normalizedKind);
+}
+
+function activeCameraFeeds(feeds = state.cameraFrames.feeds) {
+  return cameraFeedsForKind(currentCameraKind(), feeds);
+}
+
+function selectedCameraForKind(kind = currentCameraKind(), feeds = cameraFeedsForKind(kind)) {
+  const normalizedKind = normalizeCameraKind(kind);
+  const configured = state.cameraFrames.selectedCameraByKind[normalizedKind];
+  const selected = feeds.some((feed) => feed.camera === configured) ? configured : feeds[0]?.camera || "";
+  if (selected) state.cameraFrames.selectedCameraByKind[normalizedKind] = selected;
+  return selected;
+}
+
+function orderedCameraFeeds(feeds = activeCameraFeeds()) {
+  const selectedCamera = selectedCameraForKind(currentCameraKind(), feeds);
+  return [...feeds].sort((left, right) => {
+    if (left.camera === selectedCamera) return -1;
+    if (right.camera === selectedCamera) return 1;
+    return 0;
+  });
+}
+
+function displayedCameraFeeds(feeds = activeCameraFeeds()) {
+  const ordered = orderedCameraFeeds(feeds);
+  return cameraMobileMedia.matches ? ordered.slice(0, 1) : ordered;
 }
 
 function isCameraFeedPreviewActive(feed) {
   const kind = normalizeCameraKind(feed.kind);
-  return kind === currentCameraKind() && cameraPreviewEnabled(kind);
+  if (kind !== currentCameraKind() || !cameraPreviewEnabled(kind)) return false;
+  return !cameraMobileMedia.matches || feed.camera === selectedCameraForKind(kind);
 }
 
 function renderCameraKindTabs() {
@@ -11523,6 +11579,29 @@ function renderCameraKindTabs() {
   });
   setText("#cameraKindTitle", meta.title);
   setText("#cameraKindHint", meta.hint);
+}
+
+function renderCameraSourceTabs(feeds = activeCameraFeeds()) {
+  const tabs = $("#cameraSourceTabs");
+  if (!tabs) return;
+  const selectedCamera = selectedCameraForKind(currentCameraKind(), feeds);
+  const expectedCameras = feeds.map((feed) => feed.camera).join(",");
+  const renderedCameras = Array.from(tabs.querySelectorAll("[data-camera-source]"))
+    .map((button) => button.dataset.cameraSource)
+    .join(",");
+  if (renderedCameras !== expectedCameras) {
+    tabs.innerHTML = feeds
+      .map(
+        (feed) =>
+          `<button data-camera-source="${escapeHtml(feed.camera)}" type="button">${escapeHtml(feed.sourceLabel || feed.label)}</button>`,
+      )
+      .join("");
+  }
+  tabs.querySelectorAll("[data-camera-source]").forEach((button) => {
+    const selected = button.dataset.cameraSource === selectedCamera;
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-selected", selected ? "true" : "false");
+  });
 }
 
 function renderCameraPreviewToggle() {
@@ -11566,6 +11645,25 @@ function setCameraKind(kind) {
   clearCameraFrameDisplay();
   renderCameraFrames();
   addLog("相机", `切换到${cameraKindMeta[nextKind].label}相机，回显已关闭`);
+}
+
+function setCameraSource(camera) {
+  const feeds = activeCameraFeeds();
+  const feed = feeds.find((entry) => entry.camera === camera);
+  if (!feed || selectedCameraForKind(currentCameraKind(), feeds) === camera) return;
+  state.cameraFrames.selectedCameraByKind[currentCameraKind()] = camera;
+  saveCameraSelection();
+  if (cameraMobileMedia.matches) clearCameraFrameDisplay();
+  renderCameraFrames();
+  if (cameraPreviewEnabled()) fetchCameraFrames({ silent: true });
+  addLog("相机", `主画面切换到${feed.label}`);
+}
+
+function handleCameraLayoutChange() {
+  const enabled = cameraPreviewEnabled();
+  clearCameraFrameDisplay();
+  renderCameraFrames();
+  if (enabled) fetchCameraFrames({ silent: true });
 }
 
 function setCameraPreviewEnabled(enabled, options = {}) {
@@ -11729,7 +11827,9 @@ function ensureCameraFrameCard(grid, feed) {
   grid.insertAdjacentHTML(
     "beforeend",
     `
-      <article class="preview-card camera-frame-card is-idle" data-feed-key="${escapeHtml(key)}">
+      <article class="preview-card camera-frame-card is-idle" data-feed-key="${escapeHtml(key)}" data-camera="${escapeHtml(
+        feed.camera,
+      )}" role="button" tabindex="0">
         <figure class="camera-frame-visual">
           <img alt="${escapeHtml(feed.label)}" data-camera-frame="${escapeHtml(key)}">
           <span class="camera-frame-placeholder">${isCameraFeedPreviewActive(feed) ? "等待画面" : "回显关闭"}</span>
@@ -11750,10 +11850,16 @@ function ensureCameraFrameCard(grid, feed) {
 
 function updateCameraFrameCard(card, feed) {
   const status = cameraFrameStatus(feed);
+  const selected = feed.camera === selectedCameraForKind(currentCameraKind());
   ["ok", "warn", "danger", "idle"].forEach((level) => {
     card.classList.toggle(`is-${level}`, status.level === level);
   });
+  card.classList.toggle("is-primary", selected);
   card.classList.toggle("has-frame", Boolean(feed.hasFrame));
+  card.dataset.camera = feed.camera;
+  card.setAttribute("aria-label", selected ? `${feed.label}，当前主画面` : `将${feed.label}设为主画面`);
+  card.setAttribute("aria-pressed", selected ? "true" : "false");
+  card.title = selected ? `${feed.label}，当前主画面` : `点击切换到${feed.label}`;
   if (feed.hasFrame) {
     card.classList.remove("is-error");
   }
@@ -11787,8 +11893,10 @@ function updateCameraFrameCard(card, feed) {
 
 function renderCameraFrames() {
   const feeds = activeCameraFeeds();
+  const visibleFeeds = displayedCameraFeeds(feeds);
   const enabled = cameraPreviewEnabled();
   renderCameraKindTabs();
+  renderCameraSourceTabs(feeds);
   renderCameraPreviewToggle();
   const summary = $("#cameraFeedSummary");
   if (summary) {
@@ -11804,9 +11912,12 @@ function renderCameraFrames() {
 
   const grid = $("#cameraFrameGrid");
   if (!grid) return;
-  const expectedKeys = new Set(feeds.map(cameraFeedKey));
-  feeds.forEach((feed) => {
+  grid.style.setProperty("--camera-secondary-count", String(Math.max(1, visibleFeeds.length - 1)));
+  grid.dataset.feedCount = String(visibleFeeds.length);
+  const expectedKeys = new Set(visibleFeeds.map(cameraFeedKey));
+  visibleFeeds.forEach((feed) => {
     const card = ensureCameraFrameCard(grid, feed);
+    grid.appendChild(card);
     updateCameraFrameCard(card, feed);
   });
   grid.querySelectorAll(".camera-frame-card").forEach((card) => {
@@ -13583,6 +13694,26 @@ function bindEvents() {
   $("#cameraRuntimeStatus").addEventListener("click", toggleCameraRuntime);
   $("#lidarRuntimeStatus").addEventListener("click", toggleLidarRuntime);
   $("#cameraPreviewToggleButton").addEventListener("click", toggleCameraPreview);
+  $("#cameraSourceTabs")?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-camera-source]");
+    if (button) setCameraSource(button.dataset.cameraSource);
+  });
+  $("#cameraFrameGrid")?.addEventListener("click", (event) => {
+    const card = event.target.closest(".camera-frame-card[data-camera]");
+    if (card) setCameraSource(card.dataset.camera);
+  });
+  $("#cameraFrameGrid")?.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const card = event.target.closest(".camera-frame-card[data-camera]");
+    if (!card) return;
+    event.preventDefault();
+    setCameraSource(card.dataset.camera);
+  });
+  if (cameraMobileMedia.addEventListener) {
+    cameraMobileMedia.addEventListener("change", handleCameraLayoutChange);
+  } else {
+    cameraMobileMedia.addListener(handleCameraLayoutChange);
+  }
   $("#lidarPreviewToggleButton").addEventListener("click", toggleLidarPreview);
   $("#cameraCalibrationRefreshButton")?.addEventListener("click", () => refreshCameraCalibrationStatus({ force: true }));
   $("#calibrationCameraList")?.addEventListener("click", (event) => {
@@ -13940,6 +14071,7 @@ function bindEvents() {
 function init() {
   const activePanel = $(".view.is-active");
   document.body.dataset.activeView = activePanel ? activePanel.dataset.viewPanel : "self-check";
+  loadCameraSelection();
   const hadLocalDraft = loadStateMachineState();
   loadEventSequenceState();
   refreshStateMachineLibrary({ silent: true });

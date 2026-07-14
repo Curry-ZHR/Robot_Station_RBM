@@ -1,0 +1,23 @@
+/**:
+  ros__parameters:
+    video_device: "/dev/video0"
+    framerate: 30.0
+    io_method: "mmap"
+    frame_id: "camera_h_color_optical_frame"
+    pixel_format: "mjpeg2rgb"
+    av_device_format: "YUV422P"
+    image_width: 1280
+    image_height: 1024
+    camera_name: "camera_h"
+    camera_info_url: ""
+    brightness: -1
+    contrast: -1
+    saturation: -1
+    sharpness: -1
+    gain: -1
+    auto_white_balance: true
+    white_balance: 4600
+    autoexposure: true
+    exposure: 166
+    autofocus: false
+    focus: -1

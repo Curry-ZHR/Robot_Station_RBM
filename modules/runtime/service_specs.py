@@ -489,7 +489,7 @@ def default_service_specs():
         ),
         "camera": ManagedServiceSpec(
             key="camera",
-            name="Orbbec camera ROS",
+            name="Camera ROS",
             command=(
                 str(camera_start_script),
             ),
@@ -499,14 +499,18 @@ def default_service_specs():
             ),
             cleanup_process_patterns=(
                 "start_orbbec_camera.sh",
+                "robot_station_camera_bringup",
                 "ros2 launch orbbec_camera",
                 "orbbec_camera_node",
                 "camera_container",
+                "usb_cam_node_exe",
+                "__node:=wide_angle_camera",
             ),
+            status_process_patterns=("robot_station_camera_bringup",),
             cwd=str(camera_ws),
             shutdown_timeout_sec=8.0,
             startup_grace_sec=0.8,
-            description="Launch the Orbbec multi-camera ROS nodes.",
+            description="Launch the Orbbec cameras and the UVC wide-angle camera.",
         ),
         "lidar": ManagedServiceSpec(
             key="lidar",

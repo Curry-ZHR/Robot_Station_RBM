@@ -29,9 +29,16 @@ class CameraImageSpec:
 
 
 CAMERA_LABELS = {
+    "camera_h": "Wide-angle",
     "camera_f": "Front",
     "camera_l": "Left",
     "camera_r": "Right",
+}
+CAMERA_KINDS = {
+    "camera_h": ("color",),
+    "camera_f": ("color", "depth", "ir"),
+    "camera_l": ("color", "depth", "ir"),
+    "camera_r": ("color", "depth", "ir"),
 }
 KIND_LABELS = {
     "color": "RGB",
@@ -50,10 +57,10 @@ CAMERA_IMAGE_SPECS = {
         camera=camera,
         kind=kind,
         label=f"{CAMERA_LABELS[camera]} {KIND_LABELS[kind]}",
-        topic=f"/{camera}/{topic_tail}",
+        topic=f"/{camera}/{KIND_TOPICS[kind]}",
     )
-    for camera in CAMERA_LABELS
-    for kind, topic_tail in KIND_TOPICS.items()
+    for camera, kinds in CAMERA_KINDS.items()
+    for kind in kinds
 }
 
 

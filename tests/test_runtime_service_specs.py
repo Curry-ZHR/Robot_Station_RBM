@@ -123,6 +123,16 @@ def test_camera_extrinsics_config_can_disable_service(monkeypatch, tmp_path):
     assert "camera_extrinsics" not in default_service_specs()
 
 
+def test_camera_service_launches_station_bringup():
+    spec = default_service_specs()["camera"]
+    start_script = Path(spec.command[0]).read_text(encoding="utf-8")
+
+    assert "robot_station_camera_bringup cameras.launch.py" in start_script
+    assert "usb_cam_node_exe" in spec.cleanup_process_patterns
+    assert "__node:=wide_angle_camera" in spec.cleanup_process_patterns
+    assert spec.status_process_patterns == ("robot_station_camera_bringup",)
+
+
 def test_multiple_camera_extrinsics_share_one_managed_service():
     config = {
         "enabled": True,
