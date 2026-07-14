@@ -1005,6 +1005,22 @@ const stateMachineTaskTypes = {
       { key: "y", label: "y", type: "number", step: "0.01", unit: "m" },
       { key: "yawDeg", label: "yaw", type: "number", step: "1", unit: "deg" },
       {
+        key: "targetNoiseMode",
+        label: "目标点扰动",
+        type: "select",
+        refresh: true,
+        options: [
+          { value: "none", label: "关闭" },
+          { value: "uniform", label: "Uniform 边界扰动" },
+        ],
+      },
+      { key: "xNoiseMinM", label: "地图 x 扰动下界", type: "number", step: "0.01", unit: "m", showWhen: { key: "targetNoiseMode", value: "uniform" } },
+      { key: "xNoiseMaxM", label: "地图 x 扰动上界", type: "number", step: "0.01", unit: "m", showWhen: { key: "targetNoiseMode", value: "uniform" } },
+      { key: "yNoiseMinM", label: "地图 y 扰动下界", type: "number", step: "0.01", unit: "m", showWhen: { key: "targetNoiseMode", value: "uniform" } },
+      { key: "yNoiseMaxM", label: "地图 y 扰动上界", type: "number", step: "0.01", unit: "m", showWhen: { key: "targetNoiseMode", value: "uniform" } },
+      { key: "yawNoiseMinDeg", label: "yaw 扰动下界", type: "number", step: "0.5", unit: "deg", showWhen: { key: "targetNoiseMode", value: "uniform" } },
+      { key: "yawNoiseMaxDeg", label: "yaw 扰动上界", type: "number", step: "0.5", unit: "deg", showWhen: { key: "targetNoiseMode", value: "uniform" } },
+      {
         key: "mode",
         label: "导航模式",
         type: "select",
@@ -1123,6 +1139,13 @@ const stateMachineTaskTypeDefaults = {
     x: 0,
     y: 0,
     yawDeg: 0,
+    targetNoiseMode: "none",
+    xNoiseMinM: 0,
+    xNoiseMaxM: 0,
+    yNoiseMinM: 0,
+    yNoiseMaxM: 0,
+    yawNoiseMinDeg: 0,
+    yawNoiseMaxDeg: 0,
     mode: "lateral",
     maxLinearMps: 0.2,
     maxLateralMps: 0.15,
@@ -2273,6 +2296,37 @@ function validateStateMachinePiperJointParams(rawParams) {
   return { ok: true, params };
 }
 
+function validateStateMachineNavigationParams(rawParams) {
+  const params = { ...(rawParams || {}) };
+  const mode = String(params.targetNoiseMode || "none").trim().toLowerCase();
+  if (!["none", "uniform"].includes(mode)) {
+    return { ok: false, field: "targetNoiseMode", detail: "目标点扰动模式必须是关闭或 Uniform" };
+  }
+  params.targetNoiseMode = mode;
+  if (mode === "none") return { ok: true, params };
+
+  for (const [minimumKey, maximumKey, label] of [
+    ["xNoiseMinM", "xNoiseMaxM", "地图 x 扰动"],
+    ["yNoiseMinM", "yNoiseMaxM", "地图 y 扰动"],
+    ["yawNoiseMinDeg", "yawNoiseMaxDeg", "yaw 扰动"],
+  ]) {
+    const minimum = Number(params[minimumKey]);
+    const maximum = Number(params[maximumKey]);
+    if (!Number.isFinite(minimum)) {
+      return { ok: false, field: minimumKey, detail: `${label}下界必须是数字` };
+    }
+    if (!Number.isFinite(maximum)) {
+      return { ok: false, field: maximumKey, detail: `${label}上界必须是数字` };
+    }
+    if (minimum > maximum) {
+      return { ok: false, field: minimumKey, detail: `${label}下界不能大于上界` };
+    }
+    params[minimumKey] = minimum;
+    params[maximumKey] = maximum;
+  }
+  return { ok: true, params };
+}
+
 function stateMachineParamSummary(node) {
   if (!node) return "--";
   if (node.type === "start") return "固定起始项";
@@ -2284,7 +2338,10 @@ function stateMachineParamSummary(node) {
     const y = Number(params.y);
     const yaw = Number(params.yawDeg);
     const pose = [x, y, yaw].every(Number.isFinite) ? `${x.toFixed(2)}, ${y.toFixed(2)}, ${yaw.toFixed(1)} deg` : "pose 未完整";
-    return `${target} / ${pose}`;
+    const noise = params.targetNoiseMode === "uniform"
+      ? ` / uniform Δx[${params.xNoiseMinM}, ${params.xNoiseMaxM}]m Δy[${params.yNoiseMinM}, ${params.yNoiseMaxM}]m Δyaw[${params.yawNoiseMinDeg}, ${params.yawNoiseMaxDeg}]deg`
+      : "";
+    return `${target} / ${pose}${noise}`;
   }
   if (node.taskType === "grasp") {
     const method = params.graspMethod === "auto" ? "自动(位姿)" : "推理";
@@ -2377,8 +2434,12 @@ function stateMachineTaskStatusRows(taskStatus) {
   if (taskStatus?.taskType === "navigation") {
     const errors = data.errors || {};
     const params = data.params || {};
+    const sampledNoise = data.sampledNoise || {};
     rows.push(
       ["阶段", navigationPhaseText(data.phase)],
+      ["名义目标", stateMachineTaskPoseText(data.nominalTarget || data.target)],
+      ["采样扰动", data.targetNoiseMode === "uniform" ? `x ${formatLocalizationNumber(sampledNoise.x, 3, " m")} / y ${formatLocalizationNumber(sampledNoise.y, 3, " m")} / yaw ${formatLocalizationNumber(sampledNoise.yawDeg, 2, " deg")}` : "关闭"],
+      ["实际目标", stateMachineTaskPoseText(data.resolvedTarget || data.target)],
       ["当前位姿", stateMachineTaskPoseText(data.currentPose)],
       ["距离误差", formatLocalizationNumber(errors.distance, 3, " m")],
       ["车体系误差", `${formatLocalizationNumber(errors.bodyX, 3)} / ${formatLocalizationNumber(errors.bodyY, 3)} m`],
@@ -2779,6 +2840,17 @@ async function submitStateMachineModal() {
       return;
     }
     params = { stableSec };
+  }
+  if (config.taskType === "navigation") {
+    const validated = validateStateMachineNavigationParams({ ...config.params, ...values.params });
+    if (!validated.ok) {
+      addLog("状态机", validated.detail);
+      if (validated.field) {
+        $("#stateMachineModalForm [data-sm-modal-field='" + validated.field + "']")?.focus();
+      }
+      return;
+    }
+    params = validated.params;
   }
   if (config.taskType === "topic_publish") {
     const topicName = String(values.params.topicName || "").trim();

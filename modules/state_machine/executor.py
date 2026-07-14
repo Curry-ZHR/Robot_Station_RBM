@@ -36,9 +36,13 @@ Execution semantics (agreed, to implement):
   currentId, reason in error). Manual chassis override interrupting
   navigation also fails the run. No retry, no failure branches in v1.
 - Task dispatch (all in-process, reusing existing managers):
-    navigation       -> modules.navigation get_navigation_manager().start(params)
+    navigation       -> resolve optional uniform x/y/yaw target noise once,
+                        then modules.navigation get_navigation_manager().start(params)
                         then poll status() until completed/failed.
-                        params: {targetName, x, y, yawDeg, mode}
+                        params: {targetName, x, y, yawDeg, mode,
+                                 targetNoiseMode, xNoiseMinM, xNoiseMaxM,
+                                 yNoiseMinM, yNoiseMaxM,
+                                 yawNoiseMinDeg, yawNoiseMaxDeg}
     reset_odom       -> modules.control.chassis.reset_chassis_odometry({})
                         once, no params.
     wait             -> waits until arm/gripper feedback has moved once and
@@ -69,6 +73,8 @@ _EXECUTOR = None
 _EXECUTOR_LOCK = threading.Lock()
 _TERMINAL_RUN_STATUSES = {"completed", "failed", "stopped"}
 _TERMINAL_NAVIGATION_STATUSES = {"completed", "failed", "stopped"}
+NAVIGATION_TARGET_NOISE_NONE = "none"
+NAVIGATION_TARGET_NOISE_UNIFORM = "uniform"
 LOOP_RESTART_PAUSE_SEC = 0.05
 WAIT_LEFT_JOINT_STATE_KEYS = joint_state_key_candidates(
     "left",
@@ -204,6 +210,62 @@ def _bool_param(value, default=False):
     return bool(default)
 
 
+def _normalize_degrees(angle_deg):
+    normalized = (angle_deg + 180.0) % 360.0 - 180.0
+    return 0.0 if abs(normalized) < 1e-12 else normalized
+
+
+def _navigation_noise_bounds(params):
+    fields = (
+        ("x", "xNoiseMinM", "xNoiseMaxM"),
+        ("y", "yNoiseMinM", "yNoiseMaxM"),
+        ("yawDeg", "yawNoiseMinDeg", "yawNoiseMaxDeg"),
+    )
+    bounds = {}
+    for axis, minimum_key, maximum_key in fields:
+        minimum = 0.0 if _blank(params.get(minimum_key)) else _finite_float(params.get(minimum_key), minimum_key)
+        maximum = 0.0 if _blank(params.get(maximum_key)) else _finite_float(params.get(maximum_key), maximum_key)
+        if minimum > maximum:
+            raise ValueError(f"{minimum_key} must be <= {maximum_key}.")
+        bounds[axis] = {"min": minimum, "max": maximum}
+    return bounds
+
+
+def _resolve_navigation_target(params, rng):
+    command = copy.deepcopy(params)
+    if not isinstance(command, dict):
+        return command, None
+    mode = str(command.get("targetNoiseMode") or NAVIGATION_TARGET_NOISE_NONE).strip().lower()
+    if mode == NAVIGATION_TARGET_NOISE_NONE:
+        return command, None
+    if mode != NAVIGATION_TARGET_NOISE_UNIFORM:
+        raise ValueError("targetNoiseMode must be 'none' or 'uniform'.")
+
+    nominal = {
+        "x": _finite_float(command.get("x"), "x"),
+        "y": _finite_float(command.get("y"), "y"),
+        "yawDeg": _finite_float(command.get("yawDeg"), "yawDeg"),
+    }
+    bounds = _navigation_noise_bounds(command)
+    sampled = {
+        axis: rng.uniform(axis_bounds["min"], axis_bounds["max"])
+        for axis, axis_bounds in bounds.items()
+    }
+    resolved = {
+        "x": nominal["x"] + sampled["x"],
+        "y": nominal["y"] + sampled["y"],
+        "yawDeg": _normalize_degrees(nominal["yawDeg"] + sampled["yawDeg"]),
+    }
+    command.update(resolved)
+    return command, {
+        "targetNoiseMode": NAVIGATION_TARGET_NOISE_UNIFORM,
+        "nominalTarget": nominal,
+        "sampledNoise": sampled,
+        "resolvedTarget": resolved,
+        "noiseBounds": bounds,
+    }
+
+
 class StateMachineExecutor:
     """Walks a state machine graph and dispatches each task to robot modules.
 
@@ -211,12 +273,15 @@ class StateMachineExecutor:
     runtime until their final semantics are defined.
     """
 
-    def __init__(self, poll_interval_sec=0.2):
+    def __init__(self, poll_interval_sec=0.2, navigation_noise_rng=None):
         self._lock = threading.Lock()
         self._run = _idle_run()
         self._worker = None
         self._stop_event = threading.Event()
         self._poll_interval_sec = poll_interval_sec
+        # Keep target sampling independent from the RNG used for random graph
+        # branches so adding noise cannot change which outgoing edge is chosen.
+        self._navigation_noise_rng = navigation_noise_rng or random.Random()
 
     # ----- public API -----
 
@@ -382,15 +447,35 @@ class StateMachineExecutor:
         """Drive the chassis to params x/y/yawDeg via NavigationManager."""
         manager = get_navigation_manager()
         params = node.get("params") or {}
-        start_result = manager.start(params)
-        self._set_task_status(node, start_result.get("status") or "starting", start_result.get("detail", ""), start_result)
+        try:
+            command, target_resolution = _resolve_navigation_target(params, self._navigation_noise_rng)
+        except ValueError as exc:
+            detail = f"Invalid navigation target noise: {exc}"
+            self._set_task_status(
+                node,
+                "failed",
+                detail,
+                {"phase": "target_noise_validation", "targetNoiseMode": params.get("targetNoiseMode", NAVIGATION_TARGET_NOISE_NONE)},
+            )
+            return "failed", detail
+
+        def with_target_resolution(result):
+            data = copy.deepcopy(result)
+            if target_resolution is not None:
+                data.update(copy.deepcopy(target_resolution))
+            return data
+
+        start_result = manager.start(command)
+        start_data = with_target_resolution(start_result)
+        self._set_task_status(node, start_result.get("status") or "starting", start_result.get("detail", ""), start_data)
         if not start_result.get("ok"):
             return "failed", start_result.get("detail") or start_result.get("code") or "Navigation failed to start."
 
         while not self._stop_event.is_set():
             status_result = manager.status()
             nav_status = str(status_result.get("status") or "")
-            self._set_task_status(node, nav_status or "running", status_result.get("detail", ""), status_result)
+            status_data = with_target_resolution(status_result)
+            self._set_task_status(node, nav_status or "running", status_result.get("detail", ""), status_data)
             if nav_status in _TERMINAL_NAVIGATION_STATUSES:
                 if nav_status == "completed":
                     return "completed", status_result.get("detail", "Navigation completed.")
@@ -406,7 +491,12 @@ class StateMachineExecutor:
 
         manager.stop(detail="State machine stopped navigation.")
         status_result = manager.status()
-        self._set_task_status(node, "stopped", status_result.get("detail", "State machine stopped navigation."), status_result)
+        self._set_task_status(
+            node,
+            "stopped",
+            status_result.get("detail", "State machine stopped navigation."),
+            with_target_resolution(status_result),
+        )
         return "stopped", "State machine run stopped."
 
     def _execute_reset_odom(self, node):

@@ -74,6 +74,18 @@ class FakeNavigationManager:
         return dict(self._last_status)
 
 
+class FixedUniformRng:
+    def __init__(self, values):
+        self.values = iter(values)
+        self.bounds = []
+
+    def uniform(self, minimum, maximum):
+        self.bounds.append((minimum, maximum))
+        value = next(self.values)
+        assert minimum <= value <= maximum
+        return value
+
+
 def _arm_positions(joint1=0.0, gripper=0.0):
     return [joint1, 0.0, 0.0, 0.0, 0.0, 0.0, gripper]
 
@@ -320,6 +332,98 @@ def test_navigation_state_runs_to_completed(monkeypatch):
     assert run["taskStatus"]["taskType"] == "navigation"
     assert run["taskStatus"]["status"] == "completed"
     assert run["taskStatus"]["data"]["phase"] == "completed"
+
+
+def test_navigation_state_applies_uniform_target_noise_once(monkeypatch):
+    nav_status = {
+        "ok": True,
+        "code": "NAV-STATUS",
+        "status": "completed",
+        "phase": "completed",
+        "detail": "Navigation completed.",
+        "target": {"x": 1.1, "y": 1.8, "yawDeg": -176.0},
+    }
+    fake_navigation = FakeNavigationManager([nav_status])
+    monkeypatch.setattr(executor_module, "get_navigation_manager", lambda: fake_navigation)
+    rng = FixedUniformRng([0.1, -0.2, 5.0])
+    manager = StateMachineExecutor(poll_interval_sec=0.01, navigation_noise_rng=rng)
+    params = {
+        "targetName": "工作台",
+        "x": 1.0,
+        "y": 2.0,
+        "yawDeg": 179.0,
+        "mode": "omni",
+        "targetNoiseMode": "uniform",
+        "xNoiseMinM": -0.1,
+        "xNoiseMaxM": 0.1,
+        "yNoiseMinM": -0.2,
+        "yNoiseMaxM": 0.2,
+        "yawNoiseMinDeg": -5.0,
+        "yawNoiseMaxDeg": 5.0,
+    }
+
+    manager.start(
+        {
+            "name": "随机目标流程",
+            "nodes": [
+                _start(["nav"]),
+                _node("nav", "navigation", params=params, outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert run["status"] == "completed"
+    assert rng.bounds == [(-0.1, 0.1), (-0.2, 0.2), (-5.0, 5.0)]
+    assert len(fake_navigation.started) == 1
+    assert fake_navigation.started[0]["x"] == 1.1
+    assert fake_navigation.started[0]["y"] == 1.8
+    assert fake_navigation.started[0]["yawDeg"] == -176.0
+    assert params["x"] == 1.0
+    assert params["y"] == 2.0
+    assert params["yawDeg"] == 179.0
+    data = run["taskStatus"]["data"]
+    assert data["targetNoiseMode"] == "uniform"
+    assert data["nominalTarget"] == {"x": 1.0, "y": 2.0, "yawDeg": 179.0}
+    assert data["sampledNoise"] == {"x": 0.1, "y": -0.2, "yawDeg": 5.0}
+    assert data["resolvedTarget"] == {"x": 1.1, "y": 1.8, "yawDeg": -176.0}
+
+
+def test_navigation_state_rejects_inverted_uniform_noise_bounds(monkeypatch):
+    fake_navigation = FakeNavigationManager([])
+    monkeypatch.setattr(executor_module, "get_navigation_manager", lambda: fake_navigation)
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    manager.start(
+        {
+            "name": "无效随机目标流程",
+            "nodes": [
+                _start(["nav"]),
+                _node(
+                    "nav",
+                    "navigation",
+                    params={
+                        "x": 1.0,
+                        "y": 2.0,
+                        "yawDeg": 0.0,
+                        "mode": "omni",
+                        "targetNoiseMode": "uniform",
+                        "xNoiseMinM": 0.2,
+                        "xNoiseMaxM": -0.2,
+                    },
+                    outgoing=["sm_end"],
+                ),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert run["status"] == "failed"
+    assert "xNoiseMinM must be <= xNoiseMaxM" in run["error"]
+    assert run["taskStatus"]["data"]["phase"] == "target_noise_validation"
+    assert fake_navigation.started == []
 
 
 def test_navigation_state_waits_while_navigation_waits_for_localization(monkeypatch):
