@@ -4,6 +4,7 @@ import time
 
 from modules.state_machine import executor as executor_module
 from modules.state_machine.executor import StateMachineExecutor
+from modules.state_machine.manager import TASK_TYPES
 
 
 def _node(node_id, task_type, params=None, outgoing=None):
@@ -280,6 +281,216 @@ class BlockingInferenceManager(FakeInferenceManager):
         result = super().stop(reason=reason)
         self.stopped_event.set()
         return result
+
+
+def _lifting_sample(sequence, height_mm, target_mm, *, initialized=True, running=False, reached=False, **overrides):
+    data = {
+        "back_height": height_mm,
+        "target_height": target_mm,
+        "back_speed": 0,
+        "init_state": initialized,
+        "run_state": running,
+        "reach_target_pos": reached,
+        "up_limit": False,
+        "down_limit": False,
+        "overflow_i": False,
+        "overflow_v": False,
+        "encode_err": False,
+        "pos_bias_over": False,
+        "under_vol": False,
+        "over_load": False,
+    }
+    data.update(overrides)
+    return {
+        "ok": True,
+        "code": "ROS-R-OK",
+        "detail": "fresh lifting feedback",
+        "topic": "/LiftMotorStatePub",
+        "sequence": sequence,
+        "ageMs": 1,
+        "stale": False,
+        "data": data,
+    }
+
+
+class SequencedLiftingReader:
+    def __init__(self, baseline, updates=None):
+        self.baseline = dict(baseline)
+        self.updates = [dict(item) for item in (updates or [])]
+        self.read_calls = []
+        self.read_after_calls = []
+
+    def read(self, key, timeout_sec=0.0):
+        self.read_calls.append((key, timeout_sec))
+        return dict(self.baseline)
+
+    def read_after(self, key, after_sequence=None, timeout_sec=0.0):
+        self.read_after_calls.append((key, after_sequence, timeout_sec))
+        if self.updates:
+            return dict(self.updates.pop(0))
+        return {
+            "ok": False,
+            "code": "ROS-R-NODATA",
+            "detail": "No new lifting feedback.",
+            "afterSequence": after_sequence,
+        }
+
+
+def test_lifting_task_type_is_available_to_state_library():
+    assert "lifting" in TASK_TYPES
+
+
+def test_lifting_state_waits_for_fresh_feedback_before_completing(monkeypatch):
+    reader = SequencedLiftingReader(
+        _lifting_sample(1, 100, 100, initialized=True, reached=True),
+        [_lifting_sample(2, 420, 420, initialized=True, reached=True)],
+    )
+    commands = []
+    monkeypatch.setattr(executor_module, "get_ros_reader", lambda: reader)
+    monkeypatch.setattr(
+        executor_module,
+        "command_lifting_to_height",
+        lambda payload: commands.append(dict(payload)) or {"ok": True, "code": "LIFT-C-OK", "detail": "accepted"},
+    )
+    monkeypatch.setattr(executor_module, "stop_lifting", lambda payload=None: {"ok": True, "code": "LIFT-C-OK"})
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    result = manager.start(
+        {
+            "name": "升降柱到位",
+            "nodes": [
+                _start(["lift"]),
+                _node(
+                    "lift",
+                    "lifting",
+                    params={"heightM": 0.42, "toleranceM": 0.005, "stableSec": 0, "timeoutSec": 1},
+                    outgoing=["sm_end"],
+                ),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert result["ok"] is True
+    assert commands == [{"heightM": 0.42}]
+    assert reader.read_after_calls[0][1] == 1
+    assert run["status"] == "completed"
+    assert run["taskStatus"]["taskType"] == "lifting"
+    assert run["taskStatus"]["status"] == "completed"
+    assert run["taskStatus"]["data"]["phase"] == "completed"
+    assert run["taskStatus"]["data"]["actualHeightM"] == 0.42
+    assert run["taskStatus"]["data"]["targetMatches"] is True
+    assert run["taskStatus"]["data"]["commandCode"] == "LIFT-C-OK"
+
+
+def test_lifting_state_rejects_uninitialized_feedback_before_command(monkeypatch):
+    reader = SequencedLiftingReader(_lifting_sample(1, 100, 100, initialized=False))
+    commands = []
+    monkeypatch.setattr(executor_module, "get_ros_reader", lambda: reader)
+    monkeypatch.setattr(
+        executor_module,
+        "command_lifting_to_height",
+        lambda payload: commands.append(dict(payload)) or {"ok": True, "code": "LIFT-C-OK"},
+    )
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    manager.start(
+        {
+            "name": "未初始化升降柱",
+            "nodes": [
+                _start(["lift"]),
+                _node("lift", "lifting", params={"heightM": 0.42}, outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert commands == []
+    assert run["status"] == "failed"
+    assert "not initialized" in run["error"]
+    assert run["taskStatus"]["data"]["phase"] == "failed"
+
+
+def test_lifting_state_stops_when_confirmed_target_is_overridden(monkeypatch):
+    reader = SequencedLiftingReader(
+        _lifting_sample(1, 100, 100, initialized=True),
+        [
+            _lifting_sample(2, 250, 420, initialized=True, running=True),
+            _lifting_sample(3, 260, 500, initialized=True, running=True),
+        ],
+    )
+    stops = []
+    monkeypatch.setattr(executor_module, "get_ros_reader", lambda: reader)
+    monkeypatch.setattr(
+        executor_module,
+        "command_lifting_to_height",
+        lambda payload: {"ok": True, "code": "LIFT-C-OK", "detail": "accepted"},
+    )
+    monkeypatch.setattr(
+        executor_module,
+        "stop_lifting",
+        lambda payload=None: stops.append(dict(payload or {})) or {"ok": True, "code": "LIFT-C-OK"},
+    )
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+
+    manager.start(
+        {
+            "name": "升降柱目标覆盖",
+            "nodes": [
+                _start(["lift"]),
+                _node("lift", "lifting", params={"heightM": 0.42, "stableSec": 0}, outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    run = _wait_terminal(manager)
+
+    assert run["status"] == "failed"
+    assert "overridden" in run["error"]
+    assert stops == [{}]
+    assert run["taskStatus"]["data"]["stopOk"] is True
+
+
+def test_state_machine_stop_stops_current_lifting_state(monkeypatch):
+    reader = SequencedLiftingReader(_lifting_sample(1, 100, 100, initialized=True))
+    command_started = threading.Event()
+    stops = []
+    monkeypatch.setattr(executor_module, "get_ros_reader", lambda: reader)
+
+    def fake_command(payload):
+        command_started.set()
+        return {"ok": True, "code": "LIFT-C-OK", "detail": "accepted"}
+
+    monkeypatch.setattr(executor_module, "command_lifting_to_height", fake_command)
+    monkeypatch.setattr(
+        executor_module,
+        "stop_lifting",
+        lambda payload=None: stops.append(dict(payload or {})) or {"ok": True, "code": "LIFT-C-OK"},
+    )
+    manager = StateMachineExecutor(poll_interval_sec=0.01)
+    manager.start(
+        {
+            "name": "停止升降柱",
+            "nodes": [
+                _start(["lift"]),
+                _node("lift", "lifting", params={"heightM": 0.42, "timeoutSec": 10}, outgoing=["sm_end"]),
+                _end(),
+            ],
+        }
+    )
+    assert command_started.wait(timeout=1.0)
+
+    stop_result = manager.stop()
+    run = stop_result["run"]
+
+    assert stops == [{}]
+    assert run["status"] == "stopped"
+    assert run["active"] is False
+    assert run["taskStatus"]["taskType"] == "lifting"
+    assert run["taskStatus"]["data"]["phase"] == "stopped"
+    assert run["taskStatus"]["data"]["stopOk"] is True
 
 
 def test_navigation_state_runs_to_completed(monkeypatch):

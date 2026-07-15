@@ -13,7 +13,7 @@ import time
 from typing import Any
 
 from modules.control.chassis import publish_chassis_velocity, stop_chassis
-from modules.control.lifting import move_lifting_to_height, stop_lifting
+from modules.control.lifting import command_lifting_to_height, stop_lifting
 from modules.control.piper import publish_joint_targets
 from modules.inference.validation import ActionChunkValidationError, validate_action_chunk
 from modules.playback import load_playback_dataset
@@ -98,7 +98,7 @@ class PlaybackManager:
         joint_publisher=publish_joint_targets,
         chassis_publisher=publish_chassis_velocity,
         chassis_stopper=stop_chassis,
-        lift_mover=move_lifting_to_height,
+        lift_mover=command_lifting_to_height,
         lift_stopper=stop_lifting,
         clock=time.perf_counter,
     ):

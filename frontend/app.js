@@ -480,6 +480,7 @@ const state = {
     ageMs: null,
     stale: true,
     receivedAt: null,
+    limitsLoaded: false,
     limits: {
       minHeightM: 0.05,
       maxHeightM: 0.88,
@@ -1072,6 +1073,16 @@ const stateMachineTaskTypes = {
     summary: "发布关节目标并等待到位",
     fields: stateMachinePiperJointFields(),
   },
+  lifting: {
+    label: "升降柱",
+    summary: "移动到目标高度并等待反馈到位",
+    fields: [
+      { key: "heightM", label: "目标高度", type: "number", step: "0.001", min: "0", unit: "m" },
+      { key: "toleranceM", label: "到位容差", type: "number", step: "0.001", min: "0.0001", max: "0.1", unit: "m", advanced: true },
+      { key: "stableSec", label: "到位保持时间", type: "number", step: "0.1", min: "0", max: "10", unit: "s", advanced: true },
+      { key: "timeoutSec", label: "到位超时", type: "number", step: "1", min: "0.1", max: "600", unit: "s", advanced: true },
+    ],
+  },
   grasp: {
     label: "抓取",
     summary: "推理抓取或末端位姿抓取",
@@ -1168,6 +1179,7 @@ const stateMachineTaskTypeDefaults = {
     maxAngularRadS: 0.5,
   },
   piper_joint: stateMachinePiperJointDefaults(),
+  lifting: { heightM: 0.42, toleranceM: 0.005, stableSec: 0.2, timeoutSec: 30 },
   reset_odom: {},
   wait: { stableSec: 2 },
   topic_publish: { topicName: "" },
@@ -2296,6 +2308,50 @@ function validateStateMachinePiperJointParams(rawParams) {
   return { ok: true, params };
 }
 
+function validateStateMachineLiftingParams(rawParams) {
+  const merged = rawParams || {};
+  const readNumber = (key, label, minimum, maximum) => {
+    const raw = merged[key];
+    if (raw === null || raw === undefined || raw === "") {
+      return { ok: false, field: key, detail: `${label}必须填写` };
+    }
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return { ok: false, field: key, detail: `${label}必须是数字` };
+    if (Number.isFinite(minimum) && value < minimum) {
+      return { ok: false, field: key, detail: `${label}不能小于 ${minimum}` };
+    }
+    if (Number.isFinite(maximum) && value > maximum) {
+      return { ok: false, field: key, detail: `${label}不能大于 ${maximum}` };
+    }
+    return { ok: true, value };
+  };
+
+  const limits = state.liftingState.limits || {};
+  const minimumHeight = state.liftingState.limitsLoaded && Number.isFinite(Number(limits.minHeightM))
+    ? Number(limits.minHeightM)
+    : 0;
+  const maximumHeight = state.liftingState.limitsLoaded && Number.isFinite(Number(limits.maxHeightM))
+    ? Number(limits.maxHeightM)
+    : Number.POSITIVE_INFINITY;
+  const height = readNumber("heightM", "目标高度", minimumHeight, maximumHeight);
+  if (!height.ok) return height;
+  const tolerance = readNumber("toleranceM", "到位容差", 0.0001, 0.1);
+  if (!tolerance.ok) return tolerance;
+  const stable = readNumber("stableSec", "到位保持时间", 0, 10);
+  if (!stable.ok) return stable;
+  const timeout = readNumber("timeoutSec", "到位超时", 0.1, 600);
+  if (!timeout.ok) return timeout;
+  return {
+    ok: true,
+    params: {
+      heightM: height.value,
+      toleranceM: tolerance.value,
+      stableSec: stable.value,
+      timeoutSec: timeout.value,
+    },
+  };
+}
+
 function validateStateMachineNavigationParams(rawParams) {
   const params = { ...(rawParams || {}) };
   const mode = String(params.targetNoiseMode || "none").trim().toLowerCase();
@@ -2364,6 +2420,9 @@ function stateMachineParamSummary(node) {
     const speed = Number(params.maxJointSpeedDegS) || 5;
     const tolerance = Number(params.toleranceDeg) || 2;
     return `${side} / ${formatNumber(speed, 1)} deg/s / 容差 ${formatNumber(tolerance, 1)} deg`;
+  }
+  if (node.taskType === "lifting") {
+    return `目标 ${formatNumber(params.heightM, 3)} m / 容差 ${formatNumber(params.toleranceM, 3)} m`;
   }
   if (node.taskType === "reset_odom") return "调用 /reset_odom，将 /odom 重置为 0";
   if (node.taskType === "wait") return `运动后静止 ${params.stableSec ?? "--"}s`;
@@ -2498,6 +2557,22 @@ function stateMachineTaskStatusRows(taskStatus) {
       ["发布 Topic", Array.isArray(data.topics) && data.topics.length ? data.topics.join(" / ") : "--"],
       ["反馈异常", data.lastFeedbackError || "--"],
       ["结果", data.publishCode || data.holdCode || "--"],
+    );
+  }
+  if (taskStatus?.taskType === "lifting") {
+    rows.push(
+      ["阶段", data.phase || "--"],
+      ["目标高度", formatLocalizationNumber(data.targetHeightM, 3, " m")],
+      ["实际高度", formatLocalizationNumber(data.actualHeightM, 3, " m")],
+      ["驱动目标", formatLocalizationNumber(data.reportedTargetHeightM, 3, " m")],
+      ["高度误差", formatLocalizationNumber(data.heightErrorM, 4, " m")],
+      ["到位反馈", data.reachTarget === true ? "已到位" : data.reachTarget === false ? "运动中" : "--"],
+      ["稳定计时", `${formatLocalizationNumber(data.stableElapsedSec, 1)} / ${formatLocalizationNumber(data.stableSec, 1)} s`],
+      ["执行耗时", `${formatLocalizationNumber(data.elapsedSec, 1)} / ${formatLocalizationNumber(data.timeoutSec, 1)} s`],
+      ["反馈", `${data.feedbackCode || "--"} / ${data.feedbackAgeMs ?? "--"} ms`],
+      ["故障", Array.isArray(data.faults) && data.faults.length ? data.faults.join(" / ") : "无"],
+      ["命令结果", data.commandCode || "--"],
+      ["停止结果", data.stopCode || "--"],
     );
   }
   if (taskStatus?.taskType === "topic_wait") {
@@ -2899,6 +2974,17 @@ async function submitStateMachineModal() {
   }
   if (config.taskType === "piper_joint") {
     const validated = validateStateMachinePiperJointParams({ ...config.params, ...values.params });
+    if (!validated.ok) {
+      addLog("状态机", validated.detail);
+      if (validated.field) {
+        $("#stateMachineModalForm [data-sm-modal-field='" + validated.field + "']")?.focus();
+      }
+      return;
+    }
+    params = validated.params;
+  }
+  if (config.taskType === "lifting") {
+    const validated = validateStateMachineLiftingParams({ ...config.params, ...values.params });
     if (!validated.ok) {
       addLog("状态机", validated.detail);
       if (validated.field) {
@@ -10658,6 +10744,7 @@ async function fetchLiftingLimits() {
     const payload = await response.json();
     if (response.ok && payload && payload.limits) {
       state.liftingState.limits = payload.limits;
+      state.liftingState.limitsLoaded = true;
       renderLiftPreview();
     }
     return payload;

@@ -16,11 +16,10 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from modules.control.chassis import chassis_limits, publish_chassis_velocity, reset_chassis_odometry, stop_chassis
 from modules.control.lifting import (
     clear_lifting_error,
+    command_lifting_to_height,
     initialize_lifting,
     jog_lifting,
     lifting_limits,
-    lifting_target_height_m,
-    move_lifting_to_height,
     stop_lifting,
     zero_lifting_position,
 )
@@ -35,7 +34,7 @@ from modules.calibration import (
     list_calibration_samples,
     solve_camera_extrinsics,
 )
-from modules.data_collection import get_action_mirror, shutdown_action_mirror, start_action_mirror
+from modules.data_collection import shutdown_action_mirror, start_action_mirror
 from modules.drivers.can.can_activate import activate_can
 from modules.inference import get_inference_manager
 from modules.logger import get_logger, setup_logger
@@ -1201,7 +1200,7 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
         payload = self.read_json_body()
         handlers = {
             "init": initialize_lifting,
-            "height": move_lifting_to_height,
+            "height": command_lifting_to_height,
             "jog": jog_lifting,
             "stop": stop_lifting,
             "clear-error": clear_lifting_error,
@@ -1218,23 +1217,6 @@ class RobotStationHandler(SimpleHTTPRequestHandler):
                 status=400,
             )
             return
-        if lifting_action == "height":
-            try:
-                lift_target_height_m = lifting_target_height_m(payload)
-            except Exception as exc:
-                result = {
-                    "ok": False,
-                    "code": "LIFT-C-PAYLOAD",
-                    "detail": str(exc),
-                    "limits": lifting_limits().get("limits", {}),
-                }
-                log_action_result("Lifting height", result)
-                self.write_json(result, status=400)
-                return
-            try:
-                get_action_mirror().set_lifting_action(lift_target_height_m)
-            except Exception as exc:
-                LOGGER.warning("Action mirror lifting update failed: %s", exc)
         result = handler(payload)
         log_action_result(f"Lifting {lifting_action}", result)
         self.write_json(result, status=ros_result_status(result))

@@ -45,6 +45,9 @@ Execution semantics (agreed, to implement):
                                  yawNoiseMinDeg, yawNoiseMaxDeg}
     reset_odom       -> modules.control.chassis.reset_chassis_odometry({})
                         once, no params.
+    lifting          -> mirror + send an absolute height command, then wait for
+                        fresh /LiftMotorStatePub feedback to reach the target.
+                        params: {heightM, toleranceM, stableSec, timeoutSec}
     wait             -> waits until arm/gripper feedback has moved once and
                         then stayed stable for params: {stableSec}
     grasp(inference) -> modules.inference manager (remote WS inference).
@@ -63,6 +66,7 @@ import threading
 import time
 
 from modules.control.chassis import reset_chassis_odometry
+from modules.control.lifting import command_lifting_to_height, lifting_target_height_m, stop_lifting
 from modules.control.piper import publish_joint_targets
 from modules.control.piper.feedback import joint_state_key_candidates, read_joint_state_candidate
 from modules.inference import get_inference_manager
@@ -128,6 +132,23 @@ INFERENCE_DEFAULT_CHASSIS_LIMITS = {
 INFERENCE_PIPER_ENABLE_ACTION_KEY = "piper_enable_all"
 INFERENCE_PIPER_ENABLE_REPEAT = 3
 INFERENCE_PIPER_ENABLE_INTERVAL_SEC = 0.08
+LIFTING_STATE_KEY = "lifting_motor_state"
+LIFTING_DEFAULT_TOLERANCE_M = 0.005
+LIFTING_MIN_TOLERANCE_M = 0.0001
+LIFTING_MAX_TOLERANCE_M = 0.1
+LIFTING_DEFAULT_STABLE_SEC = 0.2
+LIFTING_MAX_STABLE_SEC = 10.0
+LIFTING_DEFAULT_TIMEOUT_SEC = 30.0
+LIFTING_MIN_TIMEOUT_SEC = 0.1
+LIFTING_MAX_TIMEOUT_SEC = 600.0
+LIFTING_FAULT_FIELDS = {
+    "overflow_i": "over-current",
+    "overflow_v": "over-voltage",
+    "encode_err": "encoder error",
+    "pos_bias_over": "position deviation",
+    "under_vol": "under-voltage",
+    "over_load": "overload",
+}
 
 
 def _result(ok, code, detail, **extra):
@@ -269,8 +290,8 @@ def _resolve_navigation_target(params, rng):
 class StateMachineExecutor:
     """Walks a state machine graph and dispatches each task to robot modules.
 
-    Navigation is implemented first; the other task types intentionally fail at
-    runtime until their final semantics are defined.
+    Task handlers reuse the existing robot modules and expose progress through a
+    common taskStatus payload.
     """
 
     def __init__(self, poll_interval_sec=0.2, navigation_noise_rng=None):
@@ -344,6 +365,18 @@ class StateMachineExecutor:
             publish_joint_targets({"hold": True})
         if task_status.get("taskType") == "inference":
             get_inference_manager().stop(reason="state_machine")
+        if task_status.get("taskType") == "lifting":
+            stop_result = self._stop_lifting_safely()
+            task_status = copy.deepcopy(task_status)
+            task_data = task_status.get("data") if isinstance(task_status.get("data"), dict) else {}
+            task_data.update(
+                {
+                    "phase": "stopped",
+                    "stopCode": stop_result.get("code", ""),
+                    "stopOk": bool(stop_result.get("ok")),
+                }
+            )
+            task_status["data"] = task_data
 
         self._finish_run(
             "stopped",
@@ -434,6 +467,8 @@ class StateMachineExecutor:
             return self._execute_inference(node)
         if task_type == "piper_joint":
             return self._execute_piper_joint(node)
+        if task_type == "lifting":
+            return self._execute_lifting(node)
         if task_type == "grasp":
             params = node.get("params") or {}
             if params.get("graspMethod") == "auto":
@@ -516,6 +551,385 @@ class StateMachineExecutor:
             return "completed", detail
         self._set_task_status(node, "failed", detail, data)
         return "failed", detail
+
+    def _execute_lifting(self, node):
+        """Move the lifting column and wait for fresh feedback to reach target."""
+        params = node.get("params") or {}
+        try:
+            config = self._lifting_config(params)
+        except ValueError as exc:
+            detail = f"Lifting params invalid: {exc}"
+            self._set_task_status(node, "failed", detail, self._lifting_status_data("failed"))
+            return "failed", detail
+
+        reader = get_ros_reader()
+        baseline = reader.read(LIFTING_STATE_KEY, timeout_sec=self._poll_interval_sec)
+        try:
+            baseline_feedback = self._lifting_feedback(baseline)
+        except ValueError as exc:
+            detail = f"Lifting feedback unavailable before motion: {exc}"
+            self._set_task_status(
+                node,
+                "failed",
+                detail,
+                self._lifting_status_data("failed", config, feedback_result=baseline),
+            )
+            return "failed", detail
+        if not baseline_feedback["initState"]:
+            detail = "Lifting column is not initialized."
+            self._set_task_status(
+                node,
+                "failed",
+                detail,
+                self._lifting_status_data("failed", config, feedback_result=baseline, feedback=baseline_feedback),
+            )
+            return "failed", detail
+        if baseline_feedback["faults"]:
+            detail = f"Lifting feedback reports fault: {', '.join(baseline_feedback['faults'])}."
+            self._set_task_status(
+                node,
+                "failed",
+                detail,
+                self._lifting_status_data("failed", config, feedback_result=baseline, feedback=baseline_feedback),
+            )
+            return "failed", detail
+
+        self._set_task_status(
+            node,
+            "running",
+            f"Commanding lifting target {config['targetHeightM']:.3f} m.",
+            self._lifting_status_data("commanding", config, feedback_result=baseline, feedback=baseline_feedback),
+        )
+        started = time.monotonic()
+        try:
+            command_result = command_lifting_to_height({"heightM": config["targetHeightM"]})
+        except Exception as exc:
+            command_result = {"ok": False, "code": "LIFT-C-ERROR", "detail": str(exc)}
+        if self._stop_event.is_set():
+            return "stopped", "State machine run stopped."
+        if not command_result.get("ok"):
+            detail = command_result.get("detail") or command_result.get("code") or "Lifting command failed."
+            self._set_task_status(
+                node,
+                "failed",
+                detail,
+                self._lifting_status_data(
+                    "failed",
+                    config,
+                    command_result=command_result,
+                    feedback_result=baseline,
+                    feedback=baseline_feedback,
+                    elapsed=time.monotonic() - started,
+                ),
+            )
+            return "failed", detail
+
+        after_sequence = baseline.get("sequence")
+        stable_since = None
+        stable_elapsed = 0.0
+        target_confirmed = False
+        last_result = baseline
+        last_feedback = baseline_feedback
+        while not self._stop_event.is_set():
+            now = time.monotonic()
+            elapsed = now - started
+            if elapsed > config["timeoutSec"]:
+                stop_result = self._stop_lifting_safely()
+                detail = f"Lifting target not reached within {config['timeoutSec']:.1f}s."
+                self._set_task_status(
+                    node,
+                    "failed",
+                    detail,
+                    self._lifting_status_data(
+                        "failed",
+                        config,
+                        command_result=command_result,
+                        feedback_result=last_result,
+                        feedback=last_feedback,
+                        stable_elapsed=stable_elapsed,
+                        elapsed=elapsed,
+                        stop_result=stop_result,
+                    ),
+                )
+                return "failed", detail
+
+            wait_sec = min(self._poll_interval_sec, max(0.0, config["timeoutSec"] - elapsed))
+            result = reader.read_after(LIFTING_STATE_KEY, after_sequence=after_sequence, timeout_sec=wait_sec)
+            if not result.get("ok"):
+                if result.get("code") == "ROS-R-NODATA":
+                    self._set_task_status(
+                        node,
+                        "running",
+                        "Waiting for fresh lifting feedback.",
+                        self._lifting_status_data(
+                            "waiting_feedback",
+                            config,
+                            command_result=command_result,
+                            feedback_result=last_result,
+                            feedback=last_feedback,
+                            stable_elapsed=stable_elapsed,
+                            elapsed=elapsed,
+                        ),
+                    )
+                    continue
+                stop_result = self._stop_lifting_safely()
+                detail = result.get("detail") or result.get("code") or "Lifting feedback failed."
+                self._set_task_status(
+                    node,
+                    "failed",
+                    detail,
+                    self._lifting_status_data(
+                        "failed",
+                        config,
+                        command_result=command_result,
+                        feedback_result=result,
+                        feedback=last_feedback,
+                        stable_elapsed=stable_elapsed,
+                        elapsed=elapsed,
+                        stop_result=stop_result,
+                    ),
+                )
+                return "failed", detail
+
+            last_result = result
+            after_sequence = result.get("sequence", after_sequence)
+            try:
+                feedback = self._lifting_feedback(result)
+            except ValueError as exc:
+                stop_result = self._stop_lifting_safely()
+                detail = f"Lifting feedback invalid: {exc}"
+                self._set_task_status(
+                    node,
+                    "failed",
+                    detail,
+                    self._lifting_status_data(
+                        "failed",
+                        config,
+                        command_result=command_result,
+                        feedback_result=result,
+                        feedback=last_feedback,
+                        stable_elapsed=stable_elapsed,
+                        elapsed=elapsed,
+                        stop_result=stop_result,
+                    ),
+                )
+                return "failed", detail
+            last_feedback = feedback
+
+            if not feedback["initState"]:
+                stop_result = self._stop_lifting_safely()
+                detail = "Lifting column lost initialization during motion."
+                self._set_task_status(
+                    node,
+                    "failed",
+                    detail,
+                    self._lifting_status_data(
+                        "failed", config, command_result, result, feedback, stable_elapsed, elapsed, stop_result
+                    ),
+                )
+                return "failed", detail
+            if feedback["faults"]:
+                stop_result = self._stop_lifting_safely()
+                detail = f"Lifting feedback reports fault: {', '.join(feedback['faults'])}."
+                self._set_task_status(
+                    node,
+                    "failed",
+                    detail,
+                    self._lifting_status_data(
+                        "failed", config, command_result, result, feedback, stable_elapsed, elapsed, stop_result
+                    ),
+                )
+                return "failed", detail
+
+            reported_target = feedback.get("reportedTargetHeightM")
+            target_error = (
+                abs(reported_target - config["targetHeightM"])
+                if reported_target is not None
+                else None
+            )
+            feedback["targetErrorM"] = target_error
+            target_matches = target_error is None or target_error <= config["toleranceM"]
+            if target_matches:
+                target_confirmed = True
+            elif target_confirmed:
+                stop_result = self._stop_lifting_safely()
+                detail = "Lifting target was overridden by another command."
+                self._set_task_status(
+                    node,
+                    "failed",
+                    detail,
+                    self._lifting_status_data(
+                        "failed", config, command_result, result, feedback, stable_elapsed, elapsed, stop_result
+                    ),
+                )
+                return "failed", detail
+
+            height_error = abs(feedback["actualHeightM"] - config["targetHeightM"])
+            feedback["heightErrorM"] = height_error
+            feedback["withinTolerance"] = height_error <= config["toleranceM"]
+            feedback["targetMatches"] = target_matches
+            reached = feedback["withinTolerance"] and feedback["reachTarget"] and target_matches
+            if reached:
+                if stable_since is None:
+                    stable_since = now
+                stable_elapsed = 0.0 if config["stableSec"] <= 0 else now - stable_since
+                if config["stableSec"] <= 0 or stable_elapsed >= config["stableSec"]:
+                    detail = "Lifting target reached."
+                    self._set_task_status(
+                        node,
+                        "completed",
+                        detail,
+                        self._lifting_status_data(
+                            "completed",
+                            config,
+                            command_result,
+                            result,
+                            feedback,
+                            stable_elapsed,
+                            elapsed,
+                        ),
+                    )
+                    return "completed", detail
+                phase = "stable_timing"
+                detail = f"Lifting target reached, stable for {stable_elapsed:.1f}/{config['stableSec']:.1f}s."
+            else:
+                stable_since = None
+                stable_elapsed = 0.0
+                phase = "moving_to_target"
+                detail = "Waiting for lifting target to be reached."
+
+            self._set_task_status(
+                node,
+                "running",
+                detail,
+                self._lifting_status_data(
+                    phase,
+                    config,
+                    command_result,
+                    result,
+                    feedback,
+                    stable_elapsed,
+                    elapsed,
+                ),
+            )
+
+        return "stopped", "State machine run stopped."
+
+    @staticmethod
+    def _lifting_config(params):
+        try:
+            target_height = lifting_target_height_m(params)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(str(exc)) from exc
+        return {
+            "targetHeightM": target_height,
+            "toleranceM": _bounded_float(
+                params.get("toleranceM"),
+                "toleranceM",
+                LIFTING_DEFAULT_TOLERANCE_M,
+                LIFTING_MIN_TOLERANCE_M,
+                LIFTING_MAX_TOLERANCE_M,
+            ),
+            "stableSec": _bounded_float(
+                params.get("stableSec"),
+                "stableSec",
+                LIFTING_DEFAULT_STABLE_SEC,
+                0.0,
+                LIFTING_MAX_STABLE_SEC,
+            ),
+            "timeoutSec": _bounded_float(
+                params.get("timeoutSec"),
+                "timeoutSec",
+                LIFTING_DEFAULT_TIMEOUT_SEC,
+                LIFTING_MIN_TIMEOUT_SEC,
+                LIFTING_MAX_TIMEOUT_SEC,
+            ),
+        }
+
+    @staticmethod
+    def _stop_lifting_safely():
+        try:
+            return stop_lifting({})
+        except Exception as exc:
+            return {"ok": False, "code": "LIFT-C-STOP", "detail": str(exc)}
+
+    @staticmethod
+    def _lifting_feedback(result):
+        if not isinstance(result, dict) or not result.get("ok"):
+            detail = result.get("detail") if isinstance(result, dict) else "feedback result is invalid"
+            raise ValueError(detail or "feedback is unavailable")
+        if result.get("stale"):
+            raise ValueError("feedback is stale")
+        data = result.get("data")
+        if not isinstance(data, dict):
+            raise ValueError("feedback data must be an object")
+        actual_height = _finite_float(data.get("back_height"), "back_height") / 1000.0
+        reported_target = None
+        if data.get("target_height") is not None:
+            reported_target = _finite_float(data.get("target_height"), "target_height") / 1000.0
+        faults = [label for field, label in LIFTING_FAULT_FIELDS.items() if data.get(field) is True]
+        return {
+            "actualHeightM": actual_height,
+            "reportedTargetHeightM": reported_target,
+            "targetErrorM": None,
+            "backSpeedMps": _finite_float(data.get("back_speed", 0), "back_speed") / 1000.0,
+            "initState": data.get("init_state") is True,
+            "runState": data.get("run_state") is True,
+            "reachTarget": data.get("reach_target_pos") is True,
+            "upLimit": data.get("up_limit") is True,
+            "downLimit": data.get("down_limit") is True,
+            "faults": faults,
+        }
+
+    @staticmethod
+    def _lifting_status_data(
+        phase,
+        config=None,
+        command_result=None,
+        feedback_result=None,
+        feedback=None,
+        stable_elapsed=0.0,
+        elapsed=0.0,
+        stop_result=None,
+    ):
+        config = config or {}
+        command_result = command_result or {}
+        feedback_result = feedback_result or {}
+        feedback = copy.deepcopy(feedback) if isinstance(feedback, dict) else {}
+        target_height = config.get("targetHeightM")
+        reported_target = feedback.get("reportedTargetHeightM")
+        if target_height is not None and reported_target is not None:
+            feedback["targetErrorM"] = abs(reported_target - target_height)
+        return {
+            "phase": phase,
+            "targetHeightM": target_height,
+            "actualHeightM": feedback.get("actualHeightM"),
+            "reportedTargetHeightM": reported_target,
+            "heightErrorM": feedback.get("heightErrorM"),
+            "targetErrorM": feedback.get("targetErrorM"),
+            "withinTolerance": feedback.get("withinTolerance", False),
+            "targetMatches": feedback.get("targetMatches", False),
+            "toleranceM": config.get("toleranceM"),
+            "stableSec": config.get("stableSec"),
+            "stableElapsedSec": stable_elapsed,
+            "timeoutSec": config.get("timeoutSec"),
+            "elapsedSec": elapsed,
+            "initState": feedback.get("initState"),
+            "runState": feedback.get("runState"),
+            "reachTarget": feedback.get("reachTarget"),
+            "backSpeedMps": feedback.get("backSpeedMps"),
+            "upLimit": feedback.get("upLimit"),
+            "downLimit": feedback.get("downLimit"),
+            "faults": feedback.get("faults", []),
+            "feedbackKey": LIFTING_STATE_KEY,
+            "feedbackTopic": feedback_result.get("topic", ""),
+            "feedbackCode": feedback_result.get("code", ""),
+            "feedbackSequence": feedback_result.get("sequence"),
+            "feedbackAgeMs": feedback_result.get("ageMs"),
+            "commandCode": command_result.get("code", ""),
+            "stopCode": (stop_result or {}).get("code", ""),
+            "stopOk": bool((stop_result or {}).get("ok")) if stop_result is not None else None,
+        }
 
     def _execute_wait(self, node):
         """Wait for arm/gripper motion, then require continuous stillness."""

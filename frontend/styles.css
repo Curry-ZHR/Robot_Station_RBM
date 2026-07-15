@@ -3462,6 +3462,10 @@ body.robot-modal-open {
   --node-accent: #be123c;
 }
 
+.state-machine-node.is-lifting {
+  --node-accent: #0891b2;
+}
+
 .state-machine-node.is-check {
   --node-accent: #15803d;
 }

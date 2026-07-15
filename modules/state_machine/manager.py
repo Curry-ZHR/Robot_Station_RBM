@@ -21,7 +21,16 @@ LIBRARY_FILE = DATA_DIR / "state_library.json"
 GRAPHS_FILE = DATA_DIR / "graphs.json"
 EVENT_SEQUENCES_FILE = DATA_DIR / "event_sequences.json"
 
-TASK_TYPES = ("navigation", "inference", "piper_joint", "grasp", "wait", "topic_wait", "topic_publish")
+TASK_TYPES = (
+    "navigation",
+    "inference",
+    "piper_joint",
+    "lifting",
+    "grasp",
+    "wait",
+    "topic_wait",
+    "topic_publish",
+)
 DRAFT_GRAPH_ID = "__draft__"
 
 _STORE = None
