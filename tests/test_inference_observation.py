@@ -7,6 +7,7 @@ from modules.inference.observation import ObservationBuildError, build_observati
 
 
 JPEG_BODY = b"\xff\xd8\xff\xe0jpegbody"
+HIGH_JPEG_BODY = b"\xff\xd8\xff\xe0highjpegbody"
 
 
 class FakeCameraReader:
@@ -83,12 +84,16 @@ def _default_ros_reader():
 
 
 def test_build_observation_success():
-    obs = build_observation("grasp the bottle", camera_reader=FakeCameraReader(), ros_reader=_default_ros_reader())
+    camera_reader = FakeCameraReader(
+        {"camera_h_color": {"ok": True, "body": HIGH_JPEG_BODY, "contentType": "image/jpeg"}}
+    )
+    obs = build_observation("grasp the bottle", camera_reader=camera_reader, ros_reader=_default_ros_reader())
     assert obs["type"] == "observation"
     assert obs["prompt"] == "grasp the bottle"
     images = obs["observation"]["images"]
-    assert set(images) == {"front", "left_wrist", "right_wrist"}
+    assert set(images) == {"front", "left_wrist", "right_wrist", "high"}
     assert base64.b64decode(images["front"]) == JPEG_BODY
+    assert base64.b64decode(images["high"]) == HIGH_JPEG_BODY
 
     state = obs["observation"]["state"]
     assert state["left"]["joint1"] == pytest.approx(0.1)
@@ -141,6 +146,14 @@ def test_missing_camera_raises():
     with pytest.raises(ObservationBuildError) as exc:
         build_observation("x", camera_reader=reader, ros_reader=_default_ros_reader())
     assert exc.value.code == "INFER-OBS-CAMERA"
+
+
+def test_missing_high_camera_raises():
+    reader = FakeCameraReader({"camera_h_color": {"ok": False, "detail": "no frame"}})
+    with pytest.raises(ObservationBuildError) as exc:
+        build_observation("x", camera_reader=reader, ros_reader=_default_ros_reader())
+    assert exc.value.code == "INFER-OBS-CAMERA"
+    assert "camera_h/color" in exc.value.detail
 
 
 def test_non_jpeg_camera_raises():

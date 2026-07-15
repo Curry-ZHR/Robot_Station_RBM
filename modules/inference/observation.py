@@ -29,6 +29,7 @@ CAMERA_MAP = {
     "front": ("camera_f", "color"),
     "left_wrist": ("camera_l", "color"),
     "right_wrist": ("camera_r", "color"),
+    "high": ("camera_h", "color"),
 }
 
 # Joint-state read keys per arm. Defaults cover both Robot Station's double-arm
