@@ -1,0 +1,32 @@
+test_actual_hg_idl_crc_matches_independent_wire_layout (sdk_g1_checks.SDKChecks) ... ok
+test_actual_hg_lowstate_crc_and_modes (sdk_g1_checks.SDKChecks) ... ok
+test_reference_gains_match_official_g1_example (sdk_g1_checks.SDKChecks) ... ok
+test_sdk_dds_loopback_and_foreign_writer_detection (sdk_g1_checks.SDKChecks) ... 1792459583.898517 [232]     python: selected interface "lo" is not multicast-capable: disabling multicast
+ok
+test_gate_prevents_worker_start_without_any_approval (g1_manager_checks.ManagerChecks) ... ok
+test_manager_private_lease_target_sequence_release_and_restart (g1_manager_checks.ManagerChecks) ... ok
+test_fixed_base_physics_actually_steps_and_tracks (manual_physics_checks.PhysicsChecks) ... ok
+test_worker_lease_tracking_expiry_and_recovery (manual_physics_checks.PhysicsChecks) ... ok
+test_approval_requires_attestation_and_observed_mode (test_unitree_g1_control.Commissioning) ... ok
+test_host_boot_version_expiry_permissions_and_output_gate (test_unitree_g1_control.Commissioning) ... ok
+test_exact_extrema_velocity_acceleration_and_endpoints (test_unitree_g1_control.Plans) ... ok
+test_live_replan_preserves_position_velocity_and_acceleration (test_unitree_g1_control.Plans) ... ok
+test_encoder_rejects_nan_wrong_dimension_or_unbounded_target (test_unitree_g1_control.Protocol) ... ok
+test_feedback_crc_tick_wrap_mode_fault_and_stale (test_unitree_g1_control.Protocol) ... ok
+test_fresh_hg_frames_crc_and_unused_slots (test_unitree_g1_control.Protocol) ... ok
+test_mapping_is_hardware_order_not_urdf_order (test_unitree_g1_control.Protocol) ... ok
+test_parameter_mapping_gain_limits_and_missing_torque (test_unitree_g1_control.Protocol) ... ok
+test_reference_template_cannot_enable_output (test_unitree_g1_control.Protocol) ... ok
+test_no_web_config_can_set_real_approval (test_unitree_g1_control.RuntimeGate) ... ok
+test_real_snapshot_reports_gate_and_exposes_no_motion_without_commissioning (test_unitree_g1_control.RuntimeGate) ... ok
+test_control_deadline_temperature_tilt_and_torque_trip (test_unitree_g1_control.Watchdogs) ... ok
+test_feedback_loss_foreign_owner_source_and_mode_conflicts_publish_nothing_further (test_unitree_g1_control.Watchdogs) ... ok
+test_lease_expiry_damps_then_disables_and_cannot_rearm (test_unitree_g1_control.Watchdogs) ... ok
+test_no_publisher_until_explicit_arm_and_no_automatic_zero (test_unitree_g1_control.Watchdogs) ... ok
+test_sequence_limits_and_real_tracking (test_unitree_g1_control.Watchdogs) ... ok
+test_tracking_error_and_estimated_pd_torque_trip (test_unitree_g1_control.Watchdogs) ... ok
+
+----------------------------------------------------------------------
+Ran 26 tests in 12.023s
+
+OK

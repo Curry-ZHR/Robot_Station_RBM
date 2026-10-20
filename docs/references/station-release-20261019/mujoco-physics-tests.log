@@ -1,0 +1,7 @@
+test_fixed_base_physics_actually_steps_and_tracks (__main__.PhysicsChecks) ... ok
+test_worker_lease_tracking_expiry_and_recovery (__main__.PhysicsChecks) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 5.084s
+
+OK

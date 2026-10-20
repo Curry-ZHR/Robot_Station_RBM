@@ -1,0 +1,102 @@
+{
+  "real": {
+    "interface": "eno1",
+    "dds_domain": 0,
+    "state_endpoint": "tcp://127.0.0.1:5557",
+    "pose_endpoint": "tcp://127.0.0.1:5556",
+    "camera_endpoint": "tcp://127.0.0.1:5555",
+    "camera_keys": {
+      "head": "ego_view",
+      "left_wrist": "left_wrist",
+      "right_wrist": "right_wrist"
+    },
+    "bms_topics": [
+      "rt/bmsstate",
+      "rt/lf/bmsstate"
+    ],
+    "pico_calibration_confirmed": false,
+    "source_max_age_seconds": 0.5,
+    "prepare_timeout_seconds": 15,
+    "camera_source": "ros2",
+    "ros2_camera": {
+      "domain_id": 99,
+      "rmw": "rmw_fastrtps_cpp",
+      "localhost_only": false,
+      "fps": 30,
+      "width": 640,
+      "height": 480,
+      "resize_mode": "letterbox",
+      "jpeg_quality": 85,
+      "max_age_seconds": 0.5,
+      "max_skew_seconds": 0.1,
+      "topics": {
+        "head": {
+          "topic": "/camera/head/image_raw",
+          "message_type": "sensor_msgs/msg/Image",
+          "reliability": "best_effort",
+          "depth": 5
+        },
+        "left_wrist": {
+          "topic": "/camera/left_wrist/image_raw",
+          "message_type": "sensor_msgs/msg/Image",
+          "reliability": "best_effort",
+          "depth": 5
+        },
+        "right_wrist": {
+          "topic": "/camera/right_wrist/image_raw",
+          "message_type": "sensor_msgs/msg/Image",
+          "reliability": "best_effort",
+          "depth": 5
+        }
+      }
+    }
+  },
+  "sim": {
+    "interface": "lo",
+    "dds_domain": 0,
+    "state_endpoint": "tcp://127.0.0.1:15557",
+    "pose_endpoint": "tcp://127.0.0.1:15556",
+    "camera_endpoint": "tcp://127.0.0.1:5555",
+    "camera_keys": {
+      "head": "ego_view",
+      "left_wrist": "left_wrist",
+      "right_wrist": "right_wrist"
+    },
+    "pico_calibration_confirmed": false,
+    "source_max_age_seconds": 0.5,
+    "prepare_timeout_seconds": 15,
+    "camera_source": "ros2",
+    "ros2_camera": {
+      "domain_id": 99,
+      "rmw": "rmw_fastrtps_cpp",
+      "localhost_only": false,
+      "fps": 30,
+      "width": 640,
+      "height": 480,
+      "resize_mode": "letterbox",
+      "jpeg_quality": 85,
+      "max_age_seconds": 0.5,
+      "max_skew_seconds": 0.1,
+      "topics": {
+        "head": {
+          "topic": "/camera/head/image_raw",
+          "message_type": "sensor_msgs/msg/Image",
+          "reliability": "best_effort",
+          "depth": 5
+        },
+        "left_wrist": {
+          "topic": "/camera/left_wrist/image_raw",
+          "message_type": "sensor_msgs/msg/Image",
+          "reliability": "best_effort",
+          "depth": 5
+        },
+        "right_wrist": {
+          "topic": "/camera/right_wrist/image_raw",
+          "message_type": "sensor_msgs/msg/Image",
+          "reliability": "best_effort",
+          "depth": 5
+        }
+      }
+    }
+  }
+}

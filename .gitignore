@@ -5,6 +5,8 @@ __pycache__/
 
 # Runtime output
 logs/
+.runtime/
+.local-backups/
 data/
 output/playwright/
 .xdp_*
@@ -22,3 +24,22 @@ modules/localization/fast_gicp_ws/install/
 modules/localization/fast_gicp_ws/log/
 modules/localization/fast_gicp_ws/Log/
 output/
+
+# Isolated offline dataset conversion dependencies
+apps/.venv_conversion/
+
+# Local dependency environments and caches (do not ship workstation environments)
+.venv*/
+venv/
+node_modules/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Machine-local configuration, credentials and generated datasets
+.env
+.env.*
+!.env.example
+operation-key
+outputs/
+*.deb

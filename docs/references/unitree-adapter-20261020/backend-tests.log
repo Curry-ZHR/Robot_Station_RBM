@@ -1,0 +1,132 @@
+test_http_record_save_discard_recovery_playback_and_hdf5 (test_collection_pipeline.CollectionPipelineTests) ... PIPELINE_FIXTURE /tmp/robot-station-pipeline-r4yzye1a
+ok
+test_software_stop_works_across_selected_modes_and_keeps_data (test_collection_pipeline.CollectionPipelineTests) ... ok
+test_source_freeze_preserves_current_episode_as_discarded (test_collection_pipeline.CollectionPipelineTests) ... ok
+test_ros2_to_official_exporter_three_videos_playback_hdf5_and_web_recovery (test_collection_pipeline.Ros2CollectionPipelineTests) ... PIPELINE_FIXTURE /tmp/robot-station-pipeline-tnjha92w
+ok
+test_collection_and_metadata_endpoints (test_collection_workspace.CollectionHTTPTests) ... ok
+test_unknown_api_and_invalid_requests_have_json_errors (test_collection_workspace.CollectionHTTPTests) ... ok
+test_video_range_suffix_head_and_invalid_range (test_collection_workspace.CollectionHTTPTests) ... ok
+test_config_rejects_bad_types_and_dates (test_collection_workspace.CollectionWorkspaceTests) ... ok
+test_config_save_persists_and_never_launches_collection (test_collection_workspace.CollectionWorkspaceTests) ... ok
+test_demo_records_are_excluded_from_real_totals (test_collection_workspace.CollectionWorkspaceTests) ... ok
+test_incomplete_last_metadata_line_does_not_hide_records (test_collection_workspace.CollectionWorkspaceTests) ... ok
+test_metadata_counts_pagination_and_unreviewed_default (test_collection_workspace.CollectionWorkspaceTests) ... ok
+test_missing_video_is_an_explicit_empty_list (test_collection_workspace.CollectionWorkspaceTests) ... ok
+test_pagination_validation (test_collection_workspace.CollectionWorkspaceTests) ... ok
+test_rating_persists_without_modifying_raw_metadata (test_collection_workspace.CollectionWorkspaceTests) ... ok
+test_rejects_directory_traversal_and_symlink_escape (test_collection_workspace.CollectionWorkspaceTests) ... ok
+test_rejects_invalid_or_discarded_rating (test_collection_workspace.CollectionWorkspaceTests) ... ok
+test_video_lookup_uses_declared_lerobot_paths (test_collection_workspace.CollectionWorkspaceTests) ... ok
+test_credentials_persist_privately_and_wrong_tokens_rate_limit (test_console_access.AccessTests) ... ok
+test_lan_requires_signed_session_and_browser_csrf (test_console_access.AccessTests) ... ok
+test_loopback_cli_allowed_but_foreign_origin_and_host_rejected (test_console_access.AccessTests) ... ok
+test_end_rejects_unsaved_recording_and_stop_bypasses_pending_command (test_console_collection.CollectionManagerTests) ... ok
+test_explicit_start_save_ack_and_restart_recovery (test_console_collection.CollectionManagerTests) ... ok
+test_single_task_cross_mode_config_and_existing_output_interlocks (test_console_collection.CollectionManagerTests) ... ok
+test_unexpected_process_exit_releases_claim_without_inventing_success (test_console_collection.CollectionManagerTests) ... ok
+test_validation_and_old_session_conflict (test_console_collection.CollectionManagerTests) ... ok
+test_body_clock_freeze_is_not_hidden_by_live_headset_clock (test_console_probe.CameraProbeTests) ... ok
+test_real_zmq_jpeg_decode_all_three_views_and_frozen_timestamp (test_console_probe.CameraProbeTests) ... ok
+test_config_requires_local_endpoints_distinct_camera_keys_and_types (test_console_probe.ProcessAndConfigTests) ... ok
+test_supervisor_reuses_owned_child_and_refuses_reused_pid_identity (test_console_probe.ProcessAndConfigTests) ... ok
+test_snapshot_and_acknowledgement_conform_to_openapi (test_console_runtime.ConsoleHTTPTests) ... /home/harry/workspace/robot_station/apps/tests/test_console_runtime.py:181: DeprecationWarning: jsonschema.RefResolver is deprecated as of v4.18.0, in favor of the https://github.com/python-jsonschema/referencing library, which provides more compliant referencing behavior as well as more flexible APIs for customization. A future release will remove RefResolver. Please file a feature request (on referencing) if you are missing an API for the kind of customization you need.
+  resolver=jsonschema.RefResolver.from_schema(document)
+ok
+test_snapshot_and_command_use_v1_response_contract (test_console_runtime.ConsoleHTTPTests) ... ok
+test_actual_readiness_not_command_acceptance (test_console_runtime.DeploymentTests) ... ok
+test_cancel_does_not_stop_reused_services (test_console_runtime.DeploymentTests) ... ok
+test_failure_single_job_and_motion_rejection (test_console_runtime.DeploymentTests) ... ok
+test_service_start_runs_only_its_fixed_recipe (test_console_runtime.DeploymentTests) ... ok
+test_explicit_readonly_connection_and_idempotency (test_console_runtime.SnapshotTests) ... ok
+test_missing_duplicate_and_nonfinite_joints_rejected (test_console_runtime.SnapshotTests) ... ok
+test_modes_are_isolated_and_tracking_requires_calibration (test_console_runtime.SnapshotTests) ... ok
+test_named_feedback_battery_boundaries_and_expiry (test_console_runtime.SnapshotTests) ... ok
+test_no_fake_robot_battery_or_camera_from_open_ports (test_console_runtime.SnapshotTests) ... ok
+test_request_validation_revision_conflict_and_unimplemented_scopes (test_console_runtime.SnapshotTests) ... ok
+test_all_43_named_values_action_reordering_and_video_zero (test_console_timeseries.TimeseriesTests) ... ok
+test_bounded_preview_retains_first_and_last_without_altering_time (test_console_timeseries.TimeseriesTests) ... ok
+test_corrupt_timestamps_counts_and_values_are_rejected (test_console_timeseries.TimeseriesTests) ... ok
+test_missing_duplicate_incompatible_names_and_wrong_units (test_console_timeseries.TimeseriesTests) ... ok
+test_service_isolated_process_cache_and_source_changes (test_console_timeseries.TimeseriesTests) ... ok
+test_symlink_parquet_escape_is_rejected (test_console_timeseries.TimeseriesTests) ... ok
+test_config_validation_conflict_and_restore (test_console_tools.Stores) ... ok
+test_diagnostic_bundle_has_no_access_secrets_or_logs (test_console_tools.Stores) ... ok
+test_invalid_endpoint_topic_qos_and_domain (test_console_tools.Stores) ... ok
+test_manual_lease_ownership_sequence_and_unit (test_console_tools.Stores) ... ok
+test_manual_real_output_always_gated_and_server_restart_revokes (test_console_tools.Stores) ... ok
+test_pose_model_names_units_limits_and_roundtrip (test_console_tools.Stores) ... ok
+test_profiles_do_not_apply_and_busy_rejects_writes (test_console_tools.Stores) ... ok
+test_trajectory_named_order_endpoints_and_speed (test_console_tools.Stores) ... ok
+test_active_or_incomplete_recording_cannot_be_converted (test_dataset_conversion.ConversionTests) ... ok
+test_cancellation_and_single_job_ownership (test_dataset_conversion.ConversionTests) ... ok
+test_changed_source_fingerprint_blocks_submission (test_dataset_conversion.ConversionTests) ... ok
+test_demo_metadata_is_never_promoted_to_a_real_conversion (test_dataset_conversion.ConversionTests) ... ok
+test_download_confined_to_successful_output (test_dataset_conversion.ConversionTests) ... ok
+test_existing_output_is_not_overwritten (test_dataset_conversion.ConversionTests) ... ok
+test_hdf5_roundtrip_preserves_43d_fields_types_timestamps_tasks_and_original_video_bytes (test_dataset_conversion.ConversionTests) ... ok
+test_http_routes_create_poll_and_range_download_without_robot_adapter (test_dataset_conversion.ConversionTests) ... ok
+test_invalid_numeric_shape_fails_without_changing_the_source (test_dataset_conversion.ConversionTests) ... ok
+test_lerobot_exports_byte_identical_data_video_metadata_and_discard_flags (test_dataset_conversion.ConversionTests) ... ok
+test_missing_numeric_data_blocks_conversion (test_dataset_conversion.ConversionTests) ... ok
+test_path_traversal_and_symlink_sources_are_rejected (test_dataset_conversion.ConversionTests) ... ok
+test_rgb_hdf5_decodes_three_complete_camera_streams (test_dataset_conversion.ConversionTests) ... ok
+test_version_three_is_rejected_instead_of_guessing_a_layout (test_dataset_conversion.ConversionTests) ... ok
+test_video_fps_mismatch_is_not_silently_resampled (test_dataset_conversion.ConversionTests) ... ok
+test_video_frame_mismatch_fails_validation (test_dataset_conversion.ConversionTests) ... ok
+test_config_checks_domain_unique_topics_message_types_and_qos (test_ros2_camera_bridge.CameraFrameTests) ... ok
+test_packet_keys_jpeg_color_synchronization_and_no_repeated_publish (test_ros2_camera_bridge.CameraFrameTests) ... ok
+test_resize_is_explicit_and_letterbox_preserves_geometry (test_ros2_camera_bridge.CameraFrameTests) ... ok
+test_skew_is_rejected_and_missing_view_is_never_fabricated (test_ros2_camera_bridge.CameraFrameTests) ... ok
+test_source_clock_not_rewritten_and_frozen_frames_expire (test_ros2_camera_bridge.CameraFrameTests) ... ok
+test_rejects_bad_frequency (test_sonic_adapter.CollectionConfigTests) ... ok
+test_rejects_unsafe_dataset_name (test_sonic_adapter.CollectionConfigTests) ... ok
+test_valid_payload (test_sonic_adapter.CollectionConfigTests) ... ok
+test_overview_exposes_monitoring_quality_and_report (test_sonic_adapter.DatasetTests) ... ok
+test_scans_lerobot_dataset (test_sonic_adapter.DatasetTests) ... ok
+test_approval_requires_attestation_and_observed_mode (test_unitree_g1_control.Commissioning) ... ok
+test_host_boot_version_expiry_permissions_and_output_gate (test_unitree_g1_control.Commissioning) ... ok
+test_exact_extrema_velocity_acceleration_and_endpoints (test_unitree_g1_control.Plans) ... ok
+test_live_replan_preserves_position_velocity_and_acceleration (test_unitree_g1_control.Plans) ... ok
+test_encoder_rejects_nan_wrong_dimension_or_unbounded_target (test_unitree_g1_control.Protocol) ... ok
+test_feedback_crc_tick_wrap_mode_fault_and_stale (test_unitree_g1_control.Protocol) ... ok
+test_fresh_hg_frames_crc_and_unused_slots (test_unitree_g1_control.Protocol) ... ok
+test_mapping_is_hardware_order_not_urdf_order (test_unitree_g1_control.Protocol) ... ok
+test_parameter_mapping_gain_limits_and_missing_torque (test_unitree_g1_control.Protocol) ... ok
+test_reference_template_cannot_enable_output (test_unitree_g1_control.Protocol) ... ok
+test_no_web_config_can_set_real_approval (test_unitree_g1_control.RuntimeGate) ... ok
+test_real_snapshot_reports_gate_and_exposes_no_motion_without_commissioning (test_unitree_g1_control.RuntimeGate) ... ok
+test_control_deadline_temperature_tilt_and_torque_trip (test_unitree_g1_control.Watchdogs) ... ok
+test_feedback_loss_foreign_owner_source_and_mode_conflicts_publish_nothing_further (test_unitree_g1_control.Watchdogs) ... ok
+test_lease_expiry_damps_then_disables_and_cannot_rearm (test_unitree_g1_control.Watchdogs) ... ok
+test_no_publisher_until_explicit_arm_and_no_automatic_zero (test_unitree_g1_control.Watchdogs) ... ok
+test_sequence_limits_and_real_tracking (test_unitree_g1_control.Watchdogs) ... ok
+test_tracking_error_and_estimated_pd_torque_trip (test_unitree_g1_control.Watchdogs) ... ok
+
+----------------------------------------------------------------------
+Ran 100 tests in 55.642s
+
+OK
+[http] 127.0.0.1 - "GET /api/collection HTTP/1.1" 200 -
+[http] 127.0.0.1 - "GET /api/episodes?dataset=test-scene&offset=0&limit=1 HTTP/1.1" 200 -
+[http] 127.0.0.1 - "POST /api/episodes/rate HTTP/1.1" 200 -
+[http] 127.0.0.1 - "GET /api/missing HTTP/1.1" 404 -
+[http] 127.0.0.1 - "GET /api/episodes?dataset=../outside HTTP/1.1" 400 -
+[http] 127.0.0.1 - "GET /api/episodes?dataset=test-scene&offset=bad HTTP/1.1" 400 -
+[http] 127.0.0.1 - "GET /api/collection?mode=bad HTTP/1.1" 400 -
+[http] 127.0.0.1 - "GET /api/episodes/review?dataset=test-scene&episode=99 HTTP/1.1" 404 -
+[http] 127.0.0.1 - "GET /api/episodes/video?dataset=test-scene&episode=0&camera=observation.images.head HTTP/1.1" 206 -
+[http] 127.0.0.1 - "GET /api/episodes/video?dataset=test-scene&episode=0&camera=observation.images.head HTTP/1.1" 206 -
+[http] 127.0.0.1 - "HEAD /api/episodes/video?dataset=test-scene&episode=0&camera=observation.images.head HTTP/1.1" 200 -
+[http] 127.0.0.1 - "GET /api/episodes/video?dataset=test-scene&episode=0&camera=observation.images.head HTTP/1.1" 416 -
+[http] 127.0.0.1 - "GET /api/episodes/video?dataset=test-scene&episode=0&camera=observation.images.head HTTP/1.1" 416 -
+[http] 127.0.0.1 - "GET /api/episodes/video?dataset=test-scene&episode=0&camera=observation.images.head HTTP/1.1" 416 -
+[http] 127.0.0.1 - "GET /api/episodes/video?dataset=test-scene&episode=0&camera=observation.images.head HTTP/1.1" 416 -
+[http] 127.0.0.1 - "GET /api/v1/console/snapshot?mode=sim&profile_id=unitree-g1-29 HTTP/1.1" 200 -
+[http] 127.0.0.1 - "POST /api/v1/console/self-check HTTP/1.1" 403 -
+[http] 127.0.0.1 - "POST /api/v1/console/self-check HTTP/1.1" 200 -
+[http] 127.0.0.1 - "POST /api/v1/console/self-check HTTP/1.1" 400 -
+[http] 127.0.0.1 - "GET /api/conversions/sources HTTP/1.1" 200 -
+[http] 127.0.0.1 - "POST /api/conversions/jobs HTTP/1.1" 202 -
+[http] 127.0.0.1 - "GET /api/conversions/jobs/ab2c1064e2254434bf364a42bde9b3ab/download?path=episodes/episode_000000.hdf5 HTTP/1.1" 206 -
+[http] 127.0.0.1 - "GET /api/conversions/jobs/ab2c1064e2254434bf364a42bde9b3ab/download?path=../../outside HTTP/1.1" 400 -

@@ -1,0 +1,51 @@
+{
+  "mode": "real",
+  "allow_motion": false,
+  "job_id": "1e021e6a959a4aa8ab6dd86bf0fd36d1",
+  "job_state": "waiting",
+  "steps": [
+    {
+      "id": "environment",
+      "label": "环境自检",
+      "state": "succeeded",
+      "detail": "主机、GPU、镜像、SDK 与模型检查通过"
+    },
+    {
+      "id": "runtime",
+      "label": "准备 SONIC",
+      "state": "succeeded",
+      "detail": "请求的软件服务与只读订阅已准备"
+    },
+    {
+      "id": "sensors",
+      "label": "相机就绪",
+      "state": "blocked",
+      "detail": "等待现场设备连接并发送有效数据"
+    },
+    {
+      "id": "input",
+      "label": "输入源就绪",
+      "state": "blocked",
+      "detail": "等待现场设备连接并发送有效数据"
+    },
+    {
+      "id": "robot",
+      "label": "机器人反馈",
+      "state": "blocked",
+      "detail": "等待现场设备连接并发送有效数据"
+    }
+  ],
+  "services": {
+    "docker": "ready",
+    "pc_service": "running",
+    "controller": "offline",
+    "cameras": "offline",
+    "exporter": "offline"
+  },
+  "formal_episodes": 0,
+  "demo_episodes": 1075,
+  "robot_connected": false,
+  "battery_percent": null,
+  "openapi": "validated Snapshot, Job, Accepted",
+  "controller_started": false
+}

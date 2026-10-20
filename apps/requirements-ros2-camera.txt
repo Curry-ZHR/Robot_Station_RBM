@@ -1,0 +1,5 @@
+# Match the host NumPy ABI used by Ubuntu cv2/cv_bridge; never resolve NumPy 2.
+numpy==1.21.5
+pyzmq==26.4.0
+msgpack==1.1.0
+msgpack-numpy==0.4.8

@@ -1,0 +1,21 @@
+{
+  "hardware_variant": "g1-29-unlocked-waist",
+  "initialize": {
+    "http_status": 412,
+    "code": "onsite_validation_required"
+  },
+  "claim": {
+    "http_status": 412,
+    "code": "onsite_validation_required"
+  },
+  "apply_pose": {
+    "http_status": 412,
+    "code": "onsite_validation_required"
+  },
+  "web_approval_route_absent": true,
+  "manual_real_worker_autostarted": false,
+  "local_approval": false,
+  "generic_template_approved": false,
+  "formal_episodes": 0,
+  "all_passed": true
+}

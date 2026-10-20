@@ -1,0 +1,8 @@
+test_domain_100_publisher_is_invisible_to_domain_99_bridge (tests.ros2_camera_checks.Ros2WireTests) ... ok
+test_managed_start_port_conflict_reuse_stop_and_restart (tests.ros2_camera_checks.Ros2WireTests) ... ok
+test_real_ros_raw_compressed_color_freeze_recovery_and_passive_preview (tests.ros2_camera_checks.Ros2WireTests) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 12.520s
+
+OK

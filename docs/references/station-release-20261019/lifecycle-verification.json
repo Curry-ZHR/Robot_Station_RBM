@@ -1,0 +1,17 @@
+{
+  "web_crash_recovered": {
+    "before_pid": 319026,
+    "after_pid": 319958,
+    "pass": true
+  },
+  "passive_reader_preserved": true,
+  "stop_output": "G1 工作台已关闭；下次开机仍会自启动。关闭自启动：./run.sh disable-autostart",
+  "owned_processes_after_stop": [],
+  "run_output": "G1 工作台已启动：http://192.168.123.100:9999/",
+  "enabled": "enabled",
+  "linger": "yes",
+  "service_active": "active",
+  "unit_validation": true,
+  "boot_motion": false,
+  "reboot_performed": false
+}

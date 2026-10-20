@@ -1,0 +1,97 @@
+{
+  "checked_at": 1792482396.244804,
+  "backend_tests": 112,
+  "frontend_tests": 19,
+  "before": {
+    "services": {
+      "docker": {
+        "state": "ready",
+        "owned": true,
+        "stop_allowed": true,
+        "stop_reason": ""
+      },
+      "pc_service": {
+        "state": "running",
+        "owned": true,
+        "unity_running": true,
+        "stop_allowed": true,
+        "stop_reason": ""
+      },
+      "controller": {
+        "state": "offline"
+      }
+    },
+    "active_task": null,
+    "robot_connected": false,
+    "recording": false
+  },
+  "stops": [
+    {
+      "service": "pc_service",
+      "state": "stopped",
+      "message": "XRoboToolkit PC Service 与 Unity 3D 已停止"
+    },
+    {
+      "service": "docker",
+      "state": "stopped",
+      "message": "SONIC 容器已停止，模型和容器文件保留"
+    }
+  ],
+  "after_stop": {
+    "services": {
+      "docker": {
+        "state": "stopped",
+        "owned": true,
+        "stop_allowed": false,
+        "stop_reason": "服务当前已停止"
+      },
+      "pc_service": {
+        "state": "stopped",
+        "owned": true,
+        "unity_running": false,
+        "stop_allowed": false,
+        "stop_reason": "服务当前已停止"
+      },
+      "controller": {
+        "state": "offline"
+      }
+    },
+    "active_task": null,
+    "robot_connected": false,
+    "recording": false
+  },
+  "implicit_restart_blocked": true,
+  "restarts": [
+    {
+      "service": "docker",
+      "state": "succeeded",
+      "allow_motion": false
+    },
+    {
+      "service": "pc_service",
+      "state": "succeeded",
+      "allow_motion": false
+    }
+  ],
+  "after_restart": {
+    "docker": {
+      "state": "ready",
+      "owned": true,
+      "stop_allowed": true,
+      "stop_reason": ""
+    },
+    "pc_service": {
+      "state": "running",
+      "owned": true,
+      "unity_running": true,
+      "stop_allowed": true,
+      "stop_reason": ""
+    },
+    "controller": {
+      "state": "offline"
+    }
+  },
+  "robot_motion_executed": false,
+  "gui_restored": true,
+  "completed_at": 1792482906.5801182
+}

@@ -1,0 +1,24 @@
+{
+  "ros_domain": [
+    99,
+    99
+  ],
+  "poses_persisted": true,
+  "explicit_camera_stop_survives_supervisor_poll": true,
+  "camera_restarts_waiting_for_real_topics": true,
+  "real_gate": "onsite_validation_required",
+  "sanitized_bundle_entries": [
+    "diagnostics.json",
+    "README.txt"
+  ],
+  "diagnostic_domain": 99,
+  "systemd_supervisor_crash_recovered": {
+    "before_pid": 326930,
+    "after_pid": 330129
+  },
+  "real_robot_connected": false,
+  "real_battery_percent": null,
+  "formal_episodes": 0,
+  "manual_owner_after_restart": null,
+  "all_passed": true
+}

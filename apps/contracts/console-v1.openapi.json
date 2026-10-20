@@ -1,0 +1,4914 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Robot Station Console API",
+    "version": "1.6.0",
+    "description": "Implemented: real host diagnostics, passive DDS/ZMQ/XRoboToolkit readers and managed ROS 2 image bridge, no-motion deployment jobs, recording task management, named Parquet playback and offline conversion. Implemented: connection profiles/restore, bounded ROS diagnostics, named poses and independent fixed-base MuJoCo control with expiring browser leases. Real G1 HG/PR adapter implemented with local commissioning gates, supported-joint-test scope and independent watchdogs; physical calibration pending. Task-model inference and workflow execution remain reserved. Legacy stack/record POSTs are disabled. LAN commands require an operator session; browser writes require same-origin and X-Console-CSRF. Model secrets stay server-side."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "paths": {
+    "/api/v1/console/snapshot": {
+      "get": {
+        "operationId": "getConsoleSnapshot",
+        "summary": "设备、能力、遥测与任务快照",
+        "parameters": [
+          {
+            "name": "mode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "sim",
+                "real"
+              ]
+            }
+          },
+          {
+            "name": "profile_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "snapshot": {
+                      "$ref": "#/components/schemas/Snapshot"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "snapshot"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "v1 未接入；前端仅回退到旧只读数据接口",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "执行端不可用；前端丢弃旧能力并禁用控制",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/console/self-check": {
+      "post": {
+        "operationId": "commandSelfCheck",
+        "summary": "self_check 命令（能力与互锁由后端原子校验）",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Console-CSRF",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for browser writes; value from authorized snapshot.access."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SelfCheckCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收异步任务",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "状态版本或控制源冲突；刷新快照后由操作员重试",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "就绪条件不满足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "未实现；不得回退到旧设备 POST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator authorization required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin, host or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation": "implemented"
+      }
+    },
+    "/api/v1/console/deployment/jobs": {
+      "post": {
+        "operationId": "commandDeployment",
+        "summary": "deployment 命令（能力与互锁由后端原子校验）",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Console-CSRF",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for browser writes; value from authorized snapshot.access."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeploymentCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收异步任务",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "状态版本或控制源冲突；刷新快照后由操作员重试",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "就绪条件不满足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "未实现；不得回退到旧设备 POST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator authorization required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin, host or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation": "implemented, allow_motion:false only"
+      }
+    },
+    "/api/v1/console/robot/commands": {
+      "post": {
+        "operationId": "commandRobot",
+        "summary": "robot 命令（能力与互锁由后端原子校验）",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Console-CSRF",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for browser writes; value from authorized snapshot.access."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RobotCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收异步任务",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "状态版本或控制源冲突；刷新快照后由操作员重试",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "就绪条件不满足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "未实现；不得回退到旧设备 POST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator authorization required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin, host or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation": "connect read-only; simulation control implemented; real initialize creates only a preflight reader after local commissioning, claim(owner=manual,supported_operation_confirmed=true) explicitly arms a HG/PR writer. apply_pose/release require private lease. Real output absent without current local approval; no autonomous balance/SONIC handover or automatic ReleaseMode."
+      }
+    },
+    "/api/v1/console/inference/commands": {
+      "post": {
+        "operationId": "commandInference",
+        "summary": "inference 命令（能力与互锁由后端原子校验）",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Console-CSRF",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for browser writes; value from authorized snapshot.access."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InferenceCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收异步任务",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "状态版本或控制源冲突；刷新快照后由操作员重试",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "就绪条件不满足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "未实现；不得回退到旧设备 POST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator authorization required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin, host or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation": "reserved (501)"
+      }
+    },
+    "/api/v1/console/collection/commands": {
+      "post": {
+        "operationId": "commandCollection",
+        "summary": "collection 命令（能力与互锁由后端原子校验）",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Console-CSRF",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for browser writes; value from authorized snapshot.access."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收异步任务",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "状态版本或控制源冲突；刷新快照后由操作员重试",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "就绪条件不满足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "未实现；不得回退到旧设备 POST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator authorization required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin, host or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation": "implemented, recording-only ownership"
+      }
+    },
+    "/api/v1/console/services/actions": {
+      "post": {
+        "operationId": "commandServices",
+        "summary": "services 命令（能力与互锁由后端原子校验）",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Console-CSRF",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for browser writes; value from authorized snapshot.access."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServicesCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收异步任务",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "状态版本或控制源冲突；刷新快照后由操作员重试",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "就绪条件不满足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "未实现；不得回退到旧设备 POST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator authorization required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin, host or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation": "start/stop owned idle docker and project XRoboToolkit (PC Service + Unity) implemented with task/controller/ownership guards; managed ROS 2 camera bridge start/stop implemented; external controller stop/takeover reserved"
+      }
+    },
+    "/api/v1/console/safety/stop": {
+      "post": {
+        "operationId": "commandSafety",
+        "summary": "safety 命令（能力与互锁由后端原子校验）",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Console-CSRF",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for browser writes; value from authorized snapshot.access."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SafetyCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收异步任务",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "状态版本或控制源冲突；刷新快照后由操作员重试",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "就绪条件不满足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "未实现；不得回退到旧设备 POST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator authorization required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin, host or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation": "implemented for console preparation and recording only; motion_stop_supported=false"
+      }
+    },
+    "/api/v1/console/workflows/runs": {
+      "post": {
+        "operationId": "commandWorkflows",
+        "summary": "workflows 命令（能力与互锁由后端原子校验）",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Console-CSRF",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for browser writes; value from authorized snapshot.access."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowsCommand"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已接收异步任务",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "参数无效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "状态版本或控制源冲突；刷新快照后由操作员重试",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "就绪条件不满足",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "未实现；不得回退到旧设备 POST",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Operator authorization required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Origin, host or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation": "reserved (501)"
+      }
+    },
+    "/api/v1/console/deployment/jobs/{job_id}": {
+      "get": {
+        "operationId": "getDeploymentJob",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "job": {
+                      "$ref": "#/components/schemas/Job"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "job"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/console/workflows/runs/{run_id}": {
+      "get": {
+        "operationId": "getWorkflowRun",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "run": {
+                      "$ref": "#/components/schemas/WorkflowRun"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "run"
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/console/episodes/timeseries": {
+      "get": {
+        "operationId": "getEpisodeTimeseries",
+        "parameters": [
+          {
+            "name": "dataset",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "episode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "max_points",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 10000,
+              "default": 6000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Timeseries"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "关节序列未接入或不存在",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/collection": {
+      "get": {
+        "summary": "现有只读数据目录和前置项",
+        "parameters": [
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "sim",
+                "real"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/episodes": {
+      "get": {
+        "summary": "现有片段分页",
+        "parameters": [
+          {
+            "name": "dataset",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/episodes/review": {
+      "get": {
+        "summary": "现有片段元数据与录像 URL",
+        "parameters": [
+          {
+            "name": "dataset",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "episode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/episodes/rate": {
+      "post": {
+        "summary": "现有人工评级，仅修改元数据",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dataset": {
+                    "type": "string"
+                  },
+                  "episode": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "grade": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "A",
+                      "B",
+                      "F",
+                      null
+                    ]
+                  }
+                },
+                "required": [
+                  "dataset",
+                  "episode",
+                  "grade"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversions/sources": {
+      "get": {
+        "summary": "List saved SONIC datasets and isolated conversion runtime",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "datasets": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ConversionSource"
+                      }
+                    },
+                    "environment": {
+                      "$ref": "#/components/schemas/ConversionEnvironment"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversions/inspect": {
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dataset": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "dataset"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "inspection": {
+                      "$ref": "#/components/schemas/ConversionInspection"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversions/jobs": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "jobs": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ConversionJob"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "job": {
+                      "$ref": "#/components/schemas/ConversionJob"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Source changed, output exists, or another conversion is active",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Incomplete or unsupported source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Conversion dependencies unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversions/jobs/{job_id}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "job": {
+                      "$ref": "#/components/schemas/ConversionJob"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversions/jobs/{job_id}/cancel": {
+      "post": {
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "job": {
+                      "$ref": "#/components/schemas/ConversionJob"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/conversions/jobs/{job_id}/download": {
+      "get": {
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed output file, streamed with HTTP Range support"
+          },
+          "206": {
+            "description": "Partial file bytes"
+          },
+          "400": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Job not completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Completed output file, streamed with HTTP Range support"
+          },
+          "206": {
+            "description": "Partial file bytes"
+          },
+          "400": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Job not completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/episodes/video": {
+      "get": {
+        "summary": "Saved episode MP4 with byte-range support",
+        "parameters": [
+          {
+            "name": "dataset",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "episode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "camera",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "MP4 bytes (HEAD returns headers only)"
+          },
+          "206": {
+            "description": "Partial bytes"
+          },
+          "416": {
+            "description": "Requested range is not satisfiable"
+          },
+          "404": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "summary": "Saved episode MP4 with byte-range support",
+        "parameters": [
+          {
+            "name": "dataset",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "episode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "camera",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "MP4 bytes (HEAD returns headers only)"
+          },
+          "206": {
+            "description": "Partial bytes"
+          },
+          "416": {
+            "description": "Requested range is not satisfiable"
+          },
+          "404": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/console/session": {
+      "post": {
+        "summary": "Authorize LAN operations using the workstation-local key",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "operation_key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "operation_key"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/console/collection/logs": {
+      "get": {
+        "summary": "Bounded log tail for the managed recording worker (authorized operators)",
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "log": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/console/cameras/{camera_id}/stream": {
+      "get": {
+        "summary": "Passive same-origin MJPEG preview",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "head",
+                "left_wrist",
+                "right_wrist"
+              ]
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "sim",
+                "real"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fresh camera image stream"
+          },
+          "503": {
+            "description": "No fresh decoded frame",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stream connection limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/console/cameras/{camera_id}/frame": {
+      "get": {
+        "summary": "Latest fresh decoded JPEG",
+        "parameters": [
+          {
+            "name": "camera_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "head",
+                "left_wrist",
+                "right_wrist"
+              ]
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "sim",
+                "real"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Fresh camera image stream"
+          },
+          "503": {
+            "description": "No fresh decoded frame",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Stream connection limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/console/configuration": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigurationView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigurationWrite"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigurationView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Console-CSRF",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for same-origin browser writes. Operator session required on LAN."
+          }
+        ]
+      }
+    },
+    "/api/v1/console/poses": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "poses": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/NamedPose"
+                      }
+                    },
+                    "model_hash": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "profile_id": {
+                    "const": "unitree-g1-29"
+                  },
+                  "model_hash": {
+                    "type": "string"
+                  },
+                  "unit": {
+                    "const": "rad"
+                  },
+                  "joints": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "position_rad": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "position_rad"
+                      ]
+                    },
+                    "minItems": 29,
+                    "maxItems": 29
+                  },
+                  "revision": {
+                    "type": "integer"
+                  },
+                  "created_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "updated_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "archived": {
+                    "type": "boolean"
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "save",
+                      "archive"
+                    ]
+                  },
+                  "expected_revision": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Console-CSRF",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for same-origin browser writes. Operator session required on LAN."
+          }
+        ]
+      }
+    },
+    "/api/v1/console/poses/preview": {
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "sim",
+                      "real"
+                    ]
+                  },
+                  "start": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "position_rad": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "position_rad"
+                      ]
+                    },
+                    "minItems": 29,
+                    "maxItems": 29
+                  },
+                  "joints": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "position_rad": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "position_rad"
+                      ]
+                    },
+                    "minItems": 29,
+                    "maxItems": 29
+                  },
+                  "transition_seconds": {
+                    "type": "number"
+                  },
+                  "velocity_limit_rad_s": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "joints"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "trajectory": {
+                      "type": "object",
+                      "description": "121 minimum-jerk frames with time_s/positions_rad, canonical joint_names, unit rad and extended duration_seconds"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Console-CSRF",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for same-origin browser writes. Operator session required on LAN."
+          }
+        ]
+      }
+    },
+    "/api/v1/console/robot/manual": {
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Lease, owner, sequence or task conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Missing feedback or real output gated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Console-CSRF",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Required for same-origin browser writes. Operator session required on LAN."
+          }
+        ]
+      }
+    },
+    "/api/v1/console/diagnostics": {
+      "get": {
+        "parameters": [
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "sim",
+                "real"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "Bounded read-only ROS graph scan with publisher names, offered type/QoS and compatibility, frame counters/skew/errors, network carrier, G1/BMS age and model state. Only allowlisted fields; no environment, operation/session/lease keys, raw logs or dataset content."
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/console/diagnostics/download": {
+      "get": {
+        "parameters": [
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "sim",
+                "real"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized sanitized ZIP of diagnostics.json and README.txt",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/console/robot/commissioning": {
+      "get": {
+        "summary": "Read-only protocol/mapping/reference gains and local commissioning status; template query returns an UNAPPROVED generic reference JSON. No web approval/write route.",
+        "parameters": [
+          {
+            "name": "template",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/CommissioningReport"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CommissioningTemplate"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": false
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "blockers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "Joint": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "position_rad": {
+            "type": "number"
+          },
+          "velocity_rad_s": {
+            "type": "number"
+          },
+          "effort_nm": {
+            "type": "number"
+          },
+          "temperature_c": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "position_rad"
+        ],
+        "description": "Name is authoritative. Do not interpret URDF visualization order as DDS motor index."
+      },
+      "Battery": {
+        "type": "object",
+        "properties": {
+          "percent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 100
+          },
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "source": {
+            "type": "string"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "charging": {
+            "type": "boolean"
+          },
+          "voltage_v": {
+            "type": "number"
+          },
+          "current_a": {
+            "type": "number"
+          },
+          "low_percent": {
+            "type": "number",
+            "default": 20
+          },
+          "critical_percent": {
+            "type": "number",
+            "default": 10
+          }
+        },
+        "required": [
+          "percent",
+          "observed_at"
+        ],
+        "description": "Read from actual G1 BMS. Missing/invalid/stale feedback is unknown. Browser sample TTL 15 s; robot TTL 5 s."
+      },
+      "Robot": {
+        "type": "object",
+        "properties": {
+          "connected": {
+            "type": "boolean"
+          },
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "initialized": {
+            "type": "boolean"
+          },
+          "initialization_profile_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "manual",
+              "pico",
+              "task-model",
+              "workflow",
+              null
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "OFF",
+              "PLANNER",
+              "MIMIC",
+              "UNKNOWN"
+            ]
+          },
+          "joints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Joint"
+            }
+          }
+        },
+        "required": [
+          "connected",
+          "observed_at",
+          "owner",
+          "mode",
+          "joints"
+        ],
+        "description": "For G1 body feedback supply all 29 unique names matching assets/g1/profile.json; finger joints are separate capabilities. A listening port is insufficient to mark connected."
+      },
+      "Camera": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "head",
+              "left_wrist",
+              "right_wrist"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "offline",
+              "connecting",
+              "streaming",
+              "error"
+            ]
+          },
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "transport": {
+            "type": "string",
+            "enum": [
+              "video",
+              "mjpeg"
+            ]
+          },
+          "url": {
+            "type": "string"
+          },
+          "fps": {
+            "type": "number"
+          },
+          "latency_ms": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "observed_at"
+        ],
+        "description": "observed_at is the latest decoded frame time, not a heartbeat. TTL 5 s. URLs must be same-origin proxy or reachable HTTP(S), with no credentials. video must be browser-native; no HLS/WebRTC adapter is bundled."
+      },
+      "Adapter": {
+        "type": "object",
+        "properties": {
+          "validated": {
+            "type": "boolean"
+          },
+          "semantic": {
+            "type": "string"
+          },
+          "dimension": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "unit": {
+            "type": "string"
+          },
+          "frequency_hz": {
+            "type": "number"
+          },
+          "input_schema": {
+            "type": "string"
+          },
+          "output_schema": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "validated"
+        ],
+        "description": "Backend validates action semantics, named dimension/order, units, coordinates, frequency, limits and controller compatibility before can_infer=true."
+      },
+      "Model": {
+        "type": "object",
+        "properties": {
+          "connected": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "disconnected",
+              "connecting",
+              "ready",
+              "running",
+              "failed"
+            ]
+          },
+          "steps": {
+            "type": "integer"
+          },
+          "latency_ms": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "frequency_hz": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "recording": {
+            "type": "boolean"
+          },
+          "adapter": {
+            "$ref": "#/components/schemas/Adapter"
+          }
+        },
+        "required": [
+          "connected",
+          "state"
+        ]
+      },
+      "Check": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "passed",
+              "blocked",
+              "warning",
+              "pending"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "status",
+          "detail"
+        ]
+      },
+      "Event": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "info",
+              "success",
+              "warning",
+              "error"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "level",
+          "title"
+        ]
+      },
+      "Job": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "pending",
+              "running",
+              "waiting",
+              "ready",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "enum": [
+                    "environment",
+                    "runtime",
+                    "sensors",
+                    "input",
+                    "robot"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "succeeded",
+                    "blocked",
+                    "failed",
+                    "cancelled"
+                  ]
+                },
+                "detail": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "state"
+              ]
+            }
+          },
+          "message": {
+            "type": "string"
+          },
+          "log": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sim",
+              "real"
+            ]
+          },
+          "allow_motion": {
+            "const": false
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "steps"
+        ],
+        "description": "Accepted is not ready. waiting means software prepared but external devices are absent. Only ready proves all observed sources are fresh. Poll GET deployment/jobs/{job_id} for bounded logs. Preparation never starts the motion controller."
+      },
+      "OperatorAccess": {
+        "type": "object",
+        "properties": {
+          "authorized": {
+            "type": "boolean"
+          },
+          "csrf_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorized"
+        ],
+        "description": "Workstation-local CLI/SSH connections are trusted. LAN writes need an 8-hour signed HttpOnly session obtained using the local operation-key. Browser writes additionally send X-Console-CSRF from an authorized snapshot. Never log the key."
+      },
+      "PicoStatus": {
+        "type": "object",
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "body_ready": {
+            "type": "boolean"
+          },
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "device_timestamp_ns": {
+            "type": "integer"
+          },
+          "body_timestamp_ns": {
+            "type": "integer"
+          },
+          "calibration_confirmed": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "CollectionStatus": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "preparing",
+              "ready",
+              "recording",
+              "saving",
+              "ended",
+              "failed"
+            ]
+          },
+          "prepared": {
+            "type": "boolean"
+          },
+          "recording": {
+            "type": "boolean"
+          },
+          "elapsed_seconds": {
+            "type": "number"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "dataset": {
+            "type": "string"
+          },
+          "frames": {
+            "type": "integer"
+          },
+          "episodes_saved": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "busy": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "mode_conflict": {
+            "type": "boolean"
+          },
+          "control_scope": {
+            "const": "recording_only"
+          },
+          "pending_command": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "last_command": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "prepared",
+          "recording"
+        ],
+        "description": "The durable worker acknowledges explicit start/save/discard/end commands. Only confirmed worker state is displayed. Owns the recording task, does not initialize or take over the external SONIC motion controller. Data loss finalizes current frames as discarded when possible; incomplete output is preserved."
+      },
+      "Group": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "episodes": {
+            "type": "integer"
+          },
+          "retained": {
+            "type": "integer"
+          },
+          "fps": {
+            "type": "number"
+          },
+          "demo_only": {
+            "type": "boolean"
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "A": {
+                "type": "number"
+              },
+              "B": {
+                "type": "number"
+              },
+              "F": {
+                "type": "number"
+              },
+              "unreviewed": {
+                "type": "number"
+              },
+              "discarded": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        "required": [
+          "name",
+          "episodes",
+          "demo_only"
+        ]
+      },
+      "Snapshot": {
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "capabilities": {
+            "type": "object",
+            "properties": {
+              "commands": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "camera_transports": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "video",
+                    "mjpeg"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "commands"
+            ]
+          },
+          "robot": {
+            "$ref": "#/components/schemas/Robot"
+          },
+          "battery": {
+            "$ref": "#/components/schemas/Battery"
+          },
+          "services": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "offline",
+                    "ready",
+                    "running",
+                    "stopped",
+                    "failed"
+                  ]
+                },
+                "observed_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "owned": {
+                  "type": "boolean"
+                },
+                "unity_running": {
+                  "type": "boolean"
+                },
+                "stop_allowed": {
+                  "type": "boolean"
+                },
+                "stop_reason": {
+                  "type": "string"
+                },
+                "container_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            }
+          },
+          "cameras": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Camera"
+            }
+          },
+          "model": {
+            "$ref": "#/components/schemas/Model"
+          },
+          "collection": {
+            "$ref": "#/components/schemas/CollectionStatus"
+          },
+          "access": {
+            "$ref": "#/components/schemas/OperatorAccess"
+          },
+          "pico": {
+            "$ref": "#/components/schemas/PicoStatus"
+          },
+          "interlocks": {
+            "type": "object",
+            "properties": {
+              "can_initialize": {
+                "type": "boolean"
+              },
+              "can_claim": {
+                "type": "boolean"
+              },
+              "can_apply_pose": {
+                "type": "boolean"
+              },
+              "can_infer": {
+                "type": "boolean"
+              },
+              "can_collect": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "reasons": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "can_claim",
+              "can_apply_pose",
+              "can_infer",
+              "can_collect"
+            ]
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Check"
+            }
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Event"
+            }
+          },
+          "deployment": {
+            "$ref": "#/components/schemas/Job"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Group"
+            }
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "datasets": {
+                "type": "integer"
+              },
+              "episodes": {
+                "type": "integer"
+              },
+              "demo_episodes": {
+                "type": "integer"
+              }
+            }
+          },
+          "output_root": {
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/WorkflowRun"
+          },
+          "camera_source": {
+            "$ref": "#/components/schemas/CameraSource"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sim",
+              "real"
+            ]
+          },
+          "manual": {
+            "$ref": "#/components/schemas/ManualStatus"
+          }
+        },
+        "required": [
+          "revision",
+          "observed_at",
+          "capabilities",
+          "robot",
+          "battery",
+          "services",
+          "cameras",
+          "model",
+          "collection",
+          "interlocks",
+          "checks",
+          "events",
+          "groups",
+          "totals"
+        ],
+        "description": "Only the v1 endpoint is trusted for execution capabilities. Frontend source/live flags are assigned locally. Totals.episodes counts retained real episodes only; demo_episodes is separate. Backend MUST repeat all interlocks atomically; UI checks are not a safety boundary."
+      },
+      "Accepted": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "pending",
+              "running",
+              "succeeded",
+              "stopped"
+            ]
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "motion_stop_supported": {
+            "type": "boolean"
+          },
+          "lease_token": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "target_state": {
+            "type": "string"
+          },
+          "duration_seconds": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "ok",
+          "command_id",
+          "state"
+        ],
+        "description": "Acknowledgement only. Refresh snapshot for actual device readiness and last_command acknowledgement. Deployment/service preparation returns job_id. Current safety.stop ends console preparation/recording and manual simulation, including a task in another selected mode; physical motion stop is not yet implemented."
+      },
+      "Node": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "start",
+              "self_check",
+              "prepare_runtime",
+              "wait_sensors",
+              "wait_robot",
+              "model_connect",
+              "claim_control",
+              "collection_prepare",
+              "inference",
+              "collection_start",
+              "collection_save",
+              "wait",
+              "stop",
+              "end"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "x": {
+            "type": "number",
+            "minimum": -10000,
+            "maximum": 10000
+          },
+          "y": {
+            "type": "number",
+            "minimum": -10000,
+            "maximum": 10000
+          },
+          "timeout_s": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 3600
+          },
+          "params": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "label",
+          "x",
+          "y",
+          "timeout_s",
+          "params"
+        ]
+      },
+      "Workflow": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": 1
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "task_kind": {
+            "type": "string",
+            "enum": [
+              "inference",
+              "collection"
+            ]
+          },
+          "max_transitions": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Node"
+            },
+            "maxItems": 100
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "from": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                },
+                "outcome": {
+                  "type": "string",
+                  "enum": [
+                    "success",
+                    "failure",
+                    "stop"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "from",
+                "to",
+                "outcome"
+              ]
+            },
+            "maxItems": 300
+          }
+        },
+        "required": [
+          "schema_version",
+          "id",
+          "name",
+          "task_kind",
+          "max_transitions",
+          "nodes",
+          "edges"
+        ],
+        "description": "Exactly one start/end, unique node/edge ids, no dangling edges, all nodes reachable; one outgoing edge per outcome. Bounded transitions/timeouts enforced by backend. Never execute a graph directly as code/shell."
+      },
+      "Timeseries": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string"
+          },
+          "unit": {
+            "const": "rad"
+          },
+          "time_base": {
+            "const": "episode_start"
+          },
+          "joint_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 29
+          },
+          "frames": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "time_s": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "state": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 29
+                },
+                "action": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "minItems": 29
+                }
+              },
+              "required": [
+                "time_s",
+                "state",
+                "action"
+              ]
+            }
+          },
+          "original_frames": {
+            "type": "integer"
+          },
+          "returned_frames": {
+            "type": "integer"
+          },
+          "sampled": {
+            "type": "boolean"
+          },
+          "source_time_origin_s": {
+            "type": "number"
+          },
+          "duration_seconds": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "unit",
+          "joint_names",
+          "frames"
+        ],
+        "description": "Reads observation.state and action.wbc by declared unique names; retains full declared dimensions including hands. Rejects absent names, incompatible units, malformed frames or non-increasing timestamps. The first recorded frame is video zero. max_points bounds visualization only, preserving first/last and reporting sampled=true; original files are never changed."
+      },
+      "WorkflowRun": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "graph_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "idle",
+              "pending",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "node_states": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+                "skipped"
+              ]
+            }
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "graph_id",
+          "state",
+          "node_states"
+        ]
+      },
+      "SelfCheckCommand": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "run"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sim",
+              "real"
+            ]
+          },
+          "profile_id": {
+            "const": "unitree-g1-29"
+          },
+          "expected_revision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "read_only": {
+                "const": true
+              }
+            },
+            "description": "No hardware movement."
+          }
+        },
+        "required": [
+          "action",
+          "mode",
+          "profile_id",
+          "expected_revision",
+          "payload"
+        ]
+      },
+      "DeploymentCommand": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "prepare",
+              "cancel"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sim",
+              "real"
+            ]
+          },
+          "profile_id": {
+            "const": "unitree-g1-29"
+          },
+          "expected_revision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "allow_motion": {
+                "const": false
+              },
+              "job_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "allow_motion"
+            ],
+            "description": "cancel additionally requires job_id."
+          }
+        },
+        "required": [
+          "action",
+          "mode",
+          "profile_id",
+          "expected_revision",
+          "payload"
+        ]
+      },
+      "RobotCommand": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "connect",
+              "initialize",
+              "claim",
+              "release",
+              "set_mode",
+              "apply_pose"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sim",
+              "real"
+            ]
+          },
+          "profile_id": {
+            "const": "unitree-g1-29"
+          },
+          "expected_revision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "initialization_profile_id": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string",
+                "enum": [
+                  "manual",
+                  "pico",
+                  "task-model",
+                  "workflow"
+                ]
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "OFF",
+                  "PLANNER",
+                  "MIMIC"
+                ]
+              },
+              "joints": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "position_rad": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "position_rad"
+                  ]
+                },
+                "minItems": 29,
+                "maxItems": 29
+              },
+              "unit": {
+                "const": "rad"
+              },
+              "transition_seconds": {
+                "type": "number",
+                "minimum": 0.25
+              },
+              "lease_token": {
+                "type": "string"
+              },
+              "sequence": {
+                "type": "integer"
+              },
+              "velocity_limit_rad_s": {
+                "type": "number"
+              },
+              "supported_operation_confirmed": {
+                "type": "boolean"
+              }
+            },
+            "description": "sim initialize starts fixed-base MuJoCo without requiring preexisting feedback. sim claim accepts manual owner and returns lease_token. apply_pose requires unique named 29 joints in rad, increasing sequence, private lease_token and fresh physical feedback. release requires lease_token. Real motion and set_mode are gated. connect is read-only."
+          }
+        },
+        "required": [
+          "action",
+          "mode",
+          "profile_id",
+          "expected_revision",
+          "payload"
+        ]
+      },
+      "InferenceCommand": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "connect",
+              "disconnect",
+              "start",
+              "stop"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sim",
+              "real"
+            ]
+          },
+          "profile_id": {
+            "const": "unitree-g1-29"
+          },
+          "expected_revision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "endpoint": {
+                "type": "string"
+              },
+              "model_id": {
+                "type": "string"
+              },
+              "action_schema": {
+                "type": "string",
+                "enum": [
+                  "named-joint-rad-v1",
+                  "body-command-v1",
+                  "custom-adapter-v1"
+                ]
+              },
+              "frequency_hz": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200
+              },
+              "task": {
+                "type": "string"
+              },
+              "record": {
+                "type": "boolean"
+              }
+            },
+            "description": "connect/start require model configuration. start additionally requires nonempty task, validated adapter, all observations, controller ready, exclusive task-model ownership; recording requires backend support."
+          }
+        },
+        "required": [
+          "action",
+          "mode",
+          "profile_id",
+          "expected_revision",
+          "payload"
+        ]
+      },
+      "CollectionCommand": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "prepare",
+              "start",
+              "save",
+              "discard",
+              "end"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sim",
+              "real"
+            ]
+          },
+          "profile_id": {
+            "const": "unitree-g1-29"
+          },
+          "expected_revision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "dataset": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_-]{1,80}$"
+              },
+              "task": {
+                "type": "string"
+              },
+              "fps": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 120
+              },
+              "camera_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "head",
+                    "left_wrist",
+                    "right_wrist"
+                  ]
+                }
+              }
+            },
+            "description": "prepare/start require dataset, task, fps, camera_ids. Backend checks calibrated PICO/trackers, clocks, cameras, 29 joint feedback and exclusive ownership. save/discard terminate only the current unsaved recording. end releases PICO task ownership."
+          }
+        },
+        "required": [
+          "action",
+          "mode",
+          "profile_id",
+          "expected_revision",
+          "payload"
+        ]
+      },
+      "ServicesCommand": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "start",
+              "stop"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sim",
+              "real"
+            ]
+          },
+          "profile_id": {
+            "const": "unitree-g1-29"
+          },
+          "expected_revision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "service_id": {
+                "type": "string",
+                "enum": [
+                  "docker",
+                  "pc_service",
+                  "controller",
+                  "cameras",
+                  "exporter"
+                ]
+              }
+            },
+            "required": [
+              "service_id"
+            ],
+            "description": "Capability name is services.{service_id}.{action}. Docker stop targets the owned immutable container id and only an idle container; pc_service stop closes the owned PC Service and Unity 3D. Both require no recording/manual/preparation/controller activity. Service metadata stop_allowed/stop_reason reports blockers. Explicit start resumes an operator-stopped XR service."
+          }
+        },
+        "required": [
+          "action",
+          "mode",
+          "profile_id",
+          "expected_revision",
+          "payload"
+        ]
+      },
+      "SafetyCommand": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "stop"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sim",
+              "real"
+            ]
+          },
+          "profile_id": {
+            "const": "unitree-g1-29"
+          },
+          "expected_revision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {},
+            "description": "Backend stops current task/recording and relinquishes control via a validated controller policy. Always accept authorized stop regardless of stale revision/ownership; this is a software task stop, not a substitute for physical emergency stop."
+          }
+        },
+        "required": [
+          "action",
+          "mode",
+          "profile_id",
+          "expected_revision",
+          "payload"
+        ]
+      },
+      "WorkflowsCommand": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "run",
+              "cancel"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sim",
+              "real"
+            ]
+          },
+          "profile_id": {
+            "const": "unitree-g1-29"
+          },
+          "expected_revision": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "graph": {
+                "$ref": "#/components/schemas/Workflow"
+              },
+              "run_id": {
+                "type": "string"
+              }
+            },
+            "description": "Run only validated backend node implementations; UI-only preview_fail is stripped."
+          }
+        },
+        "required": [
+          "action",
+          "mode",
+          "profile_id",
+          "expected_revision",
+          "payload"
+        ]
+      },
+      "ConversionRequest": {
+        "type": "object",
+        "properties": {
+          "dataset": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "hdf5",
+              "lerobot_v21"
+            ]
+          },
+          "video_mode": {
+            "type": "string",
+            "enum": [
+              "embedded_mp4",
+              "rgb"
+            ]
+          },
+          "output_name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,80}$"
+          },
+          "fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataset",
+          "format",
+          "output_name",
+          "fingerprint"
+        ]
+      },
+      "ConversionJob": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "dataset": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "hdf5",
+              "lerobot_v21"
+            ]
+          },
+          "video_mode": {
+            "type": "string",
+            "enum": [
+              "embedded_mp4",
+              "rgb"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "progress": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          },
+          "episodes_done": {
+            "type": "number"
+          },
+          "episodes_total": {
+            "type": "number"
+          },
+          "created_at": {
+            "type": "number"
+          },
+          "updated_at": {
+            "type": "number"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "bytes": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "path",
+                "bytes"
+              ]
+            }
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "progress",
+          "message"
+        ],
+        "description": "Offline job: does not use robot capabilities. Source restricted to direct SONIC outputs datasets. Exclusive new output directory; partial cancelled/failed output retained with .incomplete. Never overwrite or delete source. One active conversion at a time. Server restarts do not stop worker."
+      },
+      "ConversionEnvironment": {
+        "type": "object",
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "ffmpeg": {
+            "type": "boolean"
+          },
+          "ffprobe": {
+            "type": "boolean"
+          },
+          "output_root": {
+            "type": "string"
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hdf5_schema": {
+            "const": "sonic-hdf5-v1"
+          }
+        }
+      },
+      "ConversionSource": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "episodes": {
+            "type": "number"
+          },
+          "frames": {
+            "type": "number"
+          },
+          "fps": {
+            "type": "number"
+          },
+          "demo_only": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConversionInspection": {
+        "type": "object",
+        "properties": {
+          "dataset": {
+            "type": "string"
+          },
+          "native_format": {
+            "type": "string"
+          },
+          "can_convert": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "fingerprint": {
+            "type": "string"
+          },
+          "episodes": {
+            "type": "number"
+          },
+          "frames": {
+            "type": "number"
+          },
+          "fps": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "bytes": {
+            "type": "number"
+          },
+          "video_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "dtype": {
+                  "type": "string"
+                },
+                "shape": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "dataset",
+          "can_convert",
+          "errors",
+          "fingerprint"
+        ],
+        "description": "Metadata/version/paths/files preflight. Worker additionally validates all Parquet values, per-episode timestamps and video frame counts. LeRobot v3 and debug CSV are not accepted."
+      },
+      "CameraSource": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ros2",
+              "zmq"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "external",
+              "starting",
+              "waiting",
+              "streaming",
+              "stopped",
+              "failed"
+            ]
+          },
+          "domain_id": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 232
+          },
+          "topics": {
+            "type": "object"
+          },
+          "views": {
+            "type": "object"
+          },
+          "errors": {
+            "type": "object"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "packets": {
+            "type": "integer"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "state"
+        ],
+        "description": "ROS 2 image-only bridge runs in its own process/domain (default 99); Unitree DDS domain is unchanged. Uses source header timestamps, bounded skew and explicit resize. cameras service start/stop owns only this publisher; recording blocks its reconfiguration."
+      },
+      "ConnectionConfig": {
+        "type": "object",
+        "properties": {
+          "interface": {
+            "type": "string"
+          },
+          "dds_domain": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 232
+          },
+          "state_endpoint": {
+            "type": "string"
+          },
+          "pose_endpoint": {
+            "type": "string"
+          },
+          "camera_endpoint": {
+            "type": "string"
+          },
+          "camera_source": {
+            "type": "string",
+            "enum": [
+              "ros2",
+              "zmq"
+            ]
+          },
+          "ros2_camera": {
+            "type": "object"
+          },
+          "camera_keys": {
+            "type": "object"
+          },
+          "bms_topics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pico_calibration_confirmed": {
+            "type": "boolean"
+          },
+          "source_max_age_seconds": {
+            "type": "number"
+          },
+          "prepare_timeout_seconds": {
+            "type": "number"
+          }
+        },
+        "additionalProperties": false,
+        "description": "All fields validated by SystemDriver and validate_ros2_config. ROS default Domain 99 is independent of Unitree DDS Domain 0. No real-motion enable flag is accepted."
+      },
+      "ConfigurationDocument": {
+        "type": "object",
+        "properties": {
+          "sim": {
+            "$ref": "#/components/schemas/ConnectionConfig"
+          },
+          "real": {
+            "$ref": "#/components/schemas/ConnectionConfig"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "sim",
+          "real"
+        ]
+      },
+      "ConfigurationView": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "document": {
+            "$ref": "#/components/schemas/ConfigurationDocument"
+          },
+          "config_revision": {
+            "type": "string"
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "backups": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "requires_reconnect": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "ConfigurationWrite": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "validate",
+              "save",
+              "save_profile",
+              "load_profile",
+              "restore"
+            ]
+          },
+          "document": {
+            "$ref": "#/components/schemas/ConfigurationDocument"
+          },
+          "expected_revision": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "description": "Writes require current config_revision, reject active preparation/recording/manual owner, and create a backup before applying. validate is read-only. Save stops old readers; reconnect via robot.connect with latest snapshot revision. Profiles and backup restore never resume robot motion."
+      },
+      "NamedPose": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "profile_id": {
+            "const": "unitree-g1-29"
+          },
+          "model_hash": {
+            "type": "string"
+          },
+          "unit": {
+            "const": "rad"
+          },
+          "joints": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "position_rad": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "name",
+                "position_rad"
+              ]
+            },
+            "minItems": 29,
+            "maxItems": 29
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "archived": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "joints"
+        ],
+        "description": "Complete unique named 29 joints; exact model limits, profile/hash and radians checked before saving. Saving/loading is not sending. Archive retains recoverable JSON."
+      },
+      "ManualStatus": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "running",
+              "stopped",
+              "gated",
+              "starting",
+              "ready",
+              "active",
+              "stopping",
+              "fault"
+            ]
+          },
+          "owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_state": {
+            "type": "string",
+            "enum": [
+              "moving",
+              "tracking",
+              "reached",
+              "held"
+            ]
+          },
+          "max_error_rad": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "steps": {
+            "type": "integer"
+          },
+          "lease_seconds": {
+            "type": "number"
+          },
+          "lease_active": {
+            "type": "boolean"
+          },
+          "gate": {
+            "type": "object"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "stop_acknowledged": {
+            "type": "boolean"
+          },
+          "control_scope": {
+            "type": "string"
+          },
+          "feedback_age_seconds": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        },
+        "description": "Actual fixed-base MuJoCo inertia/gravity/torque simulation, not balance validation. reached means max joint error <0.03 rad after transition. No simulated BMS value. Real provider unitree-sdk2-hg-pr uses validated HG feedback, local 4h/boot/host/source-bound commissioning, MotionSwitcher.CheckMode (no automatic ReleaseMode), unique LowState discovery and no foreign LowCmd writers. Starts supported-joint tests from observed posture; never auto-zero or balance. Normal release/lease expiry damps then disables for mechanically supported robots. Invalid feedback, mode/source conflicts or control deadline faults cease publishing; this is not a physical E-stop guarantee. Real worker is never boot-autostarted or auto-rearmed."
+      },
+      "ManualRequest": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sim",
+              "real"
+            ]
+          },
+          "profile_id": {
+            "const": "unitree-g1-29"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "heartbeat",
+              "apply_pose"
+            ]
+          },
+          "lease_token": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "joints": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "position_rad": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "name",
+                "position_rad"
+              ]
+            },
+            "minItems": 29,
+            "maxItems": 29
+          },
+          "unit": {
+            "const": "rad"
+          },
+          "transition_seconds": {
+            "type": "number",
+            "minimum": 0.25,
+            "maximum": 60
+          },
+          "velocity_limit_rad_s": {
+            "type": "number",
+            "minimum": 0.01,
+            "maximum": 1
+          }
+        },
+        "required": [
+          "mode",
+          "action",
+          "lease_token"
+        ],
+        "description": "Dedicated live target/heartbeat channel. One claim returns a private lease_token only to that caller; never included in snapshots/bundles. Heartbeat every <=1s, expires after 3s. Target sequence strictly increases per lease. Latest-wins UI sends <=10Hz, one in-flight. Backend extends minimum-jerk duration to satisfy velocity limit. Worker independently holds current position on expiry; web restart revokes ownership. Real mode requires a locally commissioned provider; without approval returns onsite_validation_required. Limits may be stricter than the simulation limits. Only heartbeat/apply_pose allowed on this channel."
+      },
+      "CommissioningReport": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "const": true
+          },
+          "gate": {
+            "type": "object"
+          },
+          "protocol": {
+            "type": "object"
+          },
+          "hardware_variant": {
+            "type": "string"
+          },
+          "hardware_variant_source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "checks": {
+            "type": "object"
+          },
+          "joints": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "notice": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "gate",
+          "protocol",
+          "checks",
+          "joints"
+        ]
+      },
+      "CommissioningTemplate": {
+        "type": "object",
+        "properties": {
+          "schema_version": {
+            "const": 1
+          },
+          "approved": {
+            "const": false
+          },
+          "hardware_variant": {
+            "const": "UNCONFIRMED"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "model_hash": {
+            "type": "string"
+          },
+          "joints": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "schema_version",
+          "approved",
+          "hardware_variant",
+          "joints"
+        ],
+        "description": "Unapproved generic reference only, never a transferable motion approval."
+      }
+    }
+  },
+  "x-integration-order": [
+    "read-only snapshot / battery / named 29 joints",
+    "three camera streams and synchronization",
+    "read-only self-check + no-motion deployment jobs",
+    "single owner + software stop + G1 controller initialization",
+    "PICO collection save/discard + real video/timeseries",
+    "task-model adapter handshake + inference",
+    "bounded workflow backend executor"
+  ]
+}

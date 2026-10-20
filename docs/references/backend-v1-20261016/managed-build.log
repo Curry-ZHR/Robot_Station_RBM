@@ -1,0 +1,46 @@
+-- C++ Compiler: /usr/bin/c++
+-- C++ Compiler ID: GNU
+-- C++ Compiler Version: 11.4.0
+-- 🎯 Using CUDAToolkit_ROOT from environment: /usr/local/cuda
+-- 🔍 Using CUDA_HOME from environment: /usr/local/cuda
+-- ✅ CUDA Toolkit found: version 12.4.131
+--    CUDA Root: /usr/local/cuda
+--    CUDA Libraries: /usr/local/cuda/lib64
+--    🔧 CUDA 12.x detected
+-- Current system architecture: x86_64
+-- Importing: /workspace/g1_deploy/thirdparty/unitree_sdk2/thirdparty/lib/x86_64/libddsc.so
+-- Importing: /workspace/g1_deploy/thirdparty/unitree_sdk2/thirdparty/lib/x86_64/libddscxx.so
+-- Unitree SDK library found at: /workspace/g1_deploy/thirdparty/unitree_sdk2/lib/x86_64/libunitree_sdk2.a
+-- Importing: /workspace/g1_deploy/thirdparty/unitree_sdk2/lib/x86_64/libunitree_sdk2.a
+-- blah = /workspace/g1_deploy/src/TRTInference/../../cmake
+-- Found rosidl_generator_c: 3.1.9 (/opt/ros/humble/share/rosidl_generator_c/cmake)
+-- Found rosidl_adapter: 3.1.9 (/opt/ros/humble/share/rosidl_adapter/cmake)
+-- Found rosidl_generator_cpp: 3.1.9 (/opt/ros/humble/share/rosidl_generator_cpp/cmake)
+-- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+-- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+-- Found rmw_implementation_cmake: 6.1.2 (/opt/ros/humble/share/rmw_implementation_cmake/cmake)
+-- Found rmw_fastrtps_cpp: 6.2.10 (/opt/ros/humble/share/rmw_fastrtps_cpp/cmake)
+-- Using RMW implementation 'rmw_fastrtps_cpp' as default
+-- ✅ msgpack found at: /usr/include
+-- ✅ x86_64 detected - building without DLA support
+--    Using CUDA library path: /usr/local/cuda/lib64
+-- ✅ ZMQ support enabled for main executable
+-- ✅ Added zmq_pose_subscriber_test (ZMQ found)
+-- ✅ Added zmq_python_sender_test (ZMQ found)
+-- Configuring ROS2 support...
+-- 📦 Found ROS2 humble at /opt/ros/humble
+-- ✅ ROS2 configuration: 39 libraries discovered
+-- ✅ ROS2 test executable configured
+-- ✅ FastRTPS profile copied for test deployment
+-- ✅ ROS2InputHandler support enabled with msgpack
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /workspace/g1_deploy/build
+Consolidate compiler generated dependencies of target TRTInference
+Consolidate compiler generated dependencies of target audio_thread
+[ 18%] Built target TRTInference
+[ 36%] Built target audio_thread
+Consolidate compiler generated dependencies of target g1_deploy_shared
+[ 81%] Built target g1_deploy_shared
+Consolidate compiler generated dependencies of target g1_deploy_onnx_ref
+[100%] Built target g1_deploy_onnx_ref
