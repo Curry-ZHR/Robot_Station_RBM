@@ -2,7 +2,17 @@
 
 最后更新：2026-10-20，Asia/Shanghai。此文件是本项目后续开发的首读入口；历史部署说明保留在 [handoff_deploy_1015.md](handoff_deploy_1015.md)。
 
-## 0P. 2026-10-20 补齐容器/XRoboToolkit停止与源码交付说明（最新）
+## 0Q. 2026-10-20 GitHub源码同步与读者README（最新）
+
+用户要求先完成当前源码上传，再单独整理规范README并再次上传。功能更新已在4070仓库main提交并推送为 `addbbc6aad79d8bd309f1efaf7447bd1549bfd22`，远端仓库为 `Curry-ZHR/Robot_Station_RBM`；包含第0P及此前工作台更新，未提交运行密钥、现场授权、虚拟环境或采集数据。
+
+后续文档提交重写根README，提供git/ZIP下载、无需机器人或SONIC依赖的静态预览、功能状态表、Ubuntu部署前置条件、辅助环境安装、启停自启动、网络/Host配置、数据格式、测试与文档导航。同步更新apps/README及后端接入首页，消除旧2947端口/根入口仍为旧ROS/旧接口版本的矛盾。首次使用请读根README；历史平台目录与当前apps明确区分。
+
+文档验收：从已提交Git静态资源导出独立临时目录，不包含SONIC环境或本机runtime，用Python标准库HTTP服务成功读取预览入口、29维模型及58个图像/视频/模型/脚本资源；31个仓库内文档链接存在性检查通过，接口版本及路径/schema数量与实际规范一致。19项前端测试再次通过；本轮文档更新不启动或停止正式服务，不调用真机控制接口。
+
+README不将源码下载说成已交付可迁移安装包，不将离线测试说成实机验收。第0L的.deb待办、第0M的SONIC姿态交接暂缓、真实标定和任务模型/后台状态机待接入均保持不变；本次GitHub同步不代表整机最终交付完成。
+
+## 0P. 2026-10-20 补齐容器/XRoboToolkit停止与源码交付说明
 
 用户要求补齐“整机管理”中SONIC容器与XRoboToolkit的实际停止，并将4070的`/home/harry/workspace/robot_station`更新commit/push到`Curry-ZHR/Robot_Station_RBM`。仓库origin与该目标一致，按现有README在main维护；本轮包含此前未提交的工作台、SDK、相机/采集/回放/转换、启停入口、交接与部署分工更新。
 

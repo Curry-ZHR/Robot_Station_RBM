@@ -1,14 +1,14 @@
 # Robot Station 统一工作台与后端接入
 
-更新：2026-10-19，Asia/Shanghai。当前开发范围为用户确认的 ①状态/自检、②SONIC 软件启动管理、③数据回放、④采集任务管理。任务模型推理与状态机后台执行按用户要求留到真机采集之后。
+更新：2026-10-20，Asia/Shanghai。当前开发范围为用户确认的 ①状态/自检、②SONIC 软件启动管理、③数据回放、④采集任务管理；连接诊断、独立SDK适配和服务停止的最新状态见主handoff。任务模型推理与状态机后台执行按用户要求留到真机采集之后。
 
 ## 接续入口与运行
 
 - 项目交接：[HANDOFF.md](../HANDOFF.md)，以最上方最新阶段为准。
-- [OpenAPI 3.1 接口规范](../apps/contracts/console-v1.openapi.json)，当前版本 1.3.0，27 个路径、34 个数据结构；[生成器](../apps/contracts/build_contract.py)。各命令的 `x-implementation` 明确已实现和保留部分。
+- [OpenAPI 3.1 接口规范](../apps/contracts/console-v1.openapi.json)，当前版本 1.6.0，34 个路径、43 个数据结构；[生成器](../apps/contracts/build_contract.py)。各命令的 `x-implementation` 明确已实现和保留部分。
 - 4070 主目录 `/home/harry/workspace/robot_station`；SONIC 在同级 `/home/harry/workspace/sonic_deploy`。
 - 固定网页入口 `http://192.168.123.100:9999/`；Mac 当前转发入口 `http://127.0.0.1:12947/`。
-- 仅管理网页：在 Robot Station 根目录使用 `./run.sh apps start`、`status`、`stop`、`restart`、`logs`。根目录不带参数的 `./run.sh` 是旧 ROS 启动器，包含其他硬件/构建逻辑。
+- 当前统一入口：在 Robot Station 根目录使用 `./run.sh`、`./run.sh status`、`./run.sh logs`、`./stop.sh`；`apps` 参数保留为兼容别名。旧 ROS 启动器已迁为 `run_legacy_ros.sh`，不用于 G1 日常启停。首次下载和预览见根 [README](../README.md)。
 - 网络静态配置和 NO-CARRIER 的历史说明见交接 0A；现场须确认 .100 无冲突、有线链路接通及浏览器路由。
 
 网页仍有九页：两层推理、自检与启动、整机管理、全身控制、三相机传感器、采集、回放、转换、状态机。实际 G1 URDF / 50 个 STL 与 29 身体关节可视化沿用现有资源；源模型包含手部共 43 维。可视化顺序不是 DDS 电机索引。
