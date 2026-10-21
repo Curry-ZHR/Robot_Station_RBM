@@ -33,3 +33,30 @@ main{padding:27px 30px 36px;max-width:1820px;margin:auto}.page-heading{display:f
 .joint-target-slider::-moz-range-thumb{width:12px;height:12px;border:2px solid #fff;border-radius:50%;background:var(--blue);box-shadow:0 0 0 1px #a9c4f5}
 .joint-target-value input[aria-invalid=true]{border-color:#dc6666;background:#fff8f7}
 @media(max-width:760px){.joint-target-control{min-width:130px}}
+/* SONIC teleoperation owns runtime controls; machine services stay camera/data focused. */
+.service-heading{margin-bottom:13px;gap:12px;flex-wrap:wrap}
+.machine-services{grid-template-columns:repeat(2,minmax(0,1fr))}
+.service-icon{width:40px;height:40px;display:grid;place-items:center;background:#eef4ff;border-radius:10px;color:#6c91c7;margin-bottom:17px}
+.service-icon svg{width:21px;height:21px}
+.service-card{display:flex;flex-direction:column;min-width:0}
+.service-card>p{line-height:1.8;margin:8px 0 14px}
+.service-detail{font-size:10px;line-height:1.9;color:#7d90ab;overflow-wrap:anywhere;min-height:38px}
+.service-card>.service-note{font-size:10px;line-height:1.8;color:#9aa7b9;margin:10px 0}
+.service-actions{margin-top:auto;padding-top:17px;gap:10px;flex-wrap:wrap}
+.teleop-mode-bar{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:17px;flex-wrap:wrap}
+.teleop-tabs{display:flex;gap:5px;padding:5px;border:1px solid #e2eaf5;background:#f0f4fa;border-radius:11px}
+.teleop-tab{display:flex;gap:10px;align-items:center;padding:12px 20px;border-radius:7px;background:transparent;color:#8a9bb4;text-align:left;font-size:12px;min-height:58px}
+.teleop-tab svg{width:20px;height:20px}.teleop-tab small{display:block;font-size:9px;margin-top:5px;font-weight:400}
+.teleop-tab.active{background:#fff;color:#3974df;box-shadow:0 2px 6px #5f7da515}
+.teleop-tab:focus-visible{outline:2px solid #6b9cf2;outline-offset:2px}
+.teleop-context{display:flex;align-items:flex-start;gap:12px;padding:16px 18px;background:#f3f7ff;border:1px solid #e0eafb;border-radius:9px;margin-bottom:19px;color:#6c88af}
+.teleop-context>svg{width:20px;height:20px;flex-shrink:0;margin-top:2px}.teleop-context b{font-size:12px;font-weight:500}.teleop-context p{font-size:10px;line-height:1.9;margin-top:5px}
+.teleop-context.real{background:#fff9f1;border-color:#f0e2cc;color:#aa8a5e}
+.teleop-steps{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:18px}
+.teleop-steps li{display:flex;align-items:flex-start;gap:12px}.teleop-steps li>span{display:grid;place-items:center;width:27px;height:27px;flex-shrink:0;background:#edf3ff;color:#6e95ce;border-radius:8px;font-size:10px}.teleop-steps b{font-size:11px;font-weight:500;color:#637d9e}.teleop-steps p{font-size:10px;line-height:1.8;color:#96a5b9;margin-top:4px}.teleop-steps .pending>span{background:#f1f3f7;color:#a4afbf}
+@media(max-width:760px){.teleop-mode-bar{align-items:stretch}.teleop-tabs{flex:1}.teleop-tab{flex:1;padding:10px 13px}.machine-services{grid-template-columns:1fr}.teleop-context{padding:13px 14px}}
+@media(max-width:420px){.teleop-tabs{width:100%}.teleop-tab{padding:10px;font-size:11px}.teleop-tab svg{width:17px}.teleop-tab small{font-size:8px}}
+.teleop-robot-viewer{height:410px}.teleop-robot-viewer .viewer-toolbar{padding:8px;background:#f1f5fae6;border-radius:6px}.teleop-robot-viewer .model-note .badge{white-space:normal;line-height:1.7}
+@media(max-width:760px){.teleop-robot-viewer{height:340px}}
+
+.teleop-robot-viewer .model-note{display:flex;flex-wrap:wrap;align-items:center;gap:6px;pointer-events:none}.teleop-robot-viewer .viewer-rate{font-variant-numeric:tabular-nums;white-space:nowrap;background:#ffffffdf;border:1px solid #e2e9f2;color:#607b9c}

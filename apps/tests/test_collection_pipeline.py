@@ -78,7 +78,7 @@ class ProtocolFixture:
                 atomic_json(self.probe,{"heartbeat_at":stamp,"pico":{"body_ready":True,"observed_at":stamp}})
                 if not self.emit:continue
                 index+=1
-                state={"control_index":index,"ros_timestamp":time.time(),"body_q":[index/10000]*29,"body_dq":[0.]*29,
+                state={"control_loop_type":"cpp","index":index,"ros_timestamp":time.time(),"body_q":[index/10000]*29,"body_dq":[0.]*29,
                     "left_hand_q":[0.]*7,"right_hand_q":[0.]*7,"last_action":[index/20000]*29,
                     "last_left_hand_action":[0.]*7,"last_right_hand_action":[0.]*7,"base_quat":[1.,0.,0.,0.]}
                 pubs[0].send(b'robot_config'+msgpack.packb({"test_fixture":True,"control_frequency":50.},use_bin_type=True))
@@ -111,7 +111,7 @@ class FixtureDriver(SystemDriver):
     def telemetry(self,mode):
         stamp=now()
         return {"robot":{"observed_at":stamp,"source":"isolated fixture","joints":[{"name":n,"position_rad":0.} for n in self.names]},
-            "controller":{"observed_at":stamp},"pico":{"body_ready":True,"observed_at":stamp},
+            "controller":{"observed_at":stamp,"valid":True,"control_index":17},"pico":{"body_ready":True,"observed_at":stamp},
             "cameras":{k:{"state":"streaming","observed_at":stamp} for k in ['head','left_wrist','right_wrist']}}
 
 

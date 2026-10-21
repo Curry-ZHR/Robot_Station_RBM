@@ -103,46 +103,45 @@ class PassiveProbe:
         try:
             import msgpack
             import zmq
+            from sonic_feedback import SonicFeedback
             from gear_sonic.data.features_sonic_vla import get_g1_robot_model
             names = list(get_g1_robot_model().supplemental_info.body_actuated_joints)
+            tracker = SonicFeedback(max_age=.5)
             context = zmq.Context()
             sub = context.socket(zmq.SUB)
             sub.setsockopt(zmq.LINGER, 0)
             sub.setsockopt(zmq.RCVHWM, 5)
-            for topic in (b"g1_debug", b"robot_config"):
+            for topic in (b'g1_debug', b'robot_config'):
                 sub.setsockopt(zmq.SUBSCRIBE, topic)
-            sub.connect(self.config["state_endpoint"])
-            while not self.stop.is_set():
-                if not sub.poll(100):
-                    continue
-                raw = sub.recv()
-                try:
-                    topic = b"robot_config" if raw.startswith(b"robot_config") else b"g1_debug"
-                    message = msgpack.unpackb(raw[len(topic):], raw=False)
-                    if topic == b"robot_config":
-                        self.update("robot_config", message)
-                        continue
-                    token = message.get("control_index", message.get("ros_timestamp"))
-                    if token is None or token == self.previous.get("state"):
-                        continue
-                    self.previous["state"] = token
-                    values = message.get("body_q", [])
-                    if len(values) != len(names) or len(names) != 29 or not all(finite(v) for v in values):
-                        raise ValueError("g1_debug 的 29 维 body_q 无效")
-                    stamp = now()
-                    self.update("controller", {"observed_at": stamp, "state": "running", "source": self.config["state_endpoint"],
-                                               "control_index": token})
-                    # DDS owns real robot feedback. Loopback simulation may use named C++ feedback.
-                    if self.mode == "sim":
-                        self.update("robot", {"connected": True, "observed_at": stamp, "mode": "UNKNOWN",
-                                              "source": "SONIC g1_debug / simulation",
-                                              "joints": [{"name": n, "position_rad": float(v)} for n, v in zip(names, values)]})
-                except Exception as exc:
-                    self.error("state_message", exc)
-            sub.close()
-            context.term()
+            sub.connect(self.config['state_endpoint'])
+            try:
+                while not self.stop.is_set():
+                    if sub.poll(100):
+                        raw = sub.recv()
+                        try:
+                            if len(raw) > 2 * 1024 * 1024:
+                                raise ValueError('SONIC反馈消息过大')
+                            if raw.startswith(b'robot_config'):
+                                message = msgpack.unpackb(raw[len(b'robot_config'):], raw=False)
+                                tracker.configuration(message)
+                                self.update('robot_config', message)
+                            elif raw.startswith(b'g1_debug'):
+                                message = msgpack.unpackb(raw[len(b'g1_debug'):], raw=False)
+                                accepted = tracker.feed(message)
+                                if accepted and self.mode == 'sim' and len(names) == 29:
+                                    self.update('robot', {'connected': True, 'observed_at': tracker.observed_at,
+                                        'mode': 'SONIC', 'source': 'SONIC g1_debug / simulation / measured',
+                                        'joints': [{'name': name, 'position_rad': value} for name, value in zip(names, tracker.values)]})
+                        except Exception as exc:
+                            self.error('state_message', exc)
+                    status = tracker.status()
+                    self.update('controller', {**status, 'state': 'running' if status['valid'] else 'ready' if status['configuration_age_seconds'] is not None and status['configuration_age_seconds'] < 3 else 'offline',
+                        'source': self.config['state_endpoint']})
+            finally:
+                sub.close()
+                context.term()
         except Exception as exc:
-            self.error("state", exc)
+            self.error('state', exc)
 
     def run_pico(self):
         # Device clock must advance; repeated SDK arrays do not count as new tracking.

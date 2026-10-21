@@ -31,3 +31,5 @@
 - `.runtime/`、`.venv_*/`：本机运行状态与隔离依赖，不纳入版本控制。
 
 更多说明：[运行维护](../docs/station_operations.md)、[后端接入](../docs/data_collection_console.md)、[SDK 与现场标定](../docs/g1_sdk_adapter.md)、[最新交接](../HANDOFF.md)。
+
+SONIC托管会话后端已接入：详见 [控制器说明](../docs/sonic_controller.md)，包含启动/停止、实际反馈与现场门槛。

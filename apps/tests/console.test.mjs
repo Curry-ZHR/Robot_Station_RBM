@@ -119,3 +119,15 @@ test('MuJoCo initialization can start without feedback while targets still requi
   const normalized=normalizeSnapshot({...snapshot,manual:{state:'running',steps:123,owner:'manual'}});
   assert.equal(normalized.manual.steps,123);assert.equal(normalized.mode,'real');
 });
+
+test('managed SONIC start and stop use backend ownership gates, not robot-connected badges',()=>{
+ const s=live();s.robot.connected=false;s.capabilities.commands=['services.controller.start','services.controller.stop'];
+ s.services.controller={start_allowed:false,start_reason:'SONIC真机专项现场验收未完成',stop_allowed:true};
+ assert.match(commandAvailability(s,'services.controller.start'),/现场验收/);
+ assert.equal(commandAvailability(s,'services.controller.stop'),'');
+ s.services.controller.start_allowed=true;assert.equal(commandAvailability(s,'services.controller.start'),'');
+ s.services.controller.stop_allowed=false;s.services.controller.stop_reason='另一环境正在运行';
+ assert.equal(commandAvailability(s,'services.controller.stop'),'另一环境正在运行');
+ const normalized=normalizeSnapshot({...s,sonic:{phase:'waiting_input',feedback:{control_index:0,valid:false}},pico:{ready:false}});
+ assert.equal(normalized.sonic.phase,'waiting_input');assert.equal(normalized.sonic.feedback.valid,false);assert.equal(normalized.pico.ready,false);
+});

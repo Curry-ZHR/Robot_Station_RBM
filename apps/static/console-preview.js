@@ -13,6 +13,8 @@ export class PreviewRuntime {
     this.targets = Object.fromEntries(profile.body_joints.map(name => [name, 0]));
     this.episodes = Array.isArray(saved.episodes) ? saved.episodes : [0, 1, 2].map(index => this.makeEpisode(index));
     this.state.services = Object.fromEntries(SERVICE_DEFS.map(([id]) => [id, { state: id === 'controller' ? 'ready' : 'running', label: '界面预演' }]));
+    this.state.services.controller={state:'stopped',owned:true,start_allowed:true,stop_allowed:false,phase:'stopped'};
+    this.state.sonic={phase:'stopped',stop_confirmed:true,feedback:{}};
     this.event('info', '界面预演已开启', '全部状态与视频均为合成演示，不向设备发送指令。');
   }
   makeEpisode(index) { return { dataset: 'frontend_preview', episode_index: index, name: `preview_${String(index + 1).padStart(3, '0')}`, frames: 90, fps: 15, duration_seconds: 6, tasks: ['合成测试片段 · 检查三路视频同步与曲线'], grade: null, state: 'saved', demo_only: true, source: '界面预演' }; }
@@ -25,6 +27,10 @@ export class PreviewRuntime {
     s.robot.joints = this.profile.body_joints.map(name => ({ name, position_rad: this.targets[name] + (running && name.includes('elbow') ? .35 + .08 * Math.sin(t) : 0), velocity_rad_s: running && name.includes('elbow') ? .08 * Math.cos(t) : 0, temperature_c: 36, effort_nm: 0 }));
     s.cameras = CAMERAS.map(camera => ({ ...camera, state: this.fault === 'camera-offline' && camera.id === 'left_wrist' ? 'offline' : 'streaming', observed_at: now, fps: 15, latency_ms: 24, transport: 'video', url: `/assets/preview/${camera.id}.mp4`, source: '合成测试视频' }));
     if (running) { s.model.steps = Math.floor(t * 30); s.model.latency_ms = 42; s.model.frequency_hz = 30; }
+    if(s.sonic.phase==='running'){
+      s.sonic.feedback={valid:true,observed_at:now,control_index:Math.floor((Date.now()-this.sonicStart)/20),frequency_hz:50,feedback_age_seconds:0};
+      s.sonic.feedback_valid=true;s.sonic.process_running=true;s.sonic.initialized=true;s.sonic.detail='合成SONIC控制反馈；仅用于界面预演';s.sonic.input_ready=true;
+    }
     if (s.collection.recording) s.collection.elapsed_seconds = (Date.now() - this.recordStart) / 1000;
     const camerasOK = this.fault !== 'camera-offline', robotOK = s.robot.connected;
     s.interlocks = { can_initialize: robotOK && !running && !s.collection.recording, can_claim: robotOK && !running && !s.collection.recording, can_infer: robotOK && camerasOK && s.model.connected && s.robot.owner === 'task-model' && !s.collection.recording,
@@ -63,8 +69,14 @@ export class PreviewRuntime {
       if (action === 'discard') { s.collection.recording = false; s.collection.elapsed_seconds = 0; }
       if (action === 'end') { s.collection.recording = false; s.collection.prepared = false; if (s.robot.owner === 'pico') s.robot.owner = null; }
     }
-    if (scope === 'services') s.services[payload.service_id] = { state: action === 'start' ? 'running' : 'stopped' };
-    if (scope === 'safety') { s.model.state = s.model.connected ? 'ready' : 'disconnected'; s.collection.recording = false; s.robot.owner = null; s.robot.mode = 'OFF'; s.deployment.state = 'idle'; }
+    if (scope === 'services') {
+      s.services[payload.service_id] = { state: action === 'start' ? 'running' : 'stopped' };
+      if(payload.service_id==='controller'){
+        this.sonicStart=Date.now();s.sonic={phase:action==='start'?'running':'stopped',stop_confirmed:action==='stop',run_id:'preview-only',feedback:{}};
+        s.services.controller={state:action==='start'?'running':'stopped',owned:true,start_allowed:action==='stop',stop_allowed:action==='start',detail:'合成SONIC会话'};
+      }
+    }
+    if (scope === 'safety') { s.sonic={phase:'stopped',stop_confirmed:true,feedback:{}};s.services.controller={state:'stopped',owned:true,start_allowed:true,stop_allowed:false}; s.model.state = s.model.connected ? 'ready' : 'disconnected'; s.collection.recording = false; s.robot.owner = null; s.robot.mode = 'OFF'; s.deployment.state = 'idle'; }
     this.event('success', `${({ inference: '任务模型', robot: '机器人控制', collection: '采集', services: '服务', safety: '停止任务', deployment: '启动向导', self_check: '自检' })[scope] || scope} · ${action}`, '此操作仅改变本地界面预演状态。');
     return { ok: true, source: 'preview', message: '界面预演完成', command_id: uid(), state: 'succeeded' };
   }

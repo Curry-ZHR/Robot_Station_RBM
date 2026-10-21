@@ -1,10 +1,14 @@
 import * as THREE from 'three';
 import { STLLoader } from './vendor/STLLoader.js';
+import { ViewerMetrics } from './console-viewer-metrics.js';
 
 const geometryCache = new Map();
 export class RobotScene {
   constructor(container, profile) {
     this.container = container; this.profile = profile; this.dead = false; this.jointNodes = new Map(); this.materials = [];
+    this.metrics = new ViewerMetrics(); this.lastMetricsPaint = -Infinity;
+    this.visibilityChanged = () => { this.metrics.reset(); this.paintMetrics(performance.now()); };
+    document.addEventListener('visibilitychange', this.visibilityChanged);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.6)); this.renderer.setClearColor(0xf1f5fa, 1);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -49,11 +53,19 @@ export class RobotScene {
     let last = 0;
     const render = time => { if (this.dead) return; this.frame = requestAnimationFrame(render); if (time - last < 28) return; last = time;
       this.camera.position.set(this.target.x + this.distance * Math.cos(this.phi) * Math.cos(this.theta), this.target.y + this.distance * Math.cos(this.phi) * Math.sin(this.theta), this.target.z + this.distance * Math.sin(this.phi));
-      this.camera.lookAt(this.target); this.renderer.render(this.scene, this.camera); };
+      this.camera.lookAt(this.target); this.renderer.render(this.scene, this.camera);
+      this.metrics.rendered(performance.now());
+      if (time - this.lastMetricsPaint >= 1000) { this.paintMetrics(performance.now()); this.lastMetricsPaint = time; } };
     this.frame = requestAnimationFrame(render);
   }
   resize() { if (this.dead) return; const width = Math.max(1, this.container.clientWidth), height = Math.max(1, this.container.clientHeight); this.camera.aspect = width / height; this.camera.updateProjectionMatrix(); this.renderer.setSize(width, height, false); }
-  setPose(values) { this.profile.body_joints.forEach((name, index) => { const joint = this.jointNodes.get(name); if (joint) joint.node.quaternion.copy(joint.base).multiply(new THREE.Quaternion().setFromAxisAngle(joint.axis, Number.isFinite(values?.[index]) ? values[index] : 0)); }); }
+  setPose(values, sample) { this.profile.body_joints.forEach((name, index) => { const joint = this.jointNodes.get(name); if (joint) joint.node.quaternion.copy(joint.base).multiply(new THREE.Quaternion().setFromAxisAngle(joint.axis, Number.isFinite(values?.[index]) ? values[index] : 0)); }); if (sample) this.metrics.pose(sample, performance.now()); }
+  paintMetrics(time) {
+    const { fps, poseHz } = this.metrics.read(time);
+    const render = this.container.querySelector('[data-viewer-render-fps]'), pose = this.container.querySelector('[data-viewer-pose-hz]');
+    if (render) render.textContent = '绘制 ' + (!document.hidden && fps !== null ? fps.toFixed(1) : '--') + ' FPS';
+    if (pose) pose.textContent = '姿态 ' + (!document.hidden && poseHz !== null ? poseHz.toFixed(2) : '--') + ' Hz';
+  }
   resetView() { this.theta = -.72; this.phi = .23; this.distance = 2.9; }
-  dispose() { this.dead = true; cancelAnimationFrame(this.frame); this.observer.disconnect(); this.materials.forEach(m => m.dispose()); this.renderer.dispose(); this.renderer.domElement.remove(); }
+  dispose() { this.dead = true; cancelAnimationFrame(this.frame); document.removeEventListener('visibilitychange', this.visibilityChanged); this.observer.disconnect(); this.materials.forEach(m => m.dispose()); this.renderer.dispose(); this.renderer.domElement.remove(); }
 }

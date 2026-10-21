@@ -6,7 +6,7 @@ A browser-based workstation for Unitree G1: device monitoring, SONIC service man
 
 [快速预览](#快速预览无需机器人) · [完整部署](#ubuntu-工作站部署) · [功能状态](#功能与当前状态) · [接口与开发](#接口与开发) · [操作文档](#文档导航)
 
-> 当前为开发版本。网页与离线数据链路已验证，真机动作、相机接线和 PICO 追踪仍须现场验收；任务模型推理、后台状态机执行及 `.deb` 安装包尚未交付。更新日期：2026-10-20。
+> 当前为开发版本。网页与离线数据链路已验证，真机动作、相机接线和 PICO 追踪仍须现场验收；任务模型推理、后台状态机执行及 `.deb` 安装包尚未交付。更新日期：2026-10-21。
 
 ![整机管理与服务启停](docs/references/service-lifecycle-20261020/services-restarted.png)
 
@@ -31,7 +31,8 @@ python3 -m http.server 18080 --bind 127.0.0.1 --directory apps/static
 | 功能 | 已实现内容 | 当前验证边界 |
 | --- | --- | --- |
 | 自检与启动 | GPU、Docker、模型、存储、网络检查，分步软件准备 | 已验证 4070；准备软件不会自动启动真机运动 |
-| 整机管理 | 项目所属 SONIC 容器、XRoboToolkit PC Service / Unity 启停 | 实际停止、重启已验收；活动任务及外部控制器会阻止停止 |
+| 整机管理 | 相机接入、数据导出状态及采集入口 | 导出器由采集任务管理 |
+| SONIC 遥操作 | SONIC 容器、XRoboToolkit PC Service / Unity 启停，仿真/真机分区 | 控制器启停、实际反馈与隔离仿真已接入；PICO/真机待现场验收 |
 | 机器人状态 | 具名关节反馈、控制源状态、DDS BMS 电量订阅 | SDK 已适配；真实反馈/BMS 主题及固件须现场核验 |
 | 全身控制 | G1 29 维滑条、三维模型、姿态库、MuJoCo 平滑目标跟踪 | 仿真已验证；独立真机输出受本地标定和授权门槛限制 |
 | 三路相机 | ROS 2 Image / CompressedImage → ZMQ → 网页预览与采集 | Domain 默认 99；实际 topic、QoS、网络与时间同步待现场确认 |
@@ -107,6 +108,9 @@ bash scripts/install_ros2_camera.sh
 
 # XR 启停扩展：要求兼容的 SONIC 启动器和 XR 运行文件已安装
 bash scripts/install_xrobotoolkit_lifecycle.sh "$SONIC_REPO_ROOT"
+
+# SONIC 控制器输入代理扩展：为原 PICO Manager 添加本机回环绑定选项
+python3 integrations/sonic/install_controller_input.py "$SONIC_REPO_ROOT"
 ```
 
 XR 安装器会备份旧文件，并拒绝覆盖不兼容或无关改动，详见 [集成说明](integrations/sonic/README.md)。
@@ -132,7 +136,7 @@ export SONIC_REPO_ROOT=/absolute/path/to/sonic_deploy
 ./run.sh disable-autostart       # 取消自启，当前服务继续运行
 ```
 
-`stop.sh` 不停止外部 SONIC 控制器、Docker 或 XR 进程。基础服务启停使用“整机管理”页面；Docker 停止仅允许本项目所属且空闲的容器，XR 停止会同时关闭对应 PC Service 与 Unity。网页重新启动 XR 只恢复 PC Service，Unity 通过已有 `3d` 入口单独打开。软件停止按钮不等于机器人硬件急停。
+`stop.sh` 不停止外部 SONIC 控制器、Docker 或 XR 进程。基础服务启停使用“SONIC 遥操作”页面；Docker 停止仅允许本项目所属且空闲的容器，XR 停止会同时关闭对应 PC Service 与 Unity。网页重新启动 XR 只恢复 PC Service，Unity 通过已有 `3d` 入口单独打开。软件停止按钮不等于机器人硬件急停。
 
 局域网远端操作需要工作站生成的操作密钥授权；本机及 SSH 隧道访问按本机权限处理。密钥、会话和真机标定授权不得加入 Git。当前入口用于可信局域网，不应直接发布到公网。
 
@@ -159,7 +163,7 @@ export SONIC_REPO_ROOT=/absolute/path/to/sonic_deploy
 
 ## 接口与开发
 
-当前接口为 **OpenAPI 3.1 / console API 1.6.0**，包含 34 个路径、43 个 schema。前端采用原生 ES Modules + Three.js，后端采用 Python HTTP 服务与独立工作进程。
+当前接口为 **OpenAPI 3.1 / console API 1.7.0**，包含 36 个路径、45 个 schema。前端采用原生 ES Modules + Three.js，后端采用 Python HTTP 服务与独立工作进程。
 
 - [OpenAPI 规范](apps/contracts/console-v1.openapi.json) 与 [生成器](apps/contracts/build_contract.py)。
 - 接口前缀 `/api/v1/console`；通过能力字段、状态快照和 `x-implementation` 判断实际支持范围。
@@ -182,7 +186,7 @@ run_legacy_ros.sh        保留的历史 ROS 平台启动器
 前端测试（需要 Node.js 22.7+）：
 
 ```bash
-node --test apps/tests/console.test.mjs
+node --test apps/tests/console.test.mjs apps/tests/console-viewer-metrics.test.mjs
 ```
 
 后端完整测试需要上述采集、转换、ROS 与 SDK 测试依赖。准备好环境后运行：
@@ -192,12 +196,14 @@ cd apps
 PYTHONPATH="$PWD:$PWD/tests" .venv_collection/bin/python -m unittest discover -s tests -v
 ```
 
-最近一次验收：**112 项后端测试、19 项前端测试通过**；实际 API 验证了 SONIC 待命容器与 XR 的停止及恢复，未执行真机运动。证据见 [服务生命周期验收](docs/references/service-lifecycle-20261020/README.md)。离线测试通过不代表真实设备标定完成。
+当前版本的已完成验证：**126 项后端测试、23 项前端测试通过**；SONIC控制器使用真实Docker/C++ TensorRT/MuJoCo，在合成输入和回环DDS下完成6种正常/异常停止场景，另有HTTP启动/等待PICO/停止及OpenAPI响应验证。23项前端测试含3项FPS/姿态Hz计量测试。证据见 [控制器验收](docs/references/sonic-controller-20261020/README.md) 及HANDOFF第0T节；此前基础服务启停证据见 [服务生命周期验收](docs/references/service-lifecycle-20261020/README.md)。这些验证未执行真机运动，不能代替真实设备标定。
 
 ## 文档导航
 
 | 文档 | 内容 |
 | --- | --- |
+| [安装 SOP（草案）](INSTALLATION_SOP.md) | 新手安装顺序、环境检查、现有源码预览与最终安装器待补项 |
+| [首次使用 SOP（草案）](FIRST_USE_SOP.md) | 网页检查、MuJoCo、PICO、相机采集回放与真机验收入口 |
 | [运行与维护](docs/station_operations.md) | 常驻服务、日志、连接诊断、姿态库及操作流程 |
 | [后端接入](docs/data_collection_console.md) | API、ROS 图像桥、采集、回放、转换与测试 |
 | [SONIC / XR 启停](docs/service_lifecycle.md) | 停止范围、阻止条件、升级依赖与接口 |
@@ -210,4 +216,6 @@ PYTHONPATH="$PWD:$PWD/tests" .venv_collection/bin/python -m unittest discover -s
 
 欢迎通过 [GitHub Issues](https://github.com/Curry-ZHR/Robot_Station_RBM/issues) 报告问题，附操作步骤、系统/组件版本和脱敏报错；不要提交操作密钥、会话、现场授权或私人采集数据。
 
-Three.js、Lucide 随附许可证位于 [apps/static/vendor](apps/static/vendor)；SONIC、Unitree SDK、G1 模型及其他依赖遵循各自上游的许可与使用条件。本仓库目前未提供覆盖全部代码和资源的统一许可证，使用或再分发时请分别核对。
+Three.js、Lucide 随附许可证位于 [apps/static/vendor](apps/static/vendor)；SONIC、Unitree SDK、G1 模型及其他依赖遵循各自上游的许可与使用条件。本仓库根目录提供 [Apache License 2.0](LICENSE)；第三方依赖、模型和资源仍遵循各自原有许可证，不能将根许可证理解为重新授权所有第三方内容。
+
+SONIC控制器的启动步骤、反馈判据、异常停止与真机专项现场门槛见 [控制器后端说明](docs/sonic_controller.md)。

@@ -1,0 +1,35 @@
+{
+  "deployed": true,
+  "backup": ".local-backups/sonic-controller-20261020-102131",
+  "contract_version": "1.7.0",
+  "service_active": "active",
+  "autostart": "enabled",
+  "live_snapshot_schema_validation": true,
+  "browser_simulation_smoke": {
+    "start": "accepted",
+    "initialization": "Init Done",
+    "phase_without_pico": "waiting_input",
+    "controller_feedback_without_pico": false,
+    "measured_mujoco_joints": 29,
+    "log_read": true,
+    "stop_confirmed": true,
+    "cpp_normal_exit": true,
+    "interface": "lo",
+    "dds_domain": 0
+  },
+  "real_gate": {
+    "ready": false,
+    "reason": "尚未完成SONIC真机专项现场验收；仿真可独立使用"
+  },
+  "final": {
+    "active_task": null,
+    "recording": false,
+    "robot_connected": false,
+    "controller_running": false,
+    "controller_stop_confirmed": true,
+    "container_state": "ready",
+    "xr_state": "running",
+    "unity_running": false
+  },
+  "robot_motion_executed": false
+}

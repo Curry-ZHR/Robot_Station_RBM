@@ -1,0 +1,37 @@
+{
+  "scope": "isolated staging HTTP, real Docker and loopback MuJoCo; no physical G1 or PICO",
+  "robot_motion_executed": false,
+  "real_gate_rejected": {
+    "http": 412,
+    "code": "sonic_onsite_required"
+  },
+  "start": {
+    "ok": true,
+    "command_id": "959ed7f4b4174116b7933678418a482b",
+    "state": "accepted",
+    "controller_run_id": "51a872d3a9a64d0fb674c18c210db84d",
+    "message": "开始准备SONIC会话；以实际初始化和反馈判断是否就绪"
+  },
+  "waiting_without_pico": {
+    "phase": "waiting_input",
+    "initialized": true,
+    "process_running": true,
+    "feedback_valid": false,
+    "input_ready": false,
+    "mode": "sim"
+  },
+  "duplicate_cross_mode_and_dependency_stop_blocked": true,
+  "stop": {
+    "ok": true,
+    "command_id": "375e4b85b51042bb9573cd77f6af57d3",
+    "state": "stopped",
+    "message": "SONIC控制器退出已确认，托管输入和仿真已关闭；不代表硬件急停",
+    "stop_confirmed": true,
+    "motion_stop_supported": false
+  },
+  "cpp_init_marker": true,
+  "cpp_normal_exit_marker": true,
+  "openapi_version": "1.7.0",
+  "schema_validation_passed": true,
+  "pass": true
+}

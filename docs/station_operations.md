@@ -11,7 +11,7 @@
 ./stop.sh
 ```
 
-`run.sh` 默认启动 systemd 用户服务并等待网页健康检查，重复运行不会建立第二份服务；`stop.sh` 有序关闭本工作台拥有的网页、采集、MuJoCo、DDS/PICO/ZMQ 只读订阅和 ROS 图像桥接。采集中关闭会保留有效缓冲帧并标记当前片段舍弃；转换任务通过取消标记保留源数据和未完成输出。不接管或停止外部 PC Service、Docker/SONIC 运动控制器，不使用全局进程清理。
+`run.sh` 默认启动 systemd 用户服务并等待网页健康检查，重复运行不会建立第二份服务；`stop.sh` 有序关闭本工作台拥有的网页、采集、MuJoCo、DDS/PICO/ZMQ 只读订阅和 ROS 图像桥接。采集中关闭会保留有效缓冲帧并标记当前片段舍弃；转换任务通过取消标记保留源数据和未完成输出。同时请求正常停止本工作台托管SONIC会话；不接管外部 PC Service、Docker/SONIC 运动控制器，不使用全局进程清理。
 
 服务为 `robot-station.service`，已设置 enabled 与 `Linger=yes`，无需用户登录即可随系统启动。`Restart=on-failure` 恢复主管进程，主管进程单独恢复网页进程。开机仅提供网页和只读接入，不自动初始化仿真、不取得控制权、不启动真机运动、采集或推理。现场网卡暂未就绪时网页仍可启动；监听 `0.0.0.0:9999`，允许的公开 Host 为 `192.168.123.100`，LAN 操作仍需原有授权和同源 CSRF。
 
@@ -28,7 +28,9 @@
 
 ## SONIC容器与XRoboToolkit启停
 
-“整机管理→运行服务”的两项停止已接入：停止本项目待命容器，或同时停止本项目PC Service与Unity 3D。采集、手动控制、准备任务或SONIC/遥操作控制仍在运行时拒绝停止；按钮悬停显示原因。停止与重新启动均已在4070实际验收，保留模型与采集文件。当前已恢复原待命容器、PC Service和Unity，未启动机器人运动。
+“SONIC 遥操作→SONIC 运行服务”的两项停止已接入：停止本项目待命容器，或同时停止本项目PC Service与Unity 3D。采集、手动控制、准备任务或SONIC/遥操作控制仍在运行时拒绝停止；按钮悬停显示原因。停止与重新启动均已在4070实际验收，保留模型与采集文件。2026-10-20启停验收结束时恢复了原待命容器、PC Service和Unity，未启动机器人运动；当前状态以网页实际反馈为准。
+
+2026-10-20前端职责调整：侧栏新增 `#teleop` SONIC遥操作页，迁入容器、XR和SONIC控制器三个卡片；提供与顶栏同步的仿真/真机标签、状态、操作事件及软件准备日志。控制器单项启停和一键遥操作已接后端，托管Manager、控制器与隔离MuJoCo；启动不代替PICO原手柄开始操作，真机仍须专项现场验收，见 [控制器说明](sonic_controller.md)。`#machine` 仅保留相机接入/数据导出卡片，导出器从数据采集页按任务管理；电量仍在全局顶栏显示，独立关节调试仍在全身控制页。
 
 XR停止标记阻止隐式SDK准备自动重启，点击启动只恢复后台PC Service；Unity仍可从桌面入口单独开启。旧部署先安装仓库随附的XR生命周期扩展。具体命令、依赖和接口见 [service_lifecycle.md](service_lifecycle.md)。根stop.sh保持既有工作台/托管任务关闭职责；基础服务管理不等于机器人硬件急停。
 
@@ -62,7 +64,7 @@ ROS 图像默认 Domain **99**，Unitree DDS 默认 **0**。不要把两个通�
 
 ## 后端接口补充
 
-完整机器可读规范：`apps/contracts/console-v1.openapi.json`，版本 **1.6.0**，34 paths / 43 schemas；生成源为 `apps/contracts/build_contract.py`。
+完整机器可读规范：`apps/contracts/console-v1.openapi.json`，版本 **1.7.0**，36 paths / 45 schemas；生成源为 `apps/contracts/build_contract.py`。
 
 | 接口 | 用途与约束 |
 | --- | --- |

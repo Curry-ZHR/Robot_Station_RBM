@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Robot Station Console API",
-    "version": "1.6.0",
-    "description": "Implemented: real host diagnostics, passive DDS/ZMQ/XRoboToolkit readers and managed ROS 2 image bridge, no-motion deployment jobs, recording task management, named Parquet playback and offline conversion. Implemented: connection profiles/restore, bounded ROS diagnostics, named poses and independent fixed-base MuJoCo control with expiring browser leases. Real G1 HG/PR adapter implemented with local commissioning gates, supported-joint-test scope and independent watchdogs; physical calibration pending. Task-model inference and workflow execution remain reserved. Legacy stack/record POSTs are disabled. LAN commands require an operator session; browser writes require same-origin and X-Console-CSRF. Model secrets stay server-side."
+    "version": "1.7.0",
+    "description": "Implemented: real host diagnostics, passive DDS/ZMQ/XRoboToolkit readers and managed ROS 2 image bridge, no-motion deployment jobs, recording task management, named Parquet playback and offline conversion. Implemented: connection profiles/restore, bounded ROS diagnostics, named poses and independent fixed-base MuJoCo control with expiring browser leases. Real G1 HG/PR adapter implemented with local commissioning gates, supported-joint-test scope and independent watchdogs; physical calibration pending. Task-model inference and workflow execution remain reserved. Managed SONIC lifecycle now supports loopback simulation and onsite-gated real startup, original PICO start/mode controls, index-based feedback, normal protocol stop and exact process exit confirmation. Legacy stack/record POSTs are disabled. LAN commands require an operator session; browser writes require same-origin and X-Console-CSRF. Model secrets stay server-side."
   },
   "servers": [
     {
@@ -788,7 +788,7 @@
             }
           }
         },
-        "x-implementation": "start/stop owned idle docker and project XRoboToolkit (PC Service + Unity) implemented with task/controller/ownership guards; managed ROS 2 camera bridge start/stop implemented; external controller stop/takeover reserved"
+        "x-implementation": "docker/pc_service/cameras lifecycle; explicit managed SONIC controller sim/real sessions, real gated by local onsite approval; exporter owned by collection task"
       }
     },
     "/api/v1/console/safety/stop": {
@@ -2550,6 +2550,141 @@
           }
         }
       }
+    },
+    "/api/v1/console/controller": {
+      "get": {
+        "summary": "Read managed SONIC session, process/initialization/feedback and start/stop blockers",
+        "parameters": [
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "sim",
+                "real"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "controller": {
+                      "$ref": "#/components/schemas/SonicStatus"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "controller"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/console/controller/logs": {
+      "get": {
+        "summary": "Authorized bounded current-session component logs (12KB tail)",
+        "parameters": [
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "sim",
+                "real"
+              ]
+            }
+          },
+          {
+            "name": "component",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "supervisor",
+                "preparation",
+                "controller",
+                "manager",
+                "simulator"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "component": {
+                      "type": "string"
+                    },
+                    "log": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "component",
+                    "log"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2692,6 +2827,7 @@
             ],
             "enum": [
               "manual",
+              "sonic",
               "pico",
               "task-model",
               "workflow",
@@ -2704,6 +2840,8 @@
               "OFF",
               "PLANNER",
               "MIMIC",
+              "SONIC",
+              "MANUAL_SIM",
               "UNKNOWN"
             ]
           },
@@ -3241,6 +3379,7 @@
                   "type": "string",
                   "enum": [
                     "offline",
+                    "starting",
                     "ready",
                     "running",
                     "stopped",
@@ -3251,8 +3390,7 @@
                   "type": [
                     "string",
                     "null"
-                  ],
-                  "format": "date-time"
+                  ]
                 },
                 "detail": {
                   "type": "string"
@@ -3274,6 +3412,40 @@
                 },
                 "container_id": {
                   "type": "string"
+                },
+                "start_allowed": {
+                  "type": "boolean"
+                },
+                "start_reason": {
+                  "type": "string"
+                },
+                "phase": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "sim",
+                    "real"
+                  ]
+                },
+                "run_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "feedback_valid": {
+                  "type": "boolean"
+                },
+                "process_running": {
+                  "type": "boolean"
+                },
+                "initialized": {
+                  "type": "boolean"
+                },
+                "stop_confirmed": {
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -3387,6 +3559,9 @@
           },
           "manual": {
             "$ref": "#/components/schemas/ManualStatus"
+          },
+          "sonic": {
+            "$ref": "#/components/schemas/SonicStatus"
           }
         },
         "required": [
@@ -3452,6 +3627,15 @@
           },
           "duration_seconds": {
             "type": "number"
+          },
+          "controller_run_id": {
+            "type": "string"
+          },
+          "stop_confirmed": {
+            "type": "boolean"
+          },
+          "controller_stop_confirmed": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -3459,7 +3643,7 @@
           "command_id",
           "state"
         ],
-        "description": "Acknowledgement only. Refresh snapshot for actual device readiness and last_command acknowledgement. Deployment/service preparation returns job_id. Current safety.stop ends console preparation/recording and manual simulation, including a task in another selected mode; physical motion stop is not yet implemented."
+        "description": "Accepted starts are asynchronous; inspect snapshot.sonic or GET controller. Controller stop only reports confirmed after exact process exit and owned input/simulator cleanup. motion_stop_supported=false means no hardware E-stop guarantee. Local SONIC approval is distinct from independent joint-SDK commissioning."
       },
       "Node": {
         "type": "object",
@@ -4084,12 +4268,15 @@
                   "cameras",
                   "exporter"
                 ]
+              },
+              "confirmed_real_start": {
+                "type": "boolean"
               }
             },
             "required": [
               "service_id"
             ],
-            "description": "Capability name is services.{service_id}.{action}. Docker stop targets the owned immutable container id and only an idle container; pc_service stop closes the owned PC Service and Unity 3D. Both require no recording/manual/preparation/controller activity. Service metadata stop_allowed/stop_reason reports blockers. Explicit start resumes an operator-stopped XR service."
+            "description": "Capability name is services.{service_id}.{action}. Docker stop targets the owned immutable container id and only an idle container; pc_service stop closes the owned PC Service and Unity 3D. Both require no recording/manual/preparation/controller activity. Service metadata stop_allowed/stop_reason reports blockers. Explicit start resumes an operator-stopped XR service. controller.start prepares the owned container/XR, simulator in sim mode, C++ and calibrated PICO input; no automatic PICO start key. Real start requires confirmed_real_start and local onsite approval. Controller stop ends its recording task first and operates only on the selected session."
           }
         },
         "required": [
@@ -4899,6 +5086,201 @@
           "joints"
         ],
         "description": "Unapproved generic reference only, never a transferable motion approval."
+      },
+      "SonicFeedback": {
+        "type": "object",
+        "properties": {
+          "valid": {
+            "type": "boolean"
+          },
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "control_index": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "feedback_age_seconds": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "frequency_hz": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "accepted": {
+            "type": "integer"
+          },
+          "duplicates": {
+            "type": "integer"
+          },
+          "rejected": {
+            "type": "integer"
+          },
+          "consecutive_samples": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "configuration_observed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "configuration_age_seconds": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "clock_basis": {
+            "type": "string"
+          },
+          "measurement_field": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "valid"
+        ],
+        "description": "Actual g1_debug uses index and control_loop_type=cpp. Requires >=3 increasing frames, finite named-order 29 measured joints and <=0.5s monotonic age. Duplicate/regressed/invalid packets do not refresh validity. ros_timestamp can legitimately be zero. robot_config proves configuration heartbeat only."
+      },
+      "SonicStatus": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "offline",
+              "starting",
+              "ready",
+              "running",
+              "stopped",
+              "failed"
+            ]
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "starting",
+              "initializing",
+              "waiting_input",
+              "ready",
+              "running",
+              "stopping",
+              "stopped",
+              "failed",
+              "fault"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "sim",
+              "real"
+            ]
+          },
+          "owned": {
+            "type": "boolean"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "observed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "process_running": {
+            "type": "boolean"
+          },
+          "initialized": {
+            "type": "boolean"
+          },
+          "feedback_valid": {
+            "type": "boolean"
+          },
+          "feedback": {
+            "$ref": "#/components/schemas/SonicFeedback"
+          },
+          "components": {
+            "type": "object"
+          },
+          "gate": {
+            "type": "object"
+          },
+          "mode_conflict": {
+            "type": "boolean"
+          },
+          "start_allowed": {
+            "type": "boolean"
+          },
+          "start_reason": {
+            "type": "string"
+          },
+          "stop_allowed": {
+            "type": "boolean"
+          },
+          "stop_reason": {
+            "type": "string"
+          },
+          "stop_confirmed": {
+            "type": "boolean"
+          },
+          "motion_stop_supported": {
+            "const": false
+          },
+          "parent_lost": {
+            "type": "boolean"
+          },
+          "fault": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "input_ready": {
+            "type": "boolean"
+          },
+          "configuration_heartbeat_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "phase",
+          "mode",
+          "feedback_valid",
+          "feedback",
+          "start_allowed",
+          "stop_allowed",
+          "stop_confirmed"
+        ],
+        "description": "Single owned session across both modes; no controller autostart. Simulation is fixed to lo/DDS0. Real startup additionally needs current local SONIC-specific onsite approval and confirmed_real_start=true; it initializes standing/hands. PICO manager starts only after fresh calibrated tracking. Proxy owns loopback input; sends protocol stop, verifies immutable-container process identity/exit, then stops manager/simulator. No real SIGKILL or PID/name-based broad stop. PID+start tick+session+argv ownership is required. Unconfirmed exit stays fault and blocks restart. Web/parent loss requests stop, never re-arms."
       }
     }
   },

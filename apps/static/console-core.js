@@ -1,7 +1,8 @@
 export const VIEWS = [
   ['inference', '推理工作台', 'sparkles', '任务模型与全身执行'],
   ['startup', '自检与启动', 'list-checks', '逐步准备运行环境'],
-  ['machine', '整机管理', 'server', '设备、服务与控制权'],
+  ['teleop', 'SONIC 遥操作', 'gamepad-2', '仿真与真机遥操作'],
+  ['machine', '整机管理', 'server', '相机接入与数据导出'],
   ['body', '全身控制', 'person-standing', '29 维身体关节'],
   ['sensors', '传感器', 'scan-eye', '三路相机与数据状态'],
   ['collection', '数据采集', 'circle-dot', '遥操作录制与片段管理'],
@@ -61,7 +62,7 @@ export function namedJointValues(snapshot, profile) {
 export function emptySnapshot() {
   return { source: 'unavailable', backend_connected: false, observed_at: null, capabilities: { commands: [] },
     robot: { connected: false, owner: null, mode: 'OFF', observed_at: null, joints: [] }, battery: { percent: null },
-    services: {}, cameras: [], model: { connected: false, state: 'disconnected', steps: 0 },
+    services: {}, sonic: {}, pico: {}, cameras: [], model: { connected: false, state: 'disconnected', steps: 0 },
     collection: { recording: false, prepared: false, elapsed_seconds: 0 }, interlocks: {}, checks: [], events: [],
     deployment: { state: 'idle', steps: [] }, workflow: {state:'idle',node_states:{}}, totals: { episodes: 0, datasets: 0, demo_episodes: 0 }, groups: [] };
 }
@@ -69,7 +70,7 @@ export function normalizeSnapshot(raw) {
   const base = emptySnapshot();
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return base;
   for (const key of ['robot', 'battery', 'model', 'collection', 'interlocks', 'deployment', 'workflow', 'totals', 'capabilities']) base[key] = { ...base[key], ...(raw[key] || {}) };
-  for (const key of ['source', 'backend_connected', 'observed_at', 'message', 'output_root', 'services', 'revision', 'active_task', 'access', 'camera_source', 'mode', 'manual']) if (raw[key] != null) base[key] = raw[key];
+  for (const key of ['source', 'backend_connected', 'observed_at', 'message', 'output_root', 'services', 'revision', 'active_task', 'access', 'camera_source', 'mode', 'manual', 'sonic', 'pico']) if (raw[key] != null) base[key] = raw[key];
   for (const key of ['cameras', 'events', 'checks', 'groups']) base[key] = Array.isArray(raw[key]) ? raw[key].filter(row=>row&&typeof row==='object'&&!Array.isArray(row)) : [];
   base.robot.joints = Array.isArray(base.robot.joints)?base.robot.joints.filter(row=>row&&typeof row==='object'):[];
   if(!base.services||typeof base.services!=='object'||Array.isArray(base.services))base.services={};
@@ -92,7 +93,8 @@ export function commandAvailability(snapshot, command) {
   if (!snapshot?.backend_connected || !['live', 'preview'].includes(snapshot.source)) return '执行端接口尚未接入';
   if(snapshot.access?.authorized===false)return '请先授权操作';
   if (!snapshot.capabilities?.commands?.includes(command)) return '当前执行端未开放此操作';
-  const serviceStop=command.match(/^services\.(docker|pc_service)\.stop$/);
+  if(command==='services.controller.start'&&snapshot.source!=='preview'&&snapshot.services?.controller?.start_allowed!==true)return snapshot.services?.controller?.start_reason||'控制器启动条件尚未确认';
+  const serviceStop=command.match(/^services\.(docker|pc_service|controller)\.stop$/);
   if(serviceStop&&snapshot.source!=='preview'){
     const service=snapshot.services?.[serviceStop[1]];
     if(service?.stop_allowed!==true)return service?.stop_reason||'尚未确认服务可停止，请刷新状态';

@@ -1,0 +1,28 @@
+✔ battery is unknown without a fresh connected robot and a fresh valid sample (0.616708ms)
+✔ joint mapping follows names, requires every one of the 29 joints and rejects stale feedback (0.897792ms)
+✔ physical commands require backend capabilities, current connected robot, control owner and interlock (0.254541ms)
+✔ legacy fallback never invents robot, battery, camera or execution capabilities (0.109ms)
+✔ infrastructure stops obey backend blockers without requiring robot feedback (0.079833ms)
+✔ snapshot normalization preserves the backend revision for conditional commands (0.152209ms)
+✔ media URL validation rejects executable schemes and embedded credentials (0.071125ms)
+✔ preview operations make zero network requests and obey inference/collection mutual exclusion (5.51175ms)
+✔ unsupported v1 falls back only to read-only metadata and cannot POST legacy hardware APIs (18.978333ms)
+✔ live commands carry idempotency, environment, profile and expected revision (0.546791ms)
+✔ v1 snapshot failure does not reuse stale successful capabilities (0.240041ms)
+✔ workflow templates are valid and malformed imports do not crash validation (0.879209ms)
+✔ workflow execution excludes UI-only fault simulation (0.078458ms)
+✔ workflow dry-run has cancellation and a bounded transition count (7.003667ms)
+✔ playback timeseries maps named radians and rejects incomplete or nonmonotonic frames (0.207584ms)
+✔ legacy video keys normalize to the three UI views without changing signed video URLs (0.291583ms)
+✔ demo counts remain separate from real collection totals in the legacy adapter (0.037042ms)
+✔ authorized snapshot supplies CSRF to browser writes while unauthorized actions stay disabled (0.417917ms)
+✔ MuJoCo initialization can start without feedback while targets still require ownership and fresh feedback (0.1235ms)
+✔ managed SONIC start and stop use backend ownership gates, not robot-connected badges (0.065708ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 107.119333

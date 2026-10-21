@@ -45,6 +45,31 @@ class ProcessAndConfigTests(unittest.TestCase):
 
 @unittest.skipUnless(all(importlib.util.find_spec(k) for k in ['zmq','cv2','msgpack_numpy']),'Use SONIC teleop environment')
 class CameraProbeTests(unittest.TestCase):
+    def test_actual_cpp_zmq_index_with_zero_ros_clock_freeze_and_measured_pose(self):
+        import msgpack,numpy as np,zmq
+        context=zmq.Context();publisher=context.socket(zmq.PUB);publisher.setsockopt(zmq.LINGER,0)
+        port=publisher.bind_to_random_port('tcp://127.0.0.1')
+        with tempfile.TemporaryDirectory() as tmp:
+            probe=PassiveProbe(Path(tmp),Path(tmp),{**default_config('sim'),'state_endpoint':f'tcp://127.0.0.1:{port}'},'sim')
+            thread=threading.Thread(target=probe.run_state,daemon=True);thread.start()
+            try:
+                deadline=time.monotonic()+8;index=0
+                while not probe.data['controller'].get('valid') and time.monotonic()<deadline:
+                    index+=1
+                    publisher.send(b'robot_config'+msgpack.packb({'control_frequency':50},use_bin_type=True))
+                    publisher.send(b'g1_debug'+msgpack.packb({'control_loop_type':'cpp','index':index,'ros_timestamp':0.,'body_q':[0.]*29,'body_q_measured':[.17]*29},use_bin_type=True))
+                    time.sleep(.04)
+                self.assertTrue(probe.data['controller'].get('valid'),probe.data['errors'])
+                self.assertTrue(all(abs(row['position_rad']-.17)<1e-6 for row in probe.data['robot']['joints']))
+                stamp=probe.data['controller']['observed_at']
+                deadline=time.monotonic()+.7
+                while time.monotonic()<deadline:
+                    publisher.send(b'g1_debug'+msgpack.packb({'control_loop_type':'cpp','index':index,'ros_timestamp':0.,'body_q_measured':[.17]*29},use_bin_type=True));time.sleep(.04)
+                self.assertEqual(stamp,probe.data['controller']['observed_at'])
+                self.assertFalse(probe.data['controller']['valid'])
+            finally:
+                probe.stop.set();thread.join(timeout=3);publisher.close();context.term()
+
     def test_body_clock_freeze_is_not_hidden_by_live_headset_clock(self):
         import numpy as np
         with tempfile.TemporaryDirectory() as tmp:

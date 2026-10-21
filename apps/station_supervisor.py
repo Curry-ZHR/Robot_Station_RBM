@@ -9,6 +9,7 @@ import signal
 import sys
 import time
 from console_driver import SystemDriver
+from console_sonic import request_stop
 from console_support import ProcessSupervisor, atomic_json, now, read_json
 
 
@@ -56,15 +57,16 @@ def main():
         atomic_json(runtime/'station-status.json',{'state':'stopping','observed_at':now()})
         # Prevent new commands and revoke browser leases before stopping data readers.
         errors=[]
-        try:supervisor.stop('web',timeout=25)
+        request_stop(driver.directory, 'station service stopping')
+        try:supervisor.stop('web',timeout=30)
         except Exception as exc:errors.append(str(exc))
         atomic_json(driver.directory/'manual-sim/command.json',{})
         atomic_json(driver.directory/'real-control/control.json',{})
         # Recording SIGTERM finalizes valid buffered frames and marks the current episode discarded.
         names=[p.stem for p in driver.supervisor.directory.glob('record-*.json')]
-        names += ['manual-sim','manual-real','probe-real','probe-sim','camera-bridge']
+        names += ['sonic-session','manual-sim','manual-real','probe-real','probe-sim','camera-bridge']
         for name in names:
-            try:driver.supervisor.stop(name,timeout=45 if name.startswith('record-') else 8)
+            try:driver.supervisor.stop(name,timeout=45 if name.startswith('record-') else 20 if name=='sonic-session' else 8)
             except Exception as exc:errors.append(name+': '+str(exc))
         # Conversion cancellation markers preserve both original data and partial outputs.
         pending_conversions=[]

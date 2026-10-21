@@ -99,6 +99,14 @@ class DataPlatformHandler(SimpleHTTPRequestHandler):
             query = parse_qs(parsed.query)
             access=getattr(self.server,"console_access",None)
             if access:access.validate_host(self.headers)
+            if parsed.path in {'/api/v1/console/controller', '/api/v1/console/controller/logs'}:
+                if access and not access.authorized(self.headers,self.client_address[0]): raise ConsoleError('需要操作授权',401,'operator_required')
+                mode=query.get('mode',['sim'])[0];self.console.validate_mode(mode)
+                if parsed.path.endswith('/logs'):
+                    component=query.get('component',['controller'])[0]
+                    self._json({'ok':True,'component':component,'log':self.console.sonic.logs(mode,component)})
+                else:self._json({'ok':True,'controller':self.console.sonic.status(mode)})
+                return
             if parsed.path == "/api/v1/console/robot/commissioning":
                 if access and not access.authorized(self.headers,self.client_address[0]):raise ConsoleError("需要操作授权",401,"operator_required")
                 if query.get('template')==['1']:

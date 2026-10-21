@@ -88,7 +88,7 @@ class RuntimeFixture(unittest.TestCase):
         stamp = now()
         self.driver.settings[mode]["pico_calibration_confirmed"] = True
         self.driver.data[mode] = {"robot": {"observed_at": stamp, "joints": [{"name": n, "position_rad": i/100} for i,n in enumerate(reversed(NAMES))]},
-            "battery": {"percent": 0, "observed_at": stamp, "source": "fixture"}, "controller": {"observed_at": stamp},
+            "battery": {"percent": 0, "observed_at": stamp, "source": "fixture"}, "controller": {"observed_at": stamp,"valid":True,"control_index":12},
             "pico": {"body_ready": True, "observed_at": stamp},
             "cameras": {n: {"state": "streaming", "observed_at": stamp} for n in ["head", "left_wrist", "right_wrist"]}}
 

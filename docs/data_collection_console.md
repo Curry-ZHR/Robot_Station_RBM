@@ -5,13 +5,13 @@
 ## 接续入口与运行
 
 - 项目交接：[HANDOFF.md](../HANDOFF.md)，以最上方最新阶段为准。
-- [OpenAPI 3.1 接口规范](../apps/contracts/console-v1.openapi.json)，当前版本 1.6.0，34 个路径、43 个数据结构；[生成器](../apps/contracts/build_contract.py)。各命令的 `x-implementation` 明确已实现和保留部分。
+- [OpenAPI 3.1 接口规范](../apps/contracts/console-v1.openapi.json)，当前版本 1.7.0，36 个路径、45 个数据结构；[生成器](../apps/contracts/build_contract.py)。各命令的 `x-implementation` 明确已实现和保留部分。
 - 4070 主目录 `/home/harry/workspace/robot_station`；SONIC 在同级 `/home/harry/workspace/sonic_deploy`。
 - 固定网页入口 `http://192.168.123.100:9999/`；Mac 当前转发入口 `http://127.0.0.1:12947/`。
 - 当前统一入口：在 Robot Station 根目录使用 `./run.sh`、`./run.sh status`、`./run.sh logs`、`./stop.sh`；`apps` 参数保留为兼容别名。旧 ROS 启动器已迁为 `run_legacy_ros.sh`，不用于 G1 日常启停。首次下载和预览见根 [README](../README.md)。
 - 网络静态配置和 NO-CARRIER 的历史说明见交接 0A；现场须确认 .100 无冲突、有线链路接通及浏览器路由。
 
-网页仍有九页：两层推理、自检与启动、整机管理、全身控制、三相机传感器、采集、回放、转换、状态机。实际 G1 URDF / 50 个 STL 与 29 身体关节可视化沿用现有资源；源模型包含手部共 43 维。可视化顺序不是 DDS 电机索引。
+网页侧栏现有十一项：两层推理、自检与启动、SONIC遥操作、整机管理、全身控制、三相机传感器、采集、回放、转换、连接与诊断、状态机。SONIC遥操作页集中容器/XR/控制器三个卡片，整机管理仅保留相机接入和数据导出；控制器启停、一键准备及真实反馈已接入；PICO与真机验收仍待现场，见 [控制器说明](sonic_controller.md)。实际 G1 URDF / 50 个 STL 与 29 身体关节可视化沿用现有资源；源模型包含手部共 43 维。可视化顺序不是 DDS 电机索引。
 
 `?preview=1` 仍为隔离的浏览器预演。预演视频、电量、姿态与任务结果均为合成，不调用设备接口或写正式目录。正常入口读取本轮实现的 v1 后端；缺少硬件时电量、关节和相机保持未知/离线。
 
@@ -82,7 +82,7 @@ PYTHONPATH="$PWD:$PWD/tests${PYTHONPATH:+:$PYTHONPATH}" .venv_ros2_camera/bin/py
 
 通过 `GET /deployment/jobs/{job_id}` 查看进度、结果和有长度上限的日志。取消中间步骤会保留已有运行环境和日志；失败可修复后以新命令重试。Web 重启时未完成准备任务会明确标记中断，真实服务按实际状态重新检查。
 
-`services.actions` 当前支持启动 Docker、PC Service、相机来源与只读接入，停止自有 ROS 2 相机桥接，以及停止本项目待命SONIC容器和XRoboToolkit PC Service/Unity。两项基础服务停止会检查跨模式任务、控制器/进程占用及资源归属，快照给出`stop_allowed/stop_reason`；只有确认停止才返回`state:stopped`。详见 [服务启停](service_lifecycle.md)，OpenAPI 1.6.0。外部SONIC运动控制器的启停仍不开放；独立真机初始化/接管/关节目标走本地现场标定门槛，见 [SDK适配](g1_sdk_adapter.md)，不能绕过门槛启用运动。
+`services.actions` 当前支持托管SONIC控制器启停，以及启动 Docker、PC Service、相机来源与只读接入，停止自有 ROS 2 相机桥接，以及停止本项目待命SONIC容器和XRoboToolkit PC Service/Unity。两项基础服务停止会检查跨模式任务、控制器/进程占用及资源归属，快照给出`stop_allowed/stop_reason`；只有确认停止才返回`state:stopped`。详见 [服务启停](service_lifecycle.md)，OpenAPI 1.7.0。外部SONIC运动控制器的启停仍不开放；独立真机初始化/接管/关节目标走本地现场标定门槛，见 [SDK适配](g1_sdk_adapter.md)，不能绕过门槛启用运动。
 
 ## ③ 真实数据回放
 

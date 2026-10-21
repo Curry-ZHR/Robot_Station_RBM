@@ -13,3 +13,13 @@ The installer preserves the original source in SONIC's `.local-backups`, accepts
 The extension adds `stop`, which sends SIGTERM through stable Linux pidfds to the exact project-owned PC Service and Unity executables, after checking visible controller/teleop/recording users. It verifies exit, does not force-kill an unresponsive process, and refuses another installation's processes. A persistent `outputs/xrobotoolkit/service.stopped` marker blocks implicit restart; explicit `service` or `3d` clears it. The web start button starts the PC Service only; use the existing `3d` launcher to reopen Unity.
 
 Robot Station additionally checks active tasks, controller feedback, container ownership/processes, authorization, CSRF and revision/idempotency before service stops. This operation is infrastructure management, not a robot emergency stop.
+
+## SONIC controller input proxy
+
+After installing the compatible checkout, run from Robot Station:
+
+```sh
+python3 integrations/sonic/install_controller_input.py /path/to/sonic_deploy
+```
+
+This pinned-source installer backs up the original PICO manager and adds an optional `--bind-host` argument. The default `*` is retained for existing CLI launches; managed sessions explicitly use `127.0.0.1` on a private upstream port. It refuses unrelated source changes and does not start any process. The station proxy owns the controller input endpoint and forwards the original protocol only while calibrated body tracking is fresh. See [controller operation and feedback](../../docs/sonic_controller.md).

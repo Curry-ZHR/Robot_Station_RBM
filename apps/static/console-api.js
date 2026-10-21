@@ -13,7 +13,7 @@ export class ConsoleAPI {
     this.runtime = new PreviewRuntime(profile); this.snapshot = emptySnapshot(); this.v1Unavailable = false;
   }
   async request(path, options = {}) {
-    const timeoutMs=path.includes('/episodes/timeseries')?65000:path.includes('/services/actions')?45000:path.includes('/diagnostics')?15000:/\/(snapshot|self-check|robot\/commands)(\?|$)/.test(path)?20000:8000;
+    const timeoutMs=path.includes('/episodes/timeseries')?65000:path.includes('/services/actions')||path.includes('/safety/stop')?45000:path.includes('/diagnostics')?15000:/\/(snapshot|self-check|robot\/commands)(\?|$)/.test(path)?20000:8000;
     const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await this.fetchImpl(path, { ...options, signal: controller.signal, cache: 'no-store', headers: { Accept: 'application/json', ...(options.body ? { 'Content-Type': 'application/json', ...(this.csrfToken ? {'X-Console-CSRF':this.csrfToken} : {}) } : {}), ...(options.headers || {}) } });

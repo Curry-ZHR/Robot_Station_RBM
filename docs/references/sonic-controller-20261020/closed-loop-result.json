@@ -1,0 +1,61 @@
+{
+  "scope": "real SONIC TensorRT/Docker/MuJoCo, synthetic IDLE input, loopback DDS only",
+  "robot_motion_executed": false,
+  "pass": true,
+  "results": [
+    {
+      "scenario": "normal",
+      "pass": true,
+      "peak_control_index": 86,
+      "stop_confirmed": true,
+      "cpp_normal_exit": true,
+      "fault": null,
+      "output": "/tmp/station-sonic-normal-sjmwr8jq"
+    },
+    {
+      "scenario": "tracking_loss",
+      "pass": true,
+      "peak_control_index": 103,
+      "stop_confirmed": true,
+      "cpp_normal_exit": true,
+      "fault": "sonic_tracking_lost",
+      "output": "/tmp/station-sonic-tracking_loss-1lloo7_u"
+    },
+    {
+      "scenario": "feedback_freeze",
+      "pass": true,
+      "peak_control_index": 102,
+      "stop_confirmed": true,
+      "cpp_normal_exit": true,
+      "fault": "sonic_feedback_lost",
+      "output": "/tmp/station-sonic-feedback_freeze-98orcddk"
+    },
+    {
+      "scenario": "parent_loss",
+      "pass": true,
+      "peak_control_index": 89,
+      "stop_confirmed": true,
+      "cpp_normal_exit": true,
+      "fault": null,
+      "output": "/tmp/station-sonic-parent_loss-a_uocfdo"
+    },
+    {
+      "scenario": "input_freeze",
+      "pass": true,
+      "peak_control_index": 198,
+      "stop_confirmed": true,
+      "cpp_normal_exit": true,
+      "fault": "sonic_input_lost",
+      "output": "/tmp/station-sonic-input_freeze-ay99otfg"
+    },
+    {
+      "scenario": "feedback_missing",
+      "pass": true,
+      "peak_control_index": 0,
+      "stop_confirmed": true,
+      "cpp_normal_exit": true,
+      "fault": "sonic_feedback_missing",
+      "output": "/tmp/station-sonic-feedback_missing-ena4v243"
+    }
+  ]
+}

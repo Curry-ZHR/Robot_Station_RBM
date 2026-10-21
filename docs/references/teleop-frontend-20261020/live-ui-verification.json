@@ -1,0 +1,21 @@
+{
+  "controllerButtons": [
+    {
+      "disabled": true,
+      "label": "启动控制器",
+      "title": "SONIC 控制器启停待后端接入"
+    },
+    {
+      "disabled": true,
+      "label": "停止",
+      "title": "SONIC 控制器启停待后端接入"
+    }
+  ],
+  "mode": "sim",
+  "page": "SONIC 遥操作",
+  "services": [
+    "docker",
+    "pc_service",
+    "controller"
+  ]
+}

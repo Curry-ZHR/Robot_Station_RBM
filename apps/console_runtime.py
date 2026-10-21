@@ -19,6 +19,7 @@ from console_poses import PoseStore, trajectory
 from console_manual import ManualControl
 from console_real import RealManualControl
 from console_diagnostics import Diagnostics
+from console_sonic import SonicControl
 
 PROFILE_ID = "unitree-g1-29"
 PREFIX = "/api/v1/console"
@@ -53,6 +54,7 @@ class ConsoleRuntime:
         self.configuration = ConfigurationStore(self.driver) if hasattr(self.driver,"directory") else None
         self.poses = PoseStore(self.directory,self.profile)
         self.diagnostics = Diagnostics(self)
+        self.sonic = SonicControl(self.driver, self.directory, self.profile)
         for job in self.state["jobs"].values():
             if job["state"] in {"running", "pending"}:
                 job.update(state="failed", message="网页服务重启；请查看实际服务状态后重新准备", updated_at=now())
@@ -107,14 +109,26 @@ class ConsoleRuntime:
         pico = telemetry.get("pico", {})
         pico_ready = pico.get("body_ready") is True and age(pico.get("observed_at")) <= 2
         controller = telemetry.get("controller", {})
-        controller_ready = age(controller.get("observed_at")) <= 2
+        sonic = self.sonic.status(mode)
+        managed_active = self.sonic.active()
+        if managed_active and not sonic.get('mode_conflict'):
+            robot.update(owner='pico' if sonic.get('input_ready') and sonic.get('feedback_valid') else 'sonic',
+                         initialized=bool(sonic.get('initialized')), initialization_profile_id='sonic-default-stand')
+        controller_ready = sonic['feedback_valid'] if managed_active else controller.get('valid') is True and age(controller.get('observed_at')) <= .5
         services = {"docker": {**system["container"], "observed_at": system["observed_at"]},
                     "pc_service": self.driver.pc_service_status(),
                     "controller": {"state": "running" if controller_ready else "offline", "observed_at": controller.get("observed_at"),
-                                   "detail": "收到持续更新的 SONIC 反馈" if controller_ready else "等待 SONIC g1_debug 数据"},
+                                   "detail": "收到持续前进的SONIC index与29维测量反馈" if controller_ready else "等待有效SONIC控制序号与测量反馈"},
                     "cameras": {"state": "running" if all(c["state"] == "streaming" for c in cameras) else "offline",
                                 "detail": f"{sum(c['state']=='streaming' for c in cameras)} / 3 路有效帧", "observed_at": now()},
                     "exporter": {"state": "offline", "detail": "采集任务未准备", "observed_at": now()}}
+        services['controller'] = {**services['controller'], **sonic} if managed_active else {**sonic, **services['controller']}
+        if not managed_active and controller_ready:
+            services['controller'].update(owned=False, start_allowed=False, start_reason='外部SONIC控制器反馈在线，不能重复启动', detail='外部控制器反馈有效；不接管其进程')
+        elif not managed_active and sonic.get('run_id') and sonic.get('phase') in {'failed','fault','stopped'}:
+            services['controller'] = sonic
+        elif not managed_active and controller.get('state') == 'ready':
+            services['controller'].update(state='ready', owned=False, start_allowed=False, start_reason='已有外部SONIC配置心跳；请核对其启动入口', detail='收到外部控制器配置心跳，尚无策略执行反馈')
         if camera_source["kind"] == "ros2":
             services["cameras"]["detail"] = f"ROS 2 Domain {camera_source['domain_id']} · {camera_source['state']} · "+services["cameras"]["detail"]
             if camera_source["state"] == "failed":
@@ -144,13 +158,16 @@ class ConsoleRuntime:
                 reasons.append("采集导出器状态过期")
             manual_busy = self.manual.active() or self.real_manual.active()
             if manual_busy:reasons.append("手动调试正在占用控制权")
+            if managed_active and (sonic.get('mode_conflict') or not sonic.get('feedback_valid')): reasons.append('SONIC会话尚未产生本模式有效控制反馈')
             can_collect = not reasons and not collection.get("busy", False)
-            task_busy = collection.get("prepared") or collection.get("busy") or any(j["state"] in {"running","pending"} for j in self.state["jobs"].values())
+            task_busy = managed_active or collection.get("prepared") or collection.get("busy") or any(j["state"] in {"running","pending"} for j in self.state["jobs"].values())
             gate_ready = mode == "sim" or manual.get("gate",{}).get("ready") is True
             if gate_ready:commands_manual = ["robot.initialize","robot.claim","robot.release","robot.apply_pose"]
             else:commands_manual = []
             commands = ["self_check.run", "deployment.prepare", "deployment.cancel", "robot.connect", "safety.stop"]
-            commands += ["services.docker.start", "services.pc_service.start", "services.cameras.start"]
+            commands += ["services.docker.start", "services.pc_service.start", "services.cameras.start", "services.controller.start", "services.controller.stop"]
+            if manual_busy or collection.get('prepared') or collection.get('busy') or any(j['state'] in {'running','pending'} for j in self.state['jobs'].values()):
+                services['controller'].update(start_allowed=False, start_reason='请先结束采集、手动控制或准备任务')
             for service in ("docker","pc_service"):
                 commands.append("services."+service+".stop")
                 reason=self._service_stop_reason(service,services[service])
@@ -163,10 +180,10 @@ class ConsoleRuntime:
             deployment = copy.deepcopy(latest_jobs[-1]) if latest_jobs else {"id": "", "state": "idle", "steps": []}
             return {"ok": True, "snapshot": {"revision": self.state["revision"], "observed_at": now(), "mode": mode, "manual": manual,
                 "capabilities": {"commands": commands, "camera_transports": ["mjpeg"]}, "robot": robot, "battery": battery,
-                "services": services, "cameras": cameras, "camera_source": camera_source, "pico": {**pico, "ready": pico_ready},
+                "services": services, "sonic": sonic, "cameras": cameras, "camera_source": camera_source, "pico": {**pico, "ready": pico_ready},
                 "model": {"connected": False, "state": "disconnected", "steps": 0, "adapter": {"validated": False}},
                 "collection": {**collection,"control_scope":"recording_only"},
-                "active_task": {"kind":"manual","owner":"manual","mode":"real" if self.real_manual.active() else "sim"} if manual_busy else {"kind":"collection","owner":"pico","mode":mode} if collection.get("prepared") else None,
+                "active_task": {"kind":"sonic","owner":"pico","mode":sonic.get("mode")} if managed_active and not collection.get("prepared") else {"kind":"manual","owner":"manual","mode":"real" if self.real_manual.active() else "sim"} if manual_busy else {"kind":"collection","owner":"pico","mode":mode} if collection.get("prepared") else None,
                 "interlocks": {"can_initialize": gate_ready and not task_busy and not manual_busy, "can_claim": gate_ready and not task_busy and not manual_busy and robot["initialized"], "can_apply_pose": gate_ready and manual.get("owner")=="manual" and not task_busy,
                     "can_infer": False, "can_collect": can_collect, "reasons": {"can_collect": "、".join(reasons) or "采集任务正在处理", "can_infer": "任务模型接入按规划留待真机采集后开发", "can_initialize": manual.get("gate",{}).get("message","设备或任务未就绪"), "can_claim": manual.get("reason") or manual.get("gate",{}).get("message","请先初始化并等待反馈"), "can_apply_pose": manual.get("reason") or manual.get("gate",{}).get("message","请先取得手动控制权")}},
                 "checks": checks, "events": copy.deepcopy(self.state["events"]), "deployment": deployment,
@@ -176,7 +193,7 @@ class ConsoleRuntime:
                 "message": "工作站后端已连接；设备就绪情况见自检"}}
 
     def busy(self):
-        return bool(self.recorder.active() or self.manual.active() or self.real_manual.active() or any(j["state"] in {"running","pending"} for j in self.state["jobs"].values()))
+        return bool(self.sonic.active() or self.recorder.active() or self.manual.active() or self.real_manual.active() or any(j["state"] in {"running","pending"} for j in self.state["jobs"].values()))
 
     def _service_stop_reason(self, service, state, allow_stopped=False):
         if self.busy():return "采集、手动控制或准备任务正在占用服务，请先结束任务"
@@ -208,6 +225,7 @@ class ConsoleRuntime:
 
     def _manual_command(self,mode,action,payload):
         if action not in {"stop","release"}:
+            if self.sonic.active(): raise ConsoleError('SONIC托管会话占用控制源，请先停止SONIC',409,'owner_conflict')
             if mode=="real" and self.manual.active() or mode=="sim" and self.real_manual.active():raise ConsoleError("另一运行模式已有手动控制任务",409,"owner_conflict")
             if age(self.driver.telemetry(mode).get("controller",{}).get("observed_at"))<2:raise ConsoleError("SONIC控制器仍在运行",409,"owner_conflict")
         return self.real_manual.command(action,payload) if mode=="real" else self.manual.command(mode,action,payload)
@@ -275,6 +293,22 @@ class ConsoleRuntime:
             return self.deployment(action, mode, payload)
         if scope == "services":
             service = payload.get("service_id")
+            if service == 'controller' and action in {'start', 'stop'}:
+                if action == 'start':
+                    if self.busy(): raise ConsoleError('请先结束采集、手动控制或准备任务',409,'task_conflict')
+                    for other in ('sim', 'real'):
+                        row = self.driver.telemetry(other).get('controller', {})
+                        if row.get('valid') is True and age(row.get('observed_at')) < .5:
+                            raise ConsoleError('已有外部SONIC控制器反馈，禁止重复启动',409,'owner_conflict')
+                    if hasattr(self.driver,'supervisor') and self.driver.supervisor.running('manual-sim'):
+                        self.driver.supervisor.stop('manual-sim')
+                    result = self.sonic.start(mode, payload)
+                    self.event('SONIC会话启动已提交', mode+'；按进程初始化、配置心跳和控制序号分别确认')
+                    return result
+                if self.recorder.active(): self.recorder.command(mode,'stop',{},command_id)
+                result = self.sonic.stop(mode)
+                self.event('SONIC停止结果', result['message'])
+                return result
             if action == "stop" and service in {"docker","pc_service"}:
                 state=self.driver.container() if service=="docker" else self.driver.pc_service_status()
                 reason=self._service_stop_reason(service,state,allow_stopped=True)
@@ -307,8 +341,9 @@ class ConsoleRuntime:
             self.manual.stop()
             real_stop=self.real_manual.stop()
             result = self.recorder.command(mode,"stop",{},command_id)
+            sonic_stop = self.sonic.stop(reason="console safety stop")
             self.event("已请求停止本工作台任务", "取消准备、结束采集并释放手动仿真；外部运动控制器仍由现场管理", "warning")
-            return {**result,"message": "已请求停止准备、采集和手动仿真；外部真机控制器由现场管理", "motion_stop_supported":False}
+            return {**result,"message": "已停止本工作台准备、采集、手动调试及托管SONIC；外部控制器仍由现场管理", "motion_stop_supported":False, "controller_stop_confirmed":sonic_stop.get("stop_confirmed",False)}
         if scope == "collection":
             if action in {"prepare","start"}:
                 CollectionManager.validate(payload)
@@ -343,8 +378,8 @@ class ConsoleRuntime:
             raise ConsoleError("准备任务必须 allow_motion:false")
         if any(j["state"] in {"running", "pending"} for j in self.state["jobs"].values()):
             raise ConsoleError("已有准备任务正在执行", 409, "task_conflict")
-        if self.recorder.active() or self.manual.active() or self.real_manual.active():
-            raise ConsoleError("请先结束当前采集或手动任务", 409, "task_conflict")
+        if self.sonic.active() or self.recorder.active() or self.manual.active() or self.real_manual.active():
+            raise ConsoleError("请先结束当前SONIC、采集或手动任务", 409, "task_conflict")
         job_id = uuid.uuid4().hex
         self.state["jobs"][job_id] = {"id": job_id, "mode": mode, "state": "pending", "created_at": now(),
             "updated_at": now(), "allow_motion": False, "service_id": payload.get("service_id"), "message": "等待环境自检",
@@ -447,6 +482,8 @@ class ConsoleRuntime:
             return {"ok": True, "job": result}
 
     def close(self):
+        try: self.sonic.stop(reason='web backend closing')
+        except Exception as exc: print('SONIC shutdown not confirmed:', str(exc), flush=True)
         self.manual.stop()
         self.real_manual.stop()
         # Passive readers and recording workers are durable. Web restart is not a device stop.

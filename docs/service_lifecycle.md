@@ -1,6 +1,6 @@
 # SONIC 容器与 XRoboToolkit 启停
 
-更新：2026-10-20。两个服务运行在4070，属于跨real/sim模式共享的基础服务。网页“整机管理 → 运行服务”提供实际启动和停止；机器人控制器另行管理。
+更新：2026-10-20。两个服务运行在4070，属于跨real/sim模式共享的基础服务。网页“SONIC 遥操作 → SONIC 运行服务”提供实际启动和停止；SONIC控制器托管启停与反馈已接入，见 [控制器说明](sonic_controller.md)。整机管理只保留相机接入与数据导出。
 
 ## 网页操作
 
@@ -39,7 +39,7 @@ bash scripts/install_xrobotoolkit_lifecycle.sh /home/harry/workspace/sonic_deplo
 
 ## 接口合同
 
-继续使用`POST /api/v1/console/services/actions`，无需新增URL。OpenAPI **1.6.0**，34 paths / 43 schemas：
+继续使用`POST /api/v1/console/services/actions`，无需新增URL。OpenAPI **1.7.0**，36 paths / 45 schemas：
 
 ```json
 {

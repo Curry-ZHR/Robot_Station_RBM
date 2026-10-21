@@ -1,0 +1,27 @@
+✔ battery is unknown without a fresh connected robot and a fresh valid sample (0.937167ms)
+✔ joint mapping follows names, requires every one of the 29 joints and rejects stale feedback (0.812708ms)
+✔ physical commands require backend capabilities, current connected robot, control owner and interlock (0.287292ms)
+✔ legacy fallback never invents robot, battery, camera or execution capabilities (0.132334ms)
+✔ infrastructure stops obey backend blockers without requiring robot feedback (0.10225ms)
+✔ snapshot normalization preserves the backend revision for conditional commands (0.171417ms)
+✔ media URL validation rejects executable schemes and embedded credentials (0.087375ms)
+✔ preview operations make zero network requests and obey inference/collection mutual exclusion (5.3835ms)
+✔ unsupported v1 falls back only to read-only metadata and cannot POST legacy hardware APIs (19.495667ms)
+✔ live commands carry idempotency, environment, profile and expected revision (0.598292ms)
+✔ v1 snapshot failure does not reuse stale successful capabilities (0.275125ms)
+✔ workflow templates are valid and malformed imports do not crash validation (1.347542ms)
+✔ workflow execution excludes UI-only fault simulation (0.087208ms)
+✔ workflow dry-run has cancellation and a bounded transition count (7.502041ms)
+✔ playback timeseries maps named radians and rejects incomplete or nonmonotonic frames (0.203709ms)
+✔ legacy video keys normalize to the three UI views without changing signed video URLs (0.357041ms)
+✔ demo counts remain separate from real collection totals in the legacy adapter (0.158208ms)
+✔ authorized snapshot supplies CSRF to browser writes while unauthorized actions stay disabled (0.57725ms)
+✔ MuJoCo initialization can start without feedback while targets still require ownership and fresh feedback (0.147ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 111.059667

@@ -264,7 +264,7 @@ class SystemDriver:
         return row
 
     def probe_version(self):
-        return hashlib.sha256((self.app_root/'console_probe_worker.py').read_bytes()+(self.app_root/'console_support.py').read_bytes()).hexdigest()[:16]
+        return hashlib.sha256((self.app_root/'console_probe_worker.py').read_bytes()+(self.app_root/'console_support.py').read_bytes()+(self.app_root/'sonic_feedback.py').read_bytes()).hexdigest()[:16]
 
     def start_probe(self, mode, start_cameras=True):
         if start_cameras:
